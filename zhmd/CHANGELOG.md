@@ -10,7 +10,7 @@
 ## Version 3.3.2
 
 - **修复**：Z Image / ZIT **ConvRot NVFP4** 在 **DistOrch VRAM purge 后的第 2 次生成**出现椒盐噪声。INT8 decode wrap 会丢掉 NVFP4 stack 标记，后续“upgrade”又把 Tensor Core 产品路径叠到 Comfy parity 之上；DistOrch refresh 只剥掉 TC 层，重载后留下 **双重在线 act rotate**。现于 INT8 wrap 中保留标记，parity refresh 不再二次武装 rotate。
-- 详情见 [Release Notes v3.3.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.2)。
+- 详情见 [Release Notes v3.3.2](v3.3.2.md)。
 
 ## Version 3.3.1
 
