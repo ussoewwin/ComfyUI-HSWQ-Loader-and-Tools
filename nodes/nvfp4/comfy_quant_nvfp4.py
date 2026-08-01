@@ -344,8 +344,14 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
             "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
             "(stock GEMM + act rotate; see hswq/benchmark/zi_convrot_nvfp4_bench.py)"
         )
-    require_convrot_parity_forward()
+    # INT8 after parity (mixed packs). Re-arm parity then require — INT8 must not
+    # leave TC Linear.forward or drop act-rotate.
     apply_comfy_quant_int8_patches()
+    if not apply_nvfp4_comfy_parity():
+        raise RuntimeError(
+            "[HSWQ NVFP4] comfy_parity lost after INT8 patches"
+        )
+    require_convrot_parity_forward()
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
     logging.info(

@@ -56,6 +56,56 @@ def _closure_named(fn, name: str):
     return None
 
 
+def _is_tc_full_load(fn) -> bool:
+    """True for product TC load (load_nvfp4_linear_module), not parity stock load."""
+    return bool(
+        getattr(fn, "_hswq_nvfp4_full_load", False)
+        and not getattr(fn, "_hswq_nvfp4_comfy_only", False)
+    )
+
+
+def _parity_load_in_chain(fn) -> bool:
+    """True if comfy_parity load wrapper is already somewhere under ``fn``."""
+    cur = fn
+    seen = set()
+    for _ in range(8):
+        if cur is None or id(cur) in seen:
+            return False
+        seen.add(id(cur))
+        if getattr(cur, "_hswq_nvfp4_comfy_only", False):
+            return True
+        if getattr(cur, "_hswq_int8_decode_patched", False):
+            cur = _closure_named(cur, "original_load")
+            continue
+        if _is_tc_full_load(cur):
+            cur = _closure_named(cur, "_orig_load")
+            continue
+        return False
+    return False
+
+
+def _resolve_load_under_tc(patched_load):
+    """Callable under TC for parity to close over (stock Comfy or INT8 normalize).
+
+    Peel **only** TC ``load_nvfp4_linear_module``. Keep INT8 decode wrap so
+    int8protect layers still normalize ``comfy_quant`` tensors.
+    Never return TC itself (ones(1) / ``_hswq_nvfp4`` arm).
+    """
+    if _is_tc_full_load(patched_load):
+        inner = _closure_named(patched_load, "_orig_load")
+        if inner is None:
+            raise RuntimeError(
+                "[HSWQ NVFP4] comfy_parity: TC load has no _orig_load "
+                "(cannot recover Comfy / INT8 load under TC)"
+            )
+        if _is_tc_full_load(inner):
+            raise RuntimeError(
+                "[HSWQ NVFP4] comfy_parity: nested TC load; refusing"
+            )
+        return inner
+    return patched_load
+
+
 def _unwrap_stock_forward(forward_fn):
     """Peel HSWQ TC wrappers until stock MixedPrecision Linear.forward."""
     f = forward_fn
@@ -70,20 +120,23 @@ def _unwrap_stock_forward(forward_fn):
 
 
 def _make_convrot_parity_forward(stock_forward):
-    """Stock MixedPrecision forward + online act rotate for ConvRot NVFP4."""
+    """Stock MixedPrecision forward + online act rotate for ConvRot NVFP4.
+
+    Matches ``hswq/benchmark/nvfp4_comfy_parity.py`` bit-for-bit on the rotate
+    gate: always rotate when ``_hswq_nvfp4_convrot`` is set. Skipping on
+    ``_full_precision_mm`` / ``requires_grad`` / ``comfy_force_cast_weights``
+    leaves offline-rotated weights without ``x @ H`` → broken images.
+    """
     from .nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
-        if getattr(self, "_hswq_nvfp4_convrot", False) and not getattr(
-            self, "_full_precision_mm", False
-        ):
-            if not (input.requires_grad or getattr(self, "comfy_force_cast_weights", False)):
-                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
-                h = getattr(self, "_hswq_nvfp4_H", None)
-                if h is None or h.device != input.device or h.dtype != input.dtype:
-                    h = build_hadamard(gs, device=input.device, dtype=input.dtype)
-                    self._hswq_nvfp4_H = h
-                input = rotate_last_dim(input, h, gs)
+        if getattr(self, "_hswq_nvfp4_convrot", False):
+            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+            h = getattr(self, "_hswq_nvfp4_parity_H", None)
+            if h is None or h.device != input.device or h.dtype != input.dtype:
+                h = build_hadamard(gs, device=input.device, dtype=input.dtype)
+                self._hswq_nvfp4_parity_H = h
+            input = rotate_last_dim(input, h, gs)
         return stock_forward(self, input, *args, **kwargs)
 
     forward_parity._hswq_nvfp4_convrot_parity = True  # type: ignore[attr-defined]
@@ -186,8 +239,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     # Prefer refs already saved by apply_comfy_quant_nvfp4_patches (TC only).
     remember_nvfp4_tc_product_stack(patched_load, ops.mixed_precision_ops)
 
-    if getattr(patched_load, "_hswq_nvfp4_comfy_only", False):
-        # Already on parity load; still ensure forward + LoRA bake.
+    def _refresh_parity_mp() -> None:
         _cur_mp = ops.mixed_precision_ops
 
         def mixed_precision_ops_parity_refresh(*args, **kwargs):
@@ -206,7 +258,15 @@ def apply_nvfp4_comfy_parity() -> bool:
         mixed_precision_ops_parity_refresh._hswq_nvfp4_stack_ver = getattr(
             _cur_mp, "_hswq_nvfp4_stack_ver", 0
         )  # type: ignore[attr-defined]
+        if getattr(_cur_mp, "_hswq_nvfp4_orig_mp", None) is not None:
+            mixed_precision_ops_parity_refresh._hswq_nvfp4_orig_mp = (  # type: ignore[attr-defined]
+                _cur_mp._hswq_nvfp4_orig_mp
+            )
         ops.mixed_precision_ops = mixed_precision_ops_parity_refresh
+
+    # Already on parity load (possibly under INT8 decode wrap): keep load chain.
+    if _parity_load_in_chain(patched_load):
+        _refresh_parity_mp()
         _PARITY_APPLIED = True
         _console(
             "[HSWQ NVFP4] comfy_parity refresh: stock GEMM + act rotate "
@@ -214,9 +274,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         )
         return True
 
-    orig_load = _closure_named(patched_load, "_orig_load")
-    if orig_load is None:
-        orig_load = patched_load
+    orig_load = _resolve_load_under_tc(patched_load)
 
     def _load_quantized_module_comfy_only(
         module,
@@ -231,7 +289,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         load_extra_params=False,
     ):
         conf = decode_comfy_quant_conf(state_dict.get(f"{prefix}comfy_quant"))
-        orig_load(
+        out = orig_load(
             module,
             super_load,
             state_dict,
@@ -245,8 +303,11 @@ def apply_nvfp4_comfy_parity() -> bool:
         )
         if is_nvfp4_conf(conf):
             _arm_convrot_after_stock_load(module, conf)
+        return out
 
     _load_quantized_module_comfy_only._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
+    # Bench marks full_load on the parity wrapper too; keep comfy_only distinct
+    # so remember_nvfp4_tc_product_stack never stores this as SDXL TC.
     ops._load_quantized_module = _load_quantized_module_comfy_only
 
     _cur_mp = ops.mixed_precision_ops
@@ -276,6 +337,17 @@ def apply_nvfp4_comfy_parity() -> bool:
             _cur_mp._hswq_nvfp4_orig_mp
         )
     ops.mixed_precision_ops = mixed_precision_ops_comfy_only
+
+    # Prove unwrap once at install (bench does this).
+    mp0 = _cur_mp()
+    if getattr(mp0.Linear.forward, "_hswq_nvfp4_full_forward", False):
+        stock0 = _unwrap_stock_forward(mp0.Linear.forward)
+        if stock0 is None:
+            raise RuntimeError(
+                "[HSWQ NVFP4] comfy_parity: failed to unwrap Linear.forward "
+                "to Comfy stock at install"
+            )
+        mp0.Linear.forward = _make_convrot_parity_forward(stock0)
 
     _PARITY_APPLIED = True
     _console(
