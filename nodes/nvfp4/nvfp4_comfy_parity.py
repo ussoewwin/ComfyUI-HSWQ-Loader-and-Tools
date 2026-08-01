@@ -25,7 +25,9 @@ _PRODUCT_MP: Optional[Callable] = None
 _LOAD_NVFP4_SEEN = 0
 _LOAD_CONVROT_ARMED = 0
 _LOAD_NVFP4_NO_CONVROT = 0
+_LOAD_INT8_CONVROT_ARMED = 0
 _ACT_ROTATE_HITS = 0
+_ACT_ROTATE_INT8_HITS = 0
 _ACT_ROTATE_LOG_EVERY = 32
 _ACT_ROTATE_FIRST_N = 4
 
@@ -37,21 +39,24 @@ def _console(msg: str) -> None:
 
 def reset_nvfp4_parity_load_counters() -> None:
     global _LOAD_NVFP4_SEEN, _LOAD_CONVROT_ARMED, _LOAD_NVFP4_NO_CONVROT
-    global _ACT_ROTATE_HITS
+    global _LOAD_INT8_CONVROT_ARMED, _ACT_ROTATE_HITS, _ACT_ROTATE_INT8_HITS
     _LOAD_NVFP4_SEEN = 0
     _LOAD_CONVROT_ARMED = 0
     _LOAD_NVFP4_NO_CONVROT = 0
+    _LOAD_INT8_CONVROT_ARMED = 0
     _ACT_ROTATE_HITS = 0
+    _ACT_ROTATE_INT8_HITS = 0
 
 
 def log_nvfp4_parity_load_summary(label: str = "") -> None:
-    """Print how many nvfp4 layers were seen / ConvRot-armed during load."""
+    """Print how many nvfp4 / int8protect ConvRot layers were armed during load."""
     tag = f" ({label})" if label else ""
     _console(
         f"[HSWQ NVFP4][diag] load summary{tag}: "
         f"nvfp4_seen={_LOAD_NVFP4_SEEN} "
         f"convrot_armed={_LOAD_CONVROT_ARMED} "
-        f"nvfp4_no_convrot={_LOAD_NVFP4_NO_CONVROT}"
+        f"nvfp4_no_convrot={_LOAD_NVFP4_NO_CONVROT} "
+        f"int8_convrot_armed={_LOAD_INT8_CONVROT_ARMED}"
     )
     if _LOAD_NVFP4_SEEN == 0:
         _console(
@@ -63,6 +68,12 @@ def log_nvfp4_parity_load_summary(label: str = "") -> None:
         _console(
             "[HSWQ NVFP4][diag] WARNING: nvfp4 layers loaded but "
             "convrot_armed=0 — act rotate will never run"
+        )
+    if _LOAD_INT8_CONVROT_ARMED == 0:
+        _console(
+            "[HSWQ NVFP4][diag] WARNING: int8protect ConvRot Linear armed=0 — "
+            "mixed packs need online act rotate on protect Linears "
+            "(offline W@H^T without x@H → bit-crush)"
         )
 
 
@@ -85,8 +96,10 @@ def summarize_nvfp4_parity_modules(model, max_names: int = 8) -> None:
 
     n_linear = 0
     n_convrot = 0
+    n_int8_convrot = 0
     n_tc_arm = 0
     names: list[str] = []
+    names_i8: list[str] = []
     for name, mod in diffusion.named_modules():
         if not isinstance(mod, nn.Linear) and "Linear" not in type(mod).__name__:
             continue
@@ -96,6 +109,11 @@ def summarize_nvfp4_parity_modules(model, max_names: int = 8) -> None:
             if len(names) < max_names:
                 gs = getattr(mod, "_hswq_nvfp4_convrot_groupsize", "?")
                 names.append(f"{name}(gs={gs})")
+        if getattr(mod, "_hswq_int8_convrot", False):
+            n_int8_convrot += 1
+            if len(names_i8) < max_names:
+                gs = getattr(mod, "_hswq_int8_convrot_groupsize", "?")
+                names_i8.append(f"{name}(gs={gs})")
         if getattr(mod, "_hswq_nvfp4", False):
             n_tc_arm += 1
 
@@ -121,6 +139,7 @@ def summarize_nvfp4_parity_modules(model, max_names: int = 8) -> None:
     _console(
         f"[HSWQ NVFP4][diag] Linear={n_linear} "
         f"_hswq_nvfp4_convrot={n_convrot} "
+        f"_hswq_int8_convrot={n_int8_convrot} "
         f"_hswq_nvfp4(TC arm)={n_tc_arm}"
     )
     _console(
@@ -131,11 +150,17 @@ def summarize_nvfp4_parity_modules(model, max_names: int = 8) -> None:
     )
     if names:
         _console(
-            "[HSWQ NVFP4][diag] sample ConvRot modules: "
+            "[HSWQ NVFP4][diag] sample NVFP4 ConvRot: "
             + ", ".join(names)
         )
+    if names_i8:
+        _console(
+            "[HSWQ NVFP4][diag] sample INT8 protect ConvRot: "
+            + ", ".join(names_i8)
+        )
     _console(
-        f"[HSWQ NVFP4][diag] act_rotate_hits_so_far={_ACT_ROTATE_HITS}"
+        f"[HSWQ NVFP4][diag] act_rotate_hits_so_far="
+        f"nvfp4={_ACT_ROTATE_HITS} int8protect={_ACT_ROTATE_INT8_HITS}"
     )
     _console("[HSWQ NVFP4][diag] =====================")
 
@@ -219,6 +244,81 @@ def _resolve_load_under_tc(patched_load):
     return patched_load
 
 
+def _chain_has_int8_protect_in_load(fn) -> bool:
+    """True if load chain already arms INT8 protect ConvRot after stock load."""
+    cur = fn
+    seen = set()
+    for _ in range(8):
+        if cur is None or id(cur) in seen:
+            return False
+        seen.add(id(cur))
+        if getattr(cur, "_hswq_int8_protect_in_load", False):
+            return True
+        if getattr(cur, "_hswq_int8_protect_arm_v2", False):
+            return True
+        if getattr(cur, "_hswq_int8_decode_patched", False):
+            cur = _closure_named(cur, "original_load")
+            continue
+        if _is_tc_full_load(cur):
+            cur = _closure_named(cur, "_orig_load")
+            continue
+        if getattr(cur, "_hswq_nvfp4_comfy_only", False):
+            return False
+        return False
+    return False
+
+
+def _ensure_int8_protect_arm_overlay() -> None:
+    """Hot-refresh: wrap current load so INT8 protect Linears get act-rotate arm.
+
+    No-op when ``_load_quantized_module_comfy_only`` already has
+    ``_hswq_int8_protect_in_load`` (fresh install path).
+    """
+    try:
+        import comfy.ops as ops
+    except Exception:
+        return
+    cur = ops._load_quantized_module
+    if _chain_has_int8_protect_in_load(cur):
+        return
+    from .nvfp4_conf import decode_comfy_quant_conf
+
+    def _load_int8_protect_arm_overlay(
+        module,
+        super_load,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+        load_extra_params=False,
+    ):
+        conf = decode_comfy_quant_conf(state_dict.get(f"{prefix}comfy_quant"))
+        out = cur(
+            module,
+            super_load,
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+            load_extra_params=load_extra_params,
+        )
+        _arm_int8_protect_convrot_after_stock_load(module, conf)
+        return out
+
+    _load_int8_protect_arm_overlay._hswq_int8_protect_arm_v2 = True  # type: ignore[attr-defined]
+    ops._load_quantized_module = _load_int8_protect_arm_overlay
+    _console(
+        "[HSWQ NVFP4] comfy_parity: INT8 protect ConvRot arm overlay installed "
+        "(hot refresh; online act rotate for protect Linears)"
+    )
+
+
 def _unwrap_stock_forward(forward_fn):
     """Peel HSWQ TC wrappers until stock MixedPrecision Linear.forward."""
     f = forward_fn
@@ -232,32 +332,58 @@ def _unwrap_stock_forward(forward_fn):
     return None
 
 
-def _make_convrot_parity_forward(stock_forward):
-    """Stock MixedPrecision forward + online act rotate for ConvRot NVFP4.
+def _is_int8_tensorwise_convrot_conf(conf) -> bool:
+    """True for INT8 protect Linear layers stamped with ConvRot offline rotate."""
+    if not isinstance(conf, dict):
+        return False
+    fmt = conf.get("format")
+    if fmt is not None and str(fmt).lower() != "int8_tensorwise":
+        return False
+    from .nvfp4_conf import convrot_flags_from_conf
 
-    Matches ``hswq/benchmark/nvfp4_comfy_parity.py`` bit-for-bit on the rotate
-    gate: always rotate when ``_hswq_nvfp4_convrot`` is set. Skipping on
-    ``_full_precision_mm`` / ``requires_grad`` / ``comfy_force_cast_weights``
-    leaves offline-rotated weights without ``x @ H`` → broken images.
+    enabled, _gs = convrot_flags_from_conf(conf)
+    return bool(enabled)
+
+
+def _make_convrot_parity_forward(stock_forward):
+    """Stock MixedPrecision forward + online act rotate for ConvRot weights.
+
+    Covers:
+    - NVFP4 ConvRot Linear (``_hswq_nvfp4_convrot``)
+    - INT8 protect ConvRot Linear (``_hswq_int8_convrot``)
+
+    Convert stores offline ``W @ H^T``. Online must apply ``x @ H`` on *every*
+    path that still uses those rotated weights — including Dynamic /
+    ``_full_precision_mm`` / ``weight_function`` dequant to ``F.linear``.
+    Kitchen QT ``int8_linear(convrot=True)`` only rotates when QuantTensor
+    survives; after float dequant there is no rotate → bit-crush / blocky fur.
     """
     from .nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
-        global _ACT_ROTATE_HITS
-        if getattr(self, "_hswq_nvfp4_convrot", False):
-            _ACT_ROTATE_HITS += 1
-            hit = _ACT_ROTATE_HITS
+        global _ACT_ROTATE_HITS, _ACT_ROTATE_INT8_HITS
+        nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
+        i8 = bool(getattr(self, "_hswq_int8_convrot", False))
+        if nv or i8:
+            if nv:
+                _ACT_ROTATE_HITS += 1
+                hit = _ACT_ROTATE_HITS
+                tag = "nvfp4"
+                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+            else:
+                _ACT_ROTATE_INT8_HITS += 1
+                hit = _ACT_ROTATE_INT8_HITS
+                tag = "int8protect"
+                gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
             if hit <= _ACT_ROTATE_FIRST_N or (
                 _ACT_ROTATE_LOG_EVERY > 0 and hit % _ACT_ROTATE_LOG_EVERY == 0
             ):
                 cls = type(self).__name__
-                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
                 shape = tuple(getattr(input, "shape", ()))
                 _console(
-                    f"[HSWQ NVFP4][diag] act_rotate hit#{hit} "
+                    f"[HSWQ NVFP4][diag] act_rotate hit#{hit} ({tag}) "
                     f"Linear={cls} gs={gs} x.shape={shape}"
                 )
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
             h = getattr(self, "_hswq_nvfp4_parity_H", None)
             if h is None or h.device != input.device or h.dtype != input.dtype:
                 h = build_hadamard(gs, device=input.device, dtype=input.dtype)
@@ -298,6 +424,38 @@ def _arm_convrot_after_stock_load(module, conf) -> None:
                 f"(#{_LOAD_NVFP4_NO_CONVROT}) keys={list(conf.keys())[:12]}"
             )
     # Do not set _hswq_nvfp4 (TC full-forward arm).
+
+
+def _arm_int8_protect_convrot_after_stock_load(module, conf) -> None:
+    """Arm parity act-rotate for INT8 protect Linear (offline W@H^T).
+
+    Clears ``Params.convrot`` so kitchen QT path does not double-rotate when
+    QuantTensor still reaches ``int8_linear``. Same pattern as INT8 Conv2d
+    (``_hswq_convrot`` + cleared Params.convrot).
+    """
+    global _LOAD_INT8_CONVROT_ARMED
+    if not _is_int8_tensorwise_convrot_conf(conf):
+        return
+    from .nvfp4_conf import convrot_flags_from_conf
+
+    _enabled, gs = convrot_flags_from_conf(conf)
+    module._hswq_int8_convrot = True
+    module._hswq_int8_convrot_groupsize = int(gs)
+    try:
+        import comfy.quant_ops as quant_ops
+
+        p = getattr(module, "weight", None)
+        layout = getattr(p, "layout_params", None) if p is not None else None
+        if isinstance(layout, quant_ops.Params) and getattr(layout, "convrot", False):
+            layout.convrot = False
+    except Exception:
+        pass
+    _LOAD_INT8_CONVROT_ARMED += 1
+    if _LOAD_INT8_CONVROT_ARMED <= 4 or _LOAD_INT8_CONVROT_ARMED % 20 == 0:
+        _console(
+            f"[HSWQ NVFP4][diag] arm INT8 protect ConvRot "
+            f"#{_LOAD_INT8_CONVROT_ARMED} gs={gs}"
+        )
 
 
 def require_convrot_parity_forward() -> None:
@@ -413,11 +571,12 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     # Already on parity load (possibly under INT8 decode wrap): keep load chain.
     if _parity_load_in_chain(patched_load):
+        _ensure_int8_protect_arm_overlay()
         _refresh_parity_mp()
         _PARITY_APPLIED = True
         _console(
             "[HSWQ NVFP4] comfy_parity refresh: stock GEMM + act rotate "
-            "+ ConvRot Linear LoRA bake (Z Image)"
+            "(NVFP4 + INT8 protect) + ConvRot Linear LoRA bake (Z Image)"
         )
         return True
 
@@ -450,9 +609,12 @@ def apply_nvfp4_comfy_parity() -> bool:
         )
         if is_nvfp4_conf(conf):
             _arm_convrot_after_stock_load(module, conf)
+        else:
+            _arm_int8_protect_convrot_after_stock_load(module, conf)
         return out
 
     _load_quantized_module_comfy_only._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
+    _load_quantized_module_comfy_only._hswq_int8_protect_in_load = True  # type: ignore[attr-defined]
     # Bench marks full_load on the parity wrapper too; keep comfy_only distinct
     # so remember_nvfp4_tc_product_stack never stores this as SDXL TC.
     ops._load_quantized_module = _load_quantized_module_comfy_only
@@ -499,6 +661,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     _PARITY_APPLIED = True
     _console(
         "[HSWQ NVFP4] comfy_parity ON: stock MixedPrecision GEMM + online act rotate "
+        "(NVFP4 ConvRot + INT8 protect ConvRot) "
         "+ ConvRot Linear LoRA bake (Z Image; not HSWQ TC Linear.forward)"
     )
     return True

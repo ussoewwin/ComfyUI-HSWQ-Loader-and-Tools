@@ -58,6 +58,193 @@ def _console(msg: str) -> None:
     logger.info(msg)
 
 
+def _patcher_needs_nvfp4_force_full_load(patcher) -> bool:
+    """True for HSWQ ConvRot NVFP4 UNets that must not stream via lowvram / Pin thrash.
+
+    Owner log: ``Pin error`` × hundreds then
+    ``loaded partially; 0.00 MB usable, 0.00 MB loaded, ~5177 MB offloaded``
+    immediately before ``act_rotate hit#1``. Sampling with zero loaded weights
+    destroys ConvRot NVFP4 quality. Not a side issue — fix residency.
+    """
+    if patcher is None:
+        return False
+    if getattr(patcher, "_hswq_nvfp4_force_full_load", False):
+        return True
+    base = getattr(patcher, "model", None)
+    if base is None:
+        return False
+    if getattr(base, "_hswq_nvfp4_disable_dynamic", False):
+        return True
+    if getattr(base, "_hswq_nvfp4_force_full_load", False):
+        return True
+    try:
+        for _, mod in base.named_modules():
+            if getattr(mod, "_hswq_nvfp4_convrot", False):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _force_detach_dynamic_except(keep_patchers=None, device=None) -> int:
+    """Detach Dynamic VRAM occupants (VAE staging, leftovers) before NVFP4 full load.
+
+    Same spirit as INT8→Nunchaku handoff: leave ``unpatch_weights=False`` so
+    QT / ConvRot stamps stay intact; only free GPU / VBAR / pin occupancy.
+    """
+    try:
+        import comfy.model_management as mm
+    except ImportError:
+        return 0
+
+    keep_ids = {id(p) for p in (keep_patchers or []) if p is not None}
+    unloaded = 0
+    i = 0
+    while i < len(mm.current_loaded_models):
+        lm = mm.current_loaded_models[i]
+        patcher = lm.model
+        if patcher is None:
+            i += 1
+            continue
+        if id(patcher) in keep_ids:
+            i += 1
+            continue
+        if device is not None and getattr(lm, "device", None) is not None:
+            try:
+                if str(lm.device) != str(device):
+                    i += 1
+                    continue
+            except Exception:
+                pass
+        is_dyn = False
+        try:
+            is_dyn = bool(patcher.is_dynamic())
+        except Exception:
+            is_dyn = False
+        if not is_dyn:
+            i += 1
+            continue
+        # Never detach another ConvRot NVFP4 UNet that is also being kept.
+        if _patcher_needs_nvfp4_force_full_load(patcher):
+            i += 1
+            continue
+        try:
+            lm.model_unload(unpatch_weights=False)
+        except TypeError:
+            try:
+                patcher.detach(unpatch_all=False)
+            except TypeError:
+                try:
+                    patcher.detach(False)
+                except Exception as exc:
+                    _console(
+                        f"[HSWQ NVFP4] detach(False) failed: {exc!r}"
+                    )
+            except Exception as exc:
+                _console(
+                    f"[HSWQ NVFP4] detach(unpatch_all=False) failed: {exc!r}"
+                )
+            try:
+                fin = getattr(lm, "model_finalizer", None)
+                if fin is not None:
+                    fin.detach()
+            except Exception:
+                pass
+            try:
+                lm.model_finalizer = None
+                lm.real_model = None
+            except Exception:
+                pass
+        except Exception as exc:
+            _console(f"[HSWQ NVFP4] model_unload(False) failed: {exc!r}")
+            i += 1
+            continue
+        mm.current_loaded_models.pop(i)
+        unloaded += 1
+    if unloaded > 0:
+        try:
+            mm.soft_empty_cache()
+        except Exception:
+            pass
+    return unloaded
+
+
+def _patch_load_models_gpu_nvfp4_force_full() -> bool:
+    """Force ``force_full_load`` + free Dynamic occupancy for ConvRot NVFP4.
+
+    Must wrap *after* MultiGPU / INT8 handoff when possible (re-install from
+    UNet load path). Outer wrapper sets force_full_load before calling through.
+    """
+    try:
+        import comfy.model_management as mm
+    except ImportError:
+        return False
+
+    original = getattr(mm, "load_models_gpu", None)
+    if original is None:
+        return False
+    # v2 = detach any Dynamic (VAE etc.), not only INT8; re-arm after MultiGPU.
+    _VER = 2
+    if getattr(original, "_hswq_nvfp4_force_full_ver", 0) >= _VER:
+        return True
+    # Keep MultiGPU / INT8-handoff wrappers in the chain. Only unwrap *our*
+    # older wrap — never jump to ``_hswq_orig_load_models_gpu`` (that skips INT8).
+    if getattr(original, "_hswq_nvfp4_force_full", False):
+        true_orig = getattr(
+            original, "_hswq_nvfp4_orig_load_models_gpu", original
+        )
+    else:
+        true_orig = original
+
+    def load_models_gpu(
+        models,
+        memory_required=0,
+        force_patch_weights=False,
+        minimum_memory_required=None,
+        force_full_load=False,
+    ):
+        keep = []
+        need_full = False
+        device = None
+        for m in models or []:
+            keep.append(m)
+            try:
+                for mm_extra in getattr(m, "model_patches_models", lambda: [])() or []:
+                    keep.append(mm_extra)
+            except Exception:
+                pass
+            if _patcher_needs_nvfp4_force_full_load(m):
+                need_full = True
+                if device is None:
+                    device = getattr(m, "load_device", None)
+        if need_full:
+            n = _force_detach_dynamic_except(keep_patchers=keep, device=device)
+            n2 = _force_detach_dynamic_except(keep_patchers=keep, device=None)
+            try:
+                mm.soft_empty_cache()
+            except Exception as exc:
+                _console(f"[HSWQ NVFP4] soft_empty_cache failed: {exc!r}")
+            _console(
+                "[HSWQ NVFP4] force_full_load before ConvRot NVFP4 sample "
+                f"(Dynamic offload keep-weights={n + n2}; "
+                "avoids Pin thrash / 0.00 MB usable partial load)"
+            )
+            force_full_load = True
+        return true_orig(
+            models,
+            memory_required=memory_required,
+            force_patch_weights=force_patch_weights,
+            minimum_memory_required=minimum_memory_required,
+            force_full_load=force_full_load,
+        )
+
+    load_models_gpu._hswq_nvfp4_force_full = True  # type: ignore[attr-defined]
+    load_models_gpu._hswq_nvfp4_force_full_ver = _VER  # type: ignore[attr-defined]
+    load_models_gpu._hswq_nvfp4_orig_load_models_gpu = true_orig  # type: ignore[attr-defined]
+    mm.load_models_gpu = load_models_gpu
+    return True
+
+
 def _callable_chain_has_attr(fn, attr: str) -> bool:
     """True if ``fn`` or a closed-over callable wrapper has ``attr``."""
     cur = fn
@@ -181,6 +368,8 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
 
     # Always (re)ensure kitchen prefix remap — early-return paths must not skip it.
     _patch_convert_old_quants_nvfp4_kitchen_prefix()
+    # Pin / 0.00 MB usable partial load kills ConvRot NVFP4 — force full GPU.
+    _patch_load_models_gpu_nvfp4_force_full()
 
     mp_fn = getattr(ops, "mixed_precision_ops", None)
     stack_ver = int(getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0) or 0) if mp_fn else 0
@@ -497,8 +686,16 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
         )
     try:
         model.model._hswq_nvfp4_disable_dynamic = True
+        model.model._hswq_nvfp4_force_full_load = True
     except Exception:
         pass
+    try:
+        # Stamp the ModelPatcher too — load_models_gpu sees the patcher first.
+        model._hswq_nvfp4_force_full_load = True
+    except Exception:
+        pass
+    # Re-arm outermost after INT8 / MultiGPU wraps so sample-time load is full.
+    _patch_load_models_gpu_nvfp4_force_full()
     log_nvfp4_parity_load_summary(unet_name)
     summarize_nvfp4_parity_modules(model)
     summarize_int8_lora_capability(model)

@@ -58,14 +58,21 @@ def is_nvfp4_conf(conf: Optional[dict]) -> bool:
 
 
 def convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
-    """Return (enabled, groupsize) from an nvfp4 comfy_quant dict.
+    """Return (enabled, groupsize) from a ``comfy_quant`` dict.
 
-    Same as ``hswq/benchmark/nvfp4/nvfp4_conf.py`` (top-level ``convrot`` only).
+    Used for NVFP4 ConvRot and INT8 protect ConvRot Linears (top-level
+    ``convrot`` / ``convrot_groupsize``, same convert stamp shape).
     """
-    if not is_nvfp4_conf(conf):
+    if not isinstance(conf, dict):
+        return False, 256
+    fmt = conf.get("format")
+    if fmt not in ("nvfp4", "int8_tensorwise"):
         return False, 256
     if not bool(conf.get("convrot", False)):
-        return False, 256
+        # Stock Comfy may also put the flag under params.
+        params_conf = conf.get("params", {})
+        if not isinstance(params_conf, dict) or not bool(params_conf.get("convrot", False)):
+            return False, 256
     params_conf = conf.get("params", {})
     if not isinstance(params_conf, dict):
         params_conf = {}
