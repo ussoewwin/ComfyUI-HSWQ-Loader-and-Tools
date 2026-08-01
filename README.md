@@ -147,6 +147,8 @@ ComfyUI output node that saves images to your ComfyUI **output** folder as **PNG
 
 Standard ComfyUI UNet loader wrapper for diffusion models under `diffusion_models` (**Z Image / ZIT** and other UNet packs). Loads **MODEL** with FP8, INT8, and **ConvRot NVFP4** weight dtypes.
 
+**Z Image / ZIT ConvRot NVFP4** is **supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)**. Other third-party ConvRot NVFP4 UNet packs are out of scope.
+
 - **General FP8 / INT8**: Same idea as the stock UNet loader (HSWQ FP8 E4M3, Scaled FP8, and native comfy_quant / `int8_tensorwise` when selected or auto-detected). Not limited to HSWQ-only weights for those modes.
 - **ConvRot NVFP4 (Z Image / ZIT)**: Select `weight_dtype` = **`ConvRot NVFP4`**, or leave **`default`** when the UNet safetensors has comfy_quant / HSWQ `nvfp4` markers. Routes to this extension’s UNet NVFP4 stack under `nodes/nvfp4/` with the **Comfy parity** path used by `hswq/benchmark` (stock MixedPrecision GEMM + online act rotate; ConvRot Linear LoRA bake kept). **Do not** expect the SDXL Checkpoint Loader’s Tensor Core product path here — SDXL NVFP4 stays on the Checkpoint Loader; Z Image NVFP4 stays on this UNet loader. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).**
 - **INT8 / NVFP4 auto-detect**: INT8-looking packs use the INT8 path; NVFP4-looking packs use the ConvRot NVFP4 path when `weight_dtype` is `default` (NVFP4 dispatch is installed after INT8 so mixed packs are not stolen by INT8-only detect).
@@ -154,6 +156,8 @@ Standard ComfyUI UNet loader wrapper for diffusion models under `diffusion_model
 **Inputs**: `unet_name`, `weight_dtype` (`default` / FP8 options / `int8_tensorwise` / `ConvRot NVFP4`).
 
 This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear speed is left to **ComfyUI + `comfy_kitchen`** (`int8_linear`: cuda → triton → eager). This extension keeps INT8 **load compatibility** patches (Conv2d / LoRA / ControlLora / handoff) and the **NVFP4** UNet patches under `nodes/nvfp4/`.
+
+- **Z Image / ZIT ConvRot NVFP4 compatibility**: **Only** UNet packs quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)
 
 **VRAM purge**: For **ConvRot NVFP4** (and HSWQ INT8) UNet loads, place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the end of the workflow with **`HSWQ`** on — same reason as the SDXL Checkpoint Loader section.
 
