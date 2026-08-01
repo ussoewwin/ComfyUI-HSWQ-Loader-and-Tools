@@ -102,8 +102,13 @@ def _patch_convert_old_quants_nvfp4_kitchen_prefix() -> bool:
     **without** ``model.diffusion_model.``. Stock ``convert_old_quants`` then
     injects markers at bare paths (``layers.0.attention.qkv.comfy_quant``) while
     weights live at ``model.diffusion_model.layers.0...weight``. MixedPrecision
-    load peeks ``{prefix}comfy_quant`` under the full module prefix → **miss** →
-    no ConvRot arm / wrong path. Same fix as ``hswq/benchmark/nvfp4/comfy_quant_nvfp4.py``.
+    load peeks ``{prefix}comfy_quant`` under the full module prefix → **miss**.
+
+    Must remap **all** formats with a matching prefixed weight — not only NVFP4.
+    ``int8protect*`` packs leave INT8 markers bare if we filter ``is_nvfp4_conf``;
+    those layers then load as raw tensors while ConvRot NVFP4 layers rotate → morphing.
+    HSWQ bench uses empty ``model_prefix`` + key strip so bare markers match; product
+    ``load_diffusion_model`` needs this full remap.
     """
     try:
         import comfy.utils as comfy_utils
@@ -112,7 +117,9 @@ def _patch_convert_old_quants_nvfp4_kitchen_prefix() -> bool:
         return False
 
     current = comfy_utils.convert_old_quants
-    if _callable_chain_has_attr(current, "_hswq_nvfp4_kitchen_prefix"):
+    # v2: remap every bare .comfy_quant (nvfp4 + int8_tensorwise + …). Re-wrap if
+    # only the old nvfp4-only patch is present so a running ComfyUI picks up the fix.
+    if _callable_chain_has_attr(current, "_hswq_nvfp4_kitchen_prefix_v2"):
         return True
 
     _orig = current
@@ -122,6 +129,7 @@ def _patch_convert_old_quants_nvfp4_kitchen_prefix() -> bool:
             metadata = {}
         state_dict, metadata = _orig(state_dict, model_prefix, metadata=metadata)
         moved = 0
+        by_fmt: dict[str, int] = {}
         if model_prefix:
             for k in list(state_dict.keys()):
                 if not k.endswith(".comfy_quant") or k.startswith(model_prefix):
@@ -130,26 +138,33 @@ def _patch_convert_old_quants_nvfp4_kitchen_prefix() -> bool:
                     conf = decode_comfy_quant_conf(state_dict[k])
                 except Exception:
                     continue
-                if not is_nvfp4_conf(conf):
+                if not isinstance(conf, dict):
                     continue
                 layer = k[: -len(".comfy_quant")]
                 if f"{model_prefix}{layer}.weight" not in state_dict:
                     continue
                 state_dict[f"{model_prefix}{k}"] = state_dict.pop(k)
                 moved += 1
+                fmt = str(conf.get("format") or "?")
+                by_fmt[fmt] = by_fmt.get(fmt, 0) + 1
         if moved:
+            fmt_bits = ", ".join(f"{f}={n}" for f, n in sorted(by_fmt.items()))
             _console(
-                f"[HSWQ NVFP4] convert_old: remapped {moved} bare nvfp4 "
-                f".comfy_quant marker(s) under prefix={model_prefix!r}"
+                f"[HSWQ NVFP4] convert_old: remapped {moved} bare .comfy_quant "
+                f"marker(s) under prefix={model_prefix!r} ({fmt_bits})"
             )
         return state_dict, metadata
 
     convert_old_quants_nvfp4_prefix._hswq_nvfp4_kitchen_prefix = True  # type: ignore[attr-defined]
-    if getattr(_orig, "_hswq_int8_patched", False):
+    convert_old_quants_nvfp4_prefix._hswq_nvfp4_kitchen_prefix_v2 = True  # type: ignore[attr-defined]
+    if getattr(_orig, "_hswq_int8_patched", False) or _callable_chain_has_attr(
+        _orig, "_hswq_int8_patched"
+    ):
         convert_old_quants_nvfp4_prefix._hswq_int8_patched = True  # type: ignore[attr-defined]
     comfy_utils.convert_old_quants = convert_old_quants_nvfp4_prefix
     _console(
-        "[HSWQ NVFP4] convert_old_quants: kitchen bare→prefixed .comfy_quant remap ON"
+        "[HSWQ NVFP4] convert_old_quants: kitchen bare→prefixed .comfy_quant remap ON "
+        "(all formats: nvfp4 + int8 + …)"
     )
     return True
 
