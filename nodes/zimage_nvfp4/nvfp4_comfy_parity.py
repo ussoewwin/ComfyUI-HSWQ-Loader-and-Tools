@@ -26,10 +26,6 @@ _LOAD_NVFP4_SEEN = 0
 _LOAD_CONVROT_ARMED = 0
 _LOAD_NVFP4_NO_CONVROT = 0
 _LOAD_INT8_CONVROT_ARMED = 0
-_ACT_ROTATE_HITS = 0
-_ACT_ROTATE_INT8_HITS = 0
-_ACT_ROTATE_LOG_EVERY = 32
-_ACT_ROTATE_FIRST_N = 4
 
 
 def _console(msg: str) -> None:
@@ -39,13 +35,11 @@ def _console(msg: str) -> None:
 
 def reset_nvfp4_parity_load_counters() -> None:
     global _LOAD_NVFP4_SEEN, _LOAD_CONVROT_ARMED, _LOAD_NVFP4_NO_CONVROT
-    global _LOAD_INT8_CONVROT_ARMED, _ACT_ROTATE_HITS, _ACT_ROTATE_INT8_HITS
+    global _LOAD_INT8_CONVROT_ARMED
     _LOAD_NVFP4_SEEN = 0
     _LOAD_CONVROT_ARMED = 0
     _LOAD_NVFP4_NO_CONVROT = 0
     _LOAD_INT8_CONVROT_ARMED = 0
-    _ACT_ROTATE_HITS = 0
-    _ACT_ROTATE_INT8_HITS = 0
 
 
 def log_nvfp4_parity_load_summary(label: str = "") -> None:
@@ -158,10 +152,6 @@ def summarize_nvfp4_parity_modules(model, max_names: int = 8) -> None:
             "[HSWQ NVFP4][diag] sample INT8 protect ConvRot: "
             + ", ".join(names_i8)
         )
-    _console(
-        f"[HSWQ NVFP4][diag] act_rotate_hits_so_far="
-        f"nvfp4={_ACT_ROTATE_HITS} int8protect={_ACT_ROTATE_INT8_HITS}"
-    )
     _console("[HSWQ NVFP4][diag] =====================")
 
 
@@ -359,29 +349,13 @@ def _make_convrot_parity_forward(stock_forward):
     from ..nvfp4.nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
-        global _ACT_ROTATE_HITS, _ACT_ROTATE_INT8_HITS
         nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
         i8 = bool(getattr(self, "_hswq_int8_convrot", False))
         if nv or i8:
             if nv:
-                _ACT_ROTATE_HITS += 1
-                hit = _ACT_ROTATE_HITS
-                tag = "nvfp4"
                 gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
             else:
-                _ACT_ROTATE_INT8_HITS += 1
-                hit = _ACT_ROTATE_INT8_HITS
-                tag = "int8protect"
                 gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
-            if hit <= _ACT_ROTATE_FIRST_N or (
-                _ACT_ROTATE_LOG_EVERY > 0 and hit % _ACT_ROTATE_LOG_EVERY == 0
-            ):
-                cls = type(self).__name__
-                shape = tuple(getattr(input, "shape", ()))
-                _console(
-                    f"[HSWQ NVFP4][diag] act_rotate hit#{hit} ({tag}) "
-                    f"Linear={cls} gs={gs} x.shape={shape}"
-                )
             h = getattr(self, "_hswq_nvfp4_parity_H", None)
             if h is None or h.device != input.device or h.dtype != input.dtype:
                 h = build_hadamard(gs, device=input.device, dtype=input.dtype)
