@@ -49,8 +49,8 @@ def apply_nvfp4_patches() -> None:
     require_convrot_parity_forward()
     # INT8 tensorwise load only — ConvRot INT8 remains ComfyUI core / kitchen.
     apply_comfy_quant_int8_patches()
-    # After INT8 Dynamic bake wrap: force ConvRot NVFP4 LoRA bake (INT8 skips NVFP4).
-    if not install_zimage_nvfp4_lora_bake():
+    # After INT8 Dynamic bake wrap: force ConvRot NVFP4 LoRA bake outermost.
+    if not install_zimage_nvfp4_lora_bake(force=True):
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image: install_zimage_nvfp4_lora_bake failed "
             "(Dynamic ConvRot NVFP4 LoRA bake required)"
@@ -63,22 +63,39 @@ def apply_nvfp4_patches() -> None:
 
 
 def _ensure_dynamic_load_bake_wrap() -> None:
-    """Re-arm ZI NVFP4 bake wrap if MultiGPU etc. overwrote ModelPatcherDynamic.load."""
+    """Re-arm ZI NVFP4 bake wrap if MultiGPU/INT8 overwrote Dynamic.load or load_models_gpu."""
+    from .nvfp4_lora_bake import (
+        _BAKE_HOOK_VER,
+        install_load_models_gpu_bake_hook,
+        install_zimage_nvfp4_lora_bake,
+    )
+
     try:
+        import comfy.model_management as mm
         import comfy.model_patcher as mp
     except ImportError:
         return
     Dynamic = getattr(mp, "ModelPatcherDynamic", None)
-    if Dynamic is None:
-        return
-    cur = getattr(Dynamic, "load", None)
-    if cur is None:
-        return
-    if getattr(cur, "_hswq_zi_nvfp4_lora_bake_ver", 0) >= 2:
-        return
-    from .nvfp4_lora_bake import install_zimage_nvfp4_lora_bake
-
-    install_zimage_nvfp4_lora_bake()
+    need_force = True
+    if Dynamic is not None:
+        cur = getattr(Dynamic, "load", None)
+        if (
+            cur is not None
+            and getattr(cur, "_hswq_zi_nvfp4_lora_bake", False)
+            and getattr(cur, "_hswq_zi_nvfp4_lora_bake_ver", 0) >= _BAKE_HOOK_VER
+        ):
+            need_force = False
+    if need_force:
+        install_zimage_nvfp4_lora_bake(force=True)
+    gpu = getattr(mm, "load_models_gpu", None)
+    if (
+        gpu is None
+        or not getattr(gpu, "_hswq_zi_nvfp4_gpu_bake", False)
+        or getattr(gpu, "_hswq_zi_nvfp4_gpu_bake_ver", 0) < _BAKE_HOOK_VER
+    ):
+        install_load_models_gpu_bake_hook(force=True)
+    else:
+        install_load_models_gpu_bake_hook(force=False)
 
 
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
@@ -119,7 +136,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     require_convrot_parity_forward()
     # Mixed pack: Linear=nvfp4 parity, INT8 = ComfyUI core ConvRot path.
     apply_comfy_quant_int8_patches()
-    if not install_zimage_nvfp4_lora_bake():
+    if not install_zimage_nvfp4_lora_bake(force=True):
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image UNet requires Dynamic ConvRot NVFP4 LoRA bake"
         )
