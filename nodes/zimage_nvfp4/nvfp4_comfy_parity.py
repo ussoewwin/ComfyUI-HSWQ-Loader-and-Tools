@@ -46,13 +46,7 @@ def _make_convrot_parity_forward(stock_forward):
     from ..nvfp4.nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_convrot_parity(self, input, *args, **kwargs):
-        if getattr(self, "_hswq_nvfp4_convrot", False):
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
-            h = getattr(self, "_hswq_nvfp4_parity_H", None)
-            if h is None or h.device != input.device or h.dtype != input.dtype:
-                h = build_hadamard(gs, device=input.device, dtype=input.dtype)
-                self._hswq_nvfp4_parity_H = h
-            input = rotate_last_dim(input, h, gs)
+        # No NVFP4 act rotate here — kitchen NVFP4 already handles ConvRot.
         return stock_forward(self, input, *args, **kwargs)
 
     forward_convrot_parity._hswq_nvfp4_convrot_parity = True  # type: ignore[attr-defined]
