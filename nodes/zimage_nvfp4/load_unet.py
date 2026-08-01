@@ -33,6 +33,7 @@ def apply_nvfp4_patches() -> None:
         apply_nvfp4_comfy_parity,
         require_convrot_parity_forward,
     )
+    from .nvfp4_lora_bake import install_zimage_nvfp4_lora_bake
 
     if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
@@ -48,8 +49,15 @@ def apply_nvfp4_patches() -> None:
     require_convrot_parity_forward()
     # INT8 tensorwise load only — ConvRot INT8 remains ComfyUI core / kitchen.
     apply_comfy_quant_int8_patches()
+    # After INT8 Dynamic bake wrap: force ConvRot NVFP4 LoRA bake (INT8 skips NVFP4).
+    if not install_zimage_nvfp4_lora_bake():
+        raise RuntimeError(
+            "[HSWQ NVFP4] Z Image: install_zimage_nvfp4_lora_bake failed "
+            "(Dynamic ConvRot NVFP4 LoRA bake required)"
+        )
     print(
-        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 (comfy_parity) + INT8 ConvRot (ComfyUI core)",
+        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 (comfy_parity) + INT8 ConvRot "
+        "+ Dynamic NVFP4 LoRA bake",
         flush=True,
     )
 
@@ -73,6 +81,10 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
         apply_nvfp4_comfy_parity,
         require_convrot_parity_forward,
     )
+    from .nvfp4_lora_bake import (
+        install_zimage_nvfp4_lora_bake,
+        reset_zimage_nvfp4_lora_bake_log_counters,
+    )
 
     unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
     if not apply_comfy_quant_nvfp4_patches():
@@ -88,8 +100,13 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     require_convrot_parity_forward()
     # Mixed pack: Linear=nvfp4 parity, INT8 = ComfyUI core ConvRot path.
     apply_comfy_quant_int8_patches()
+    if not install_zimage_nvfp4_lora_bake():
+        raise RuntimeError(
+            "[HSWQ NVFP4] Z Image UNet requires Dynamic ConvRot NVFP4 LoRA bake"
+        )
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
+    reset_zimage_nvfp4_lora_bake_log_counters()
     logging.info(
         "[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 comfy_parity + INT8 ConvRot ComfyUI core): "
         "%s (weight_dtype=%s)",
