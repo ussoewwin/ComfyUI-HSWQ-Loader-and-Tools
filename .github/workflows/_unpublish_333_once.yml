@@ -1,0 +1,19 @@
+name: Unpublish forbidden 3.3.3 once
+on:
+  workflow_dispatch:
+jobs:
+  unpublish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: DELETE Registry version 3.3.3
+        env:
+          TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/out.txt -w "%{http_code}" -X DELETE \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.comfy.org/publishers/ussoewwin/nodes/comfyui-hswq-loader-and-tools/versions/3.3.3")
+          echo "HTTP $code"
+          cat /tmp/out.txt || true
+          test "$code" = "204" -o "$code" = "200" -o "$code" = "404"
