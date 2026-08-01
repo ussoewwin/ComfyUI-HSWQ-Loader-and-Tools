@@ -75,6 +75,13 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
         and stack_ver >= _NVFP4_STACK_VER
     ):
+        # Keep SDXL product refs fresh when still on TC (not Z Image parity).
+        if not getattr(mp_fn, "_hswq_nvfp4_comfy_only", False):
+            from .nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+            remember_nvfp4_tc_product_stack(
+                ops._load_quantized_module, ops.mixed_precision_ops
+            )
         return True
 
     # Already patched detect/load but LoRA bake missing: re-wrap mixed_precision_ops only.
@@ -94,6 +101,11 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         mixed_precision_ops_upgraded._hswq_nvfp4_orig_mp = _orig_mp  # type: ignore[attr-defined]
         ops.mixed_precision_ops = mixed_precision_ops_upgraded
         _PATCHES_APPLIED = True
+        from .nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+        remember_nvfp4_tc_product_stack(
+            ops._load_quantized_module, ops.mixed_precision_ops
+        )
         _console(
             "[HSWQ NVFP4] upgraded stack ver=%s "
             "(ConvRot Linear LoRA bake: convert_weight unrotate + set_weight re-rotate)"
@@ -222,6 +234,11 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
     mixed_precision_ops_patched._hswq_nvfp4_orig_mp = _orig_mp  # type: ignore[attr-defined]
 
     _PATCHES_APPLIED = True
+    from .nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+    remember_nvfp4_tc_product_stack(
+        ops._load_quantized_module, ops.mixed_precision_ops
+    )
     _console(
         "[HSWQ NVFP4] full stack applied "
         "(detect packed K + nvfp4_load + TC forward + ConvRot act + "
@@ -235,7 +252,11 @@ NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"
 
 
 def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None):
-    """Load SDXL checkpoint with HSWQ NVFP4 Linear (+ INT8 Conv2d ConvRot) stack."""
+    """Load SDXL checkpoint with HSWQ NVFP4 Linear (+ INT8 Conv2d ConvRot) stack.
+
+    SDXL stays on the product TC path. Never apply Z Image comfy_parity here.
+    If a prior Z Image UNet load left parity on ``ops``, restore TC first.
+    """
     import sys
 
     import folder_paths
@@ -253,6 +274,7 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         reset_int8_lora_log_counters,
         summarize_int8_lora_capability,
     )
+    from .nvfp4_comfy_parity import restore_nvfp4_tc_product_stack
 
     original_device = get_current_device()
     if device is not None:
@@ -260,13 +282,15 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
     try:
         ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
         apply_comfy_quant_nvfp4_patches()
+        # Branch: SDXL = TC product only. Undo any Z Image bench parity on ops.
+        restore_nvfp4_tc_product_stack()
         # Mixed pack: Linear=nvfp4, Conv2d=int8_tensorwise (+ ConvRot) — same as bench.
         apply_comfy_quant_int8_patches()
         reset_int8_lora_log_counters()
         reset_nvfp4_lora_log_counters()
         sdxl_logger.info(
             "[SDXL NVFP4] Loading checkpoint via MixedPrecisionOps "
-            "(nvfp4 Linear + int8 Conv / ConvRot + ConvRot Linear LoRA bake): "
+            "(nvfp4 Linear + int8 Conv / ConvRot + ConvRot Linear LoRA bake; TC): "
             "%s (weight_dtype=%s)",
             ckpt_name,
             weight_dtype,
@@ -287,12 +311,15 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
 
 
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
-    """Load Z Image / ZIT diffusion UNet with HSWQ ConvRot NVFP4 (+ INT8 protect) stack.
+    """Load Z Image / ZIT diffusion UNet with ConvRot NVFP4 (+ INT8 protect).
 
-    Same TC / LoRA-bake patches as SDXL ``load_checkpoint_sdxl_nvfp4_weight_dtype``,
-    but via ``comfy.sd.load_diffusion_model`` on ``diffusion_models``.
-    Mixed kitchen packs (Linear nvfp4 + int8protect Linear/Conv) need both
-    NVFP4 and INT8 patches so INT8 layers and ConvRot Linear LoRA bake work.
+    Uses the same path as ``hswq/benchmark/zi_convrot_nvfp4_bench.py``:
+    NVFP4 detect/load patches, then ``apply_nvfp4_comfy_parity()`` (stock Comfy
+    GEMM + online act rotate). Product TC Linear.forward is **not** used here —
+    it destroys Pixel SSIM on Z Image ConvRot packs. SDXL still uses TC.
+
+    Mixed kitchen packs (Linear nvfp4 + int8protect) need INT8 patches too.
+    ConvRot Linear LoRA bake (unrotate / re-rotate) stays attached.
     """
     import logging
 
@@ -305,21 +332,31 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
         reset_int8_lora_log_counters,
         summarize_int8_lora_capability,
     )
+    from .nvfp4_comfy_parity import (
+        apply_nvfp4_comfy_parity,
+        require_convrot_parity_forward,
+    )
 
     unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
     apply_comfy_quant_nvfp4_patches()
+    if not apply_nvfp4_comfy_parity():
+        raise RuntimeError(
+            "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
+            "(stock GEMM + act rotate; see hswq/benchmark/zi_convrot_nvfp4_bench.py)"
+        )
+    require_convrot_parity_forward()
     apply_comfy_quant_int8_patches()
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
     logging.info(
-        "[HSWQ NVFP4] Loading UNet via MixedPrecisionOps "
-        "(nvfp4 Linear + int8 protect / ConvRot + ConvRot Linear LoRA bake): "
+        "[HSWQ NVFP4] Loading UNet via Comfy parity "
+        "(stock GEMM + act rotate + int8 protect + ConvRot Linear LoRA bake): "
         "%s (weight_dtype=%s)",
         unet_name,
         weight_dtype,
     )
     print(
-        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4): {unet_name}",
+        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / bench parity): {unet_name}",
         flush=True,
     )
     with _int8_quant_conv_scope():
