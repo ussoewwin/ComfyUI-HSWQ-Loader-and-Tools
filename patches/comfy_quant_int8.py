@@ -753,10 +753,32 @@ def _model_is_nunchaku_svdq(model) -> bool:
     return False
 
 
+def _qt_is_int8_tensorwise(weight, QuantizedTensor) -> bool:
+    """True only for comfy_quant ``int8_tensorwise`` QT (not NVFP4 / FP8 / W4A4).
+
+    Mixed kitchen packs (nvfp4 Linear + int8protect) expose both QT layouts.
+    Dynamic INT8 LoRA bake must never requant NVFP4 via this path.
+    """
+    qt = _qt_payload(weight, QuantizedTensor) if weight is not None else None
+    if qt is None:
+        if isinstance(weight, QuantizedTensor):
+            qt = weight
+        else:
+            return False
+    layout = getattr(qt, "layout", None)
+    if layout is None:
+        layout = getattr(qt, "_layout", None)
+    name = type(layout).__name__ if layout is not None else ""
+    # Registered layout: TensorWiseINT8Layout / kitchen _CKTensorWiseINT8Layout
+    return "TensorWiseINT8" in name
+
+
 def _model_has_int8_quantized_weights(model) -> bool:
-    """True only for native comfy_quant INT8 (comfy.quant_ops.QuantizedTensor).
+    """True only for native comfy_quant INT8 (int8_tensorwise QuantizedTensor).
 
     Must NOT treat bare ``torch.int8`` weights as comfy_quant INT8.
+    Must NOT treat NVFP4 / FP8 QT as INT8 — that arms Dynamic LoRA bake on
+    ConvRot NVFP4 layers and destroys quality.
     Nunchaku SVDQ / Z-Image / Lumina2 modules often use int8 storage; a false
     positive here arms Dynamic.load INT8 LoRA bake and can Abort those paths.
     """
@@ -773,7 +795,7 @@ def _model_has_int8_quantized_weights(model) -> bool:
         w = getattr(module, "weight", None)
         if w is None:
             continue
-        if isinstance(w, QuantizedTensor):
+        if _qt_is_int8_tensorwise(w, QuantizedTensor):
             return True
     return False
 
@@ -1336,8 +1358,8 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
             weight, set_func, convert_func = mp.get_key_weight(patcher.model, key)
             if weight is None:
                 continue
-            # Bake only comfy_quant QuantizedTensor — never bare int8 (Nunchaku).
-            if not isinstance(weight, QuantizedTensor):
+            # Bake only int8_tensorwise QT — never bare int8 (Nunchaku), never NVFP4/FP8.
+            if not _qt_is_int8_tensorwise(weight, QuantizedTensor):
                 continue
             if set_func is None:
                 _console(
@@ -1390,7 +1412,7 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     original = getattr(Dynamic, "load", None)
     if original is None:
         return False
-    _DYN_VER = 5
+    _DYN_VER = 6
     if getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER:
         return True
     true_orig = getattr(original, "_hswq_orig_dynamic_load", original)

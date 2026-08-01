@@ -477,17 +477,28 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     reset_nvfp4_parity_load_counters()
     logging.info(
         "[HSWQ NVFP4] Loading UNet via Comfy parity "
-        "(stock GEMM + act rotate + int8 protect; no ConvRot Linear LoRA bake): "
+        "(stock GEMM + act rotate + int8 protect; no ConvRot Linear LoRA bake; "
+        "disable_dynamic=True — match HSWQ bench, not AIMDO ModelPatcherDynamic): "
         "%s (weight_dtype=%s)",
         unet_name,
         weight_dtype,
     )
     print(
-        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / bench parity): {unet_name}",
+        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / bench parity, full ModelPatcher): "
+        f"{unet_name}",
         flush=True,
     )
     with _int8_quant_conv_scope():
-        model = comfy.sd.load_diffusion_model(unet_path, model_options={})
+        # AIMDO sets CoreModelPatcher = ModelPatcherDynamic. HSWQ bench loads via
+        # stock ModelPatcher (full residency). Dynamic QT streaming breaks ConvRot
+        # NVFP4 quality (grain / mush). Force classic patcher for this UNet only.
+        model = comfy.sd.load_diffusion_model(
+            unet_path, model_options={}, disable_dynamic=True
+        )
+    try:
+        model.model._hswq_nvfp4_disable_dynamic = True
+    except Exception:
+        pass
     log_nvfp4_parity_load_summary(unet_name)
     summarize_nvfp4_parity_modules(model)
     summarize_int8_lora_capability(model)
