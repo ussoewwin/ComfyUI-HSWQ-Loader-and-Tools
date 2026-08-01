@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.2
+
+- **Fixed**: Z Image / ZIT **ConvRot NVFP4** salt-and-pepper noise on the **2nd generation after a DistOrch VRAM purge**. INT8 decode wrap was dropping NVFP4 stack markers, so a later “upgrade” re-wrapped the Tensor Core product path over the Comfy parity stack; DistOrch refresh then peeled only the TC layer and left **double online act rotate** on reload. Markers are preserved through the INT8 wrap so parity refresh no longer re-arms a second rotate.
+- See [Release Notes v3.3.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.2) for details.
+
 ## Version 3.3.1
 
 - **Added**: Z Image / ZIT **ConvRot NVFP4** support on **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `ConvRot NVFP4`, or `default` with NVFP4 auto-detect). Uses the bench-matched Comfy parity path (stock MixedPrecision GEMM + online act rotate) under `nodes/zimage_nvfp4`, including mixed NVFP4 + INT8 protect packs and Dynamic VRAM LoRA bake — not the SDXL Checkpoint Loader Tensor Core product path. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).**

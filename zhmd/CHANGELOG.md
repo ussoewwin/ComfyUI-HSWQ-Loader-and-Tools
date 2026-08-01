@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.2
+
+- **修复**：Z Image / ZIT **ConvRot NVFP4** 在 **DistOrch VRAM purge 后的第 2 次生成**出现椒盐噪声。INT8 decode wrap 会丢掉 NVFP4 stack 标记，后续“upgrade”又把 Tensor Core 产品路径叠到 Comfy parity 之上；DistOrch refresh 只剥掉 TC 层，重载后留下 **双重在线 act rotate**。现于 INT8 wrap 中保留标记，parity refresh 不再二次武装 rotate。
+- 详情见 [Release Notes v3.3.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.2)。
+
 ## Version 3.3.1
 
 - **新增**：Z Image / ZIT **ConvRot NVFP4** 支持，经 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（`weight_dtype`：`ConvRot NVFP4`，或带 NVFP4 自动检测的 `default`）。采用与 bench 对齐的 Comfy parity 路径（stock MixedPrecision GEMM + 在线 act rotate），实现位于 `nodes/zimage_nvfp4`；覆盖 NVFP4 + INT8 protect 混合包与 Dynamic VRAM LoRA bake，**不是** SDXL Checkpoint Loader 的 Tensor Core 产品路径。**仅支持经 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
