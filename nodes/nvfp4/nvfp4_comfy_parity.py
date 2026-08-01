@@ -359,16 +359,20 @@ def _make_convrot_parity_forward(stock_forward):
     from .nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
-        global _ACT_ROTATE_INT8_HITS
-        # INT8 protect only: after Dynamic / dequant / F.linear, kitchen
-        # int8_linear(convrot=True) does not rotate — apply x @ H here.
-        # NVFP4 must NOT rotate here; kitchen NVFP4 path already handles ConvRot.
+        global _ACT_ROTATE_HITS, _ACT_ROTATE_INT8_HITS
+        nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
         i8 = bool(getattr(self, "_hswq_int8_convrot", False))
-        if i8:
-            _ACT_ROTATE_INT8_HITS += 1
-            hit = _ACT_ROTATE_INT8_HITS
-            tag = "int8protect"
-            gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
+        if nv or i8:
+            if nv:
+                _ACT_ROTATE_HITS += 1
+                hit = _ACT_ROTATE_HITS
+                tag = "nvfp4"
+                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+            else:
+                _ACT_ROTATE_INT8_HITS += 1
+                hit = _ACT_ROTATE_INT8_HITS
+                tag = "int8protect"
+                gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
             if hit <= _ACT_ROTATE_FIRST_N or (
                 _ACT_ROTATE_LOG_EVERY > 0 and hit % _ACT_ROTATE_LOG_EVERY == 0
             ):
@@ -397,7 +401,7 @@ def _arm_convrot_after_stock_load(module, conf) -> None:
         return
     _LOAD_NVFP4_SEEN += 1
     enabled, gs = convrot_flags_from_conf(conf)
-    module._hswq_nvfp4_convrot = False
+    module._hswq_nvfp4_convrot = bool(enabled)
     module._hswq_nvfp4_convrot_groupsize = int(gs)
     try:
         import comfy.quant_ops as quant_ops
