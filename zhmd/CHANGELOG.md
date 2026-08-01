@@ -10,7 +10,7 @@
 ## Version 3.3.1
 
 - **新增**：Z Image / ZIT **ConvRot NVFP4** 支持，经 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（`weight_dtype`：`ConvRot NVFP4`，或带 NVFP4 自动检测的 `default`）。采用与 bench 对齐的 Comfy parity 路径（stock MixedPrecision GEMM + 在线 act rotate），实现位于 `nodes/zimage_nvfp4`；覆盖 NVFP4 + INT8 protect 混合包与 Dynamic VRAM LoRA bake，**不是** SDXL Checkpoint Loader 的 Tensor Core 产品路径。**仅支持经 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
-- 详情见 [Release Notes v3.3.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.1)。
+- 详情见 [Release Notes v3.3.1](v3.3.1.md)。
 
 ## Version 3.3.0
 
