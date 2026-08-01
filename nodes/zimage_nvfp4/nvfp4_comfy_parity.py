@@ -42,6 +42,50 @@ def reset_nvfp4_parity_load_counters() -> None:
     _LOAD_INT8_CONVROT_ARMED = 0
 
 
+def clear_nvfp4_parity_hadamard_caches(root=None) -> int:
+    """Drop cached ``_hswq_nvfp4_parity_H`` after DistOrch nuclear VRAM purge.
+
+    Method 3 may free Hadamard CUDA storage while the Python attribute remains.
+    The next sample then rotates with a dead ``H`` (device/dtype still match) and
+    the image becomes noise. DistOrch Method 2c calls this via ``sys.modules``.
+    """
+    import gc
+
+    import torch
+
+    cleared = 0
+
+    def _clear_one(mod) -> None:
+        nonlocal cleared
+        if not isinstance(mod, torch.nn.Module):
+            return
+        if not hasattr(mod, "_hswq_nvfp4_parity_H"):
+            return
+        try:
+            delattr(mod, "_hswq_nvfp4_parity_H")
+            cleared += 1
+        except Exception:
+            try:
+                mod._hswq_nvfp4_parity_H = None
+                cleared += 1
+            except Exception:
+                pass
+
+    if root is not None:
+        if isinstance(root, torch.nn.Module):
+            for m in root.modules():
+                _clear_one(m)
+        return cleared
+
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, torch.nn.Module):
+                _clear_one(obj)
+        except Exception:
+            continue
+    return cleared
+
+
 def log_nvfp4_parity_load_summary(label: str = "") -> None:
     """Print how many nvfp4 / int8protect ConvRot layers were armed during load."""
     tag = f" ({label})" if label else ""
@@ -357,7 +401,27 @@ def _make_convrot_parity_forward(stock_forward):
             else:
                 gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
             h = getattr(self, "_hswq_nvfp4_parity_H", None)
-            if h is None or h.device != input.device or h.dtype != input.dtype:
+            need_rebuild = True
+            if h is not None:
+                try:
+                    need_rebuild = (
+                        h.device != input.device
+                        or h.dtype != input.dtype
+                        or int(h.numel()) == 0
+                        or (bool(input.is_cuda) and not bool(h.is_cuda))
+                    )
+                    if not need_rebuild:
+                        # DistOrch Method 3 may empty storage while device/dtype
+                        # still match — rebuild or 2nd gen becomes noise.
+                        st = (
+                            h.untyped_storage()
+                            if hasattr(h, "untyped_storage")
+                            else h.storage()
+                        )
+                        need_rebuild = int(st.nbytes()) == 0
+                except Exception:
+                    need_rebuild = True
+            if need_rebuild:
                 h = build_hadamard(gs, device=input.device, dtype=input.dtype)
                 self._hswq_nvfp4_parity_H = h
             input = rotate_last_dim(input, h, gs)
