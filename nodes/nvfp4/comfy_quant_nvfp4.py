@@ -45,7 +45,6 @@ __all__ = [
     "install_nvfp4_option_dispatch",
     "is_nvfp4_conf",
     "load_checkpoint_sdxl_nvfp4_weight_dtype",
-    "load_unet_nvfp4_weight_dtype",
     "logical_linear_in_features",
     "nvfp4_forward_stats",
     "reset_nvfp4_forward_stats",
@@ -58,304 +57,6 @@ def _console(msg: str) -> None:
     logger.info(msg)
 
 
-def _patcher_needs_nvfp4_force_full_load(patcher) -> bool:
-    """True for HSWQ ConvRot NVFP4 UNets that must not stream via lowvram / Pin thrash.
-
-    Owner log: ``Pin error`` × hundreds then
-    ``loaded partially; 0.00 MB usable, 0.00 MB loaded, ~5177 MB offloaded``
-    immediately before ``act_rotate hit#1``. Sampling with zero loaded weights
-    destroys ConvRot NVFP4 quality. Not a side issue — fix residency.
-    """
-    if patcher is None:
-        return False
-    if getattr(patcher, "_hswq_nvfp4_force_full_load", False):
-        return True
-    base = getattr(patcher, "model", None)
-    if base is None:
-        return False
-    if getattr(base, "_hswq_nvfp4_disable_dynamic", False):
-        return True
-    if getattr(base, "_hswq_nvfp4_force_full_load", False):
-        return True
-    try:
-        for _, mod in base.named_modules():
-            if getattr(mod, "_hswq_nvfp4_convrot", False):
-                return True
-    except Exception:
-        return False
-    return False
-
-
-def _force_detach_dynamic_except(keep_patchers=None, device=None) -> int:
-    """Detach Dynamic VRAM occupants (VAE staging, leftovers) before NVFP4 full load.
-
-    Same spirit as INT8→Nunchaku handoff: leave ``unpatch_weights=False`` so
-    QT / ConvRot stamps stay intact; only free GPU / VBAR / pin occupancy.
-    """
-    try:
-        import comfy.model_management as mm
-    except ImportError:
-        return 0
-
-    keep_ids = {id(p) for p in (keep_patchers or []) if p is not None}
-    unloaded = 0
-    i = 0
-    while i < len(mm.current_loaded_models):
-        lm = mm.current_loaded_models[i]
-        patcher = lm.model
-        if patcher is None:
-            i += 1
-            continue
-        if id(patcher) in keep_ids:
-            i += 1
-            continue
-        if device is not None and getattr(lm, "device", None) is not None:
-            try:
-                if str(lm.device) != str(device):
-                    i += 1
-                    continue
-            except Exception:
-                pass
-        is_dyn = False
-        try:
-            is_dyn = bool(patcher.is_dynamic())
-        except Exception:
-            is_dyn = False
-        if not is_dyn:
-            i += 1
-            continue
-        # Never detach another ConvRot NVFP4 UNet that is also being kept.
-        if _patcher_needs_nvfp4_force_full_load(patcher):
-            i += 1
-            continue
-        try:
-            lm.model_unload(unpatch_weights=False)
-        except TypeError:
-            try:
-                patcher.detach(unpatch_all=False)
-            except TypeError:
-                try:
-                    patcher.detach(False)
-                except Exception as exc:
-                    _console(
-                        f"[HSWQ NVFP4] detach(False) failed: {exc!r}"
-                    )
-            except Exception as exc:
-                _console(
-                    f"[HSWQ NVFP4] detach(unpatch_all=False) failed: {exc!r}"
-                )
-            try:
-                fin = getattr(lm, "model_finalizer", None)
-                if fin is not None:
-                    fin.detach()
-            except Exception:
-                pass
-            try:
-                lm.model_finalizer = None
-                lm.real_model = None
-            except Exception:
-                pass
-        except Exception as exc:
-            _console(f"[HSWQ NVFP4] model_unload(False) failed: {exc!r}")
-            i += 1
-            continue
-        mm.current_loaded_models.pop(i)
-        unloaded += 1
-    if unloaded > 0:
-        try:
-            mm.soft_empty_cache()
-        except Exception:
-            pass
-    return unloaded
-
-
-def _patch_load_models_gpu_nvfp4_force_full() -> bool:
-    """Force ``force_full_load`` + free Dynamic occupancy for ConvRot NVFP4.
-
-    Must wrap *after* MultiGPU / INT8 handoff when possible (re-install from
-    UNet load path). Outer wrapper sets force_full_load before calling through.
-    """
-    try:
-        import comfy.model_management as mm
-    except ImportError:
-        return False
-
-    original = getattr(mm, "load_models_gpu", None)
-    if original is None:
-        return False
-    # v2 = detach any Dynamic (VAE etc.), not only INT8; re-arm after MultiGPU.
-    _VER = 2
-    if getattr(original, "_hswq_nvfp4_force_full_ver", 0) >= _VER:
-        return True
-    # Keep MultiGPU / INT8-handoff wrappers in the chain. Only unwrap *our*
-    # older wrap — never jump to ``_hswq_orig_load_models_gpu`` (that skips INT8).
-    if getattr(original, "_hswq_nvfp4_force_full", False):
-        true_orig = getattr(
-            original, "_hswq_nvfp4_orig_load_models_gpu", original
-        )
-    else:
-        true_orig = original
-
-    def load_models_gpu(
-        models,
-        memory_required=0,
-        force_patch_weights=False,
-        minimum_memory_required=None,
-        force_full_load=False,
-    ):
-        keep = []
-        need_full = False
-        device = None
-        for m in models or []:
-            keep.append(m)
-            try:
-                for mm_extra in getattr(m, "model_patches_models", lambda: [])() or []:
-                    keep.append(mm_extra)
-            except Exception:
-                pass
-            if _patcher_needs_nvfp4_force_full_load(m):
-                need_full = True
-                if device is None:
-                    device = getattr(m, "load_device", None)
-        if need_full:
-            n = _force_detach_dynamic_except(keep_patchers=keep, device=device)
-            n2 = _force_detach_dynamic_except(keep_patchers=keep, device=None)
-            try:
-                mm.soft_empty_cache()
-            except Exception as exc:
-                _console(f"[HSWQ NVFP4] soft_empty_cache failed: {exc!r}")
-            _console(
-                "[HSWQ NVFP4] force_full_load before ConvRot NVFP4 sample "
-                f"(Dynamic offload keep-weights={n + n2}; "
-                "avoids Pin thrash / 0.00 MB usable partial load)"
-            )
-            force_full_load = True
-        return true_orig(
-            models,
-            memory_required=memory_required,
-            force_patch_weights=force_patch_weights,
-            minimum_memory_required=minimum_memory_required,
-            force_full_load=force_full_load,
-        )
-
-    load_models_gpu._hswq_nvfp4_force_full = True  # type: ignore[attr-defined]
-    load_models_gpu._hswq_nvfp4_force_full_ver = _VER  # type: ignore[attr-defined]
-    load_models_gpu._hswq_nvfp4_orig_load_models_gpu = true_orig  # type: ignore[attr-defined]
-    mm.load_models_gpu = load_models_gpu
-    return True
-
-
-def _callable_chain_has_attr(fn, attr: str) -> bool:
-    """True if ``fn`` or a closed-over callable wrapper has ``attr``."""
-    cur = fn
-    seen = set()
-    for _ in range(12):
-        if cur is None or not callable(cur) or id(cur) in seen:
-            return False
-        seen.add(id(cur))
-        if getattr(cur, attr, False):
-            return True
-        closure = getattr(cur, "__closure__", None) or ()
-        freevars = getattr(getattr(cur, "__code__", None), "co_freevars", ()) or ()
-        next_fn = None
-        prefer = (
-            "_orig",
-            "original",
-            "original_convert",
-            "_orig_convert_old_quants",
-        )
-        for name, cell in zip(freevars, closure):
-            val = cell.cell_contents
-            if not callable(val):
-                continue
-            if getattr(val, attr, False):
-                return True
-            if name in prefer:
-                next_fn = val
-        if next_fn is None:
-            for cell in closure:
-                val = cell.cell_contents
-                if callable(val):
-                    next_fn = val
-                    break
-        cur = next_fn
-    return False
-
-
-def _patch_convert_old_quants_nvfp4_kitchen_prefix() -> bool:
-    """Remap bare kitchen ``.comfy_quant`` keys under ``model_prefix``.
-
-    Kitchen Z Image / ZIT packs store ``_quantization_metadata`` layer keys
-    **without** ``model.diffusion_model.``. Stock ``convert_old_quants`` then
-    injects markers at bare paths (``layers.0.attention.qkv.comfy_quant``) while
-    weights live at ``model.diffusion_model.layers.0...weight``. MixedPrecision
-    load peeks ``{prefix}comfy_quant`` under the full module prefix → **miss**.
-
-    Must remap **all** formats with a matching prefixed weight — not only NVFP4.
-    ``int8protect*`` packs leave INT8 markers bare if we filter ``is_nvfp4_conf``;
-    those layers then load as raw tensors while ConvRot NVFP4 layers rotate → morphing.
-    HSWQ bench uses empty ``model_prefix`` + key strip so bare markers match; product
-    ``load_diffusion_model`` needs this full remap.
-    """
-    try:
-        import comfy.utils as comfy_utils
-    except Exception as e:
-        logger.warning("[HSWQ NVFP4] convert_old remap skipped: %s", e)
-        return False
-
-    current = comfy_utils.convert_old_quants
-    # v2: remap every bare .comfy_quant (nvfp4 + int8_tensorwise + …). Re-wrap if
-    # only the old nvfp4-only patch is present so a running ComfyUI picks up the fix.
-    if _callable_chain_has_attr(current, "_hswq_nvfp4_kitchen_prefix_v2"):
-        return True
-
-    _orig = current
-
-    def convert_old_quants_nvfp4_prefix(state_dict, model_prefix="", metadata=None):
-        if metadata is None:
-            metadata = {}
-        state_dict, metadata = _orig(state_dict, model_prefix, metadata=metadata)
-        moved = 0
-        by_fmt: dict[str, int] = {}
-        if model_prefix:
-            for k in list(state_dict.keys()):
-                if not k.endswith(".comfy_quant") or k.startswith(model_prefix):
-                    continue
-                try:
-                    conf = decode_comfy_quant_conf(state_dict[k])
-                except Exception:
-                    continue
-                if not isinstance(conf, dict):
-                    continue
-                layer = k[: -len(".comfy_quant")]
-                if f"{model_prefix}{layer}.weight" not in state_dict:
-                    continue
-                state_dict[f"{model_prefix}{k}"] = state_dict.pop(k)
-                moved += 1
-                fmt = str(conf.get("format") or "?")
-                by_fmt[fmt] = by_fmt.get(fmt, 0) + 1
-        if moved:
-            fmt_bits = ", ".join(f"{f}={n}" for f, n in sorted(by_fmt.items()))
-            _console(
-                f"[HSWQ NVFP4] convert_old: remapped {moved} bare .comfy_quant "
-                f"marker(s) under prefix={model_prefix!r} ({fmt_bits})"
-            )
-        return state_dict, metadata
-
-    convert_old_quants_nvfp4_prefix._hswq_nvfp4_kitchen_prefix = True  # type: ignore[attr-defined]
-    convert_old_quants_nvfp4_prefix._hswq_nvfp4_kitchen_prefix_v2 = True  # type: ignore[attr-defined]
-    if getattr(_orig, "_hswq_int8_patched", False) or _callable_chain_has_attr(
-        _orig, "_hswq_int8_patched"
-    ):
-        convert_old_quants_nvfp4_prefix._hswq_int8_patched = True  # type: ignore[attr-defined]
-    comfy_utils.convert_old_quants = convert_old_quants_nvfp4_prefix
-    _console(
-        "[HSWQ NVFP4] convert_old_quants: kitchen bare→prefixed .comfy_quant remap ON "
-        "(all formats: nvfp4 + int8 + …)"
-    )
-    return True
-
-
 def apply_comfy_quant_nvfp4_patches() -> bool:
     """Install NVFP4 detection + full load + TC Linear forward + ConvRot LoRA bake."""
     global _PATCHES_APPLIED
@@ -366,11 +67,6 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         logger.warning("[HSWQ NVFP4] comfy import failed: %s", e)
         return False
 
-    # Always (re)ensure kitchen prefix remap — early-return paths must not skip it.
-    _patch_convert_old_quants_nvfp4_kitchen_prefix()
-    # Pin / 0.00 MB usable partial load kills ConvRot NVFP4 — force full GPU.
-    _patch_load_models_gpu_nvfp4_force_full()
-
     mp_fn = getattr(ops, "mixed_precision_ops", None)
     stack_ver = int(getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0) or 0) if mp_fn else 0
     if (
@@ -378,13 +74,6 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
         and stack_ver >= _NVFP4_STACK_VER
     ):
-        # Keep SDXL product refs fresh when still on TC (not Z Image parity).
-        if not getattr(mp_fn, "_hswq_nvfp4_comfy_only", False):
-            from .nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
-
-            remember_nvfp4_tc_product_stack(
-                ops._load_quantized_module, ops.mixed_precision_ops
-            )
         return True
 
     # Already patched detect/load but LoRA bake missing: re-wrap mixed_precision_ops only.
@@ -404,11 +93,6 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         mixed_precision_ops_upgraded._hswq_nvfp4_orig_mp = _orig_mp  # type: ignore[attr-defined]
         ops.mixed_precision_ops = mixed_precision_ops_upgraded
         _PATCHES_APPLIED = True
-        from .nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
-
-        remember_nvfp4_tc_product_stack(
-            ops._load_quantized_module, ops.mixed_precision_ops
-        )
         _console(
             "[HSWQ NVFP4] upgraded stack ver=%s "
             "(ConvRot Linear LoRA bake: convert_weight unrotate + set_weight re-rotate)"
@@ -537,11 +221,6 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
     mixed_precision_ops_patched._hswq_nvfp4_orig_mp = _orig_mp  # type: ignore[attr-defined]
 
     _PATCHES_APPLIED = True
-    from .nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
-
-    remember_nvfp4_tc_product_stack(
-        ops._load_quantized_module, ops.mixed_precision_ops
-    )
     _console(
         "[HSWQ NVFP4] full stack applied "
         "(detect packed K + nvfp4_load + TC forward + ConvRot act + "
@@ -555,11 +234,7 @@ NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"
 
 
 def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None):
-    """Load SDXL checkpoint with HSWQ NVFP4 Linear (+ INT8 Conv2d ConvRot) stack.
-
-    SDXL stays on the product TC path. Never apply Z Image comfy_parity here.
-    If a prior Z Image UNet load left parity on ``ops``, restore TC first.
-    """
+    """Load SDXL checkpoint with HSWQ NVFP4 Linear (+ INT8 Conv2d ConvRot) stack."""
     import sys
 
     import folder_paths
@@ -577,7 +252,6 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         reset_int8_lora_log_counters,
         summarize_int8_lora_capability,
     )
-    from .nvfp4_comfy_parity import restore_nvfp4_tc_product_stack
 
     original_device = get_current_device()
     if device is not None:
@@ -585,15 +259,13 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
     try:
         ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
         apply_comfy_quant_nvfp4_patches()
-        # Branch: SDXL = TC product only. Undo any Z Image bench parity on ops.
-        restore_nvfp4_tc_product_stack()
         # Mixed pack: Linear=nvfp4, Conv2d=int8_tensorwise (+ ConvRot) — same as bench.
         apply_comfy_quant_int8_patches()
         reset_int8_lora_log_counters()
         reset_nvfp4_lora_log_counters()
         sdxl_logger.info(
             "[SDXL NVFP4] Loading checkpoint via MixedPrecisionOps "
-            "(nvfp4 Linear + int8 Conv / ConvRot + ConvRot Linear LoRA bake; TC): "
+            "(nvfp4 Linear + int8 Conv / ConvRot + ConvRot Linear LoRA bake): "
             "%s (weight_dtype=%s)",
             ckpt_name,
             weight_dtype,
@@ -613,159 +285,46 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         set_current_device(original_device)
 
 
-def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
-    """Load Z Image / ZIT diffusion UNet with ConvRot NVFP4 (+ INT8 protect).
-
-    Uses the same path as ``hswq/benchmark/zi_convrot_nvfp4_bench.py``:
-    NVFP4 detect/load patches, then ``apply_nvfp4_comfy_parity()`` (stock Comfy
-    GEMM + online act rotate). Product TC Linear.forward is **not** used here —
-    it destroys Pixel SSIM on Z Image ConvRot packs. SDXL still uses TC.
-
-    Mixed kitchen packs (Linear nvfp4 + int8protect) need INT8 patches too.
-    ConvRot Linear LoRA bake stays on (same convert_weight / set_weight as SDXL).
-    """
-    import logging
-
-    import folder_paths
-    import comfy.sd
-
-    from ...patches.comfy_quant_int8 import (
-        _int8_quant_conv_scope,
-        apply_comfy_quant_int8_patches,
-        reset_int8_lora_log_counters,
-        summarize_int8_lora_capability,
-    )
-    from .nvfp4_comfy_parity import (
-        apply_nvfp4_comfy_parity,
-        log_nvfp4_parity_load_summary,
-        require_convrot_parity_forward,
-        reset_nvfp4_parity_load_counters,
-        summarize_nvfp4_parity_modules,
-    )
-
-    unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
-    apply_comfy_quant_nvfp4_patches()
-    # Re-assert kitchen remap after any prior INT8 wrap of convert_old_quants.
-    _patch_convert_old_quants_nvfp4_kitchen_prefix()
-    if not apply_nvfp4_comfy_parity():
-        raise RuntimeError(
-            "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
-            "(stock GEMM + act rotate; see hswq/benchmark/zi_convrot_nvfp4_bench.py)"
-        )
-    # INT8 after parity (mixed packs). Re-arm parity then require — INT8 must not
-    # leave TC Linear.forward or drop act-rotate.
-    apply_comfy_quant_int8_patches()
-    _patch_convert_old_quants_nvfp4_kitchen_prefix()
-    if not apply_nvfp4_comfy_parity():
-        raise RuntimeError(
-            "[HSWQ NVFP4] comfy_parity lost after INT8 patches"
-        )
-    require_convrot_parity_forward()
-    reset_int8_lora_log_counters()
-    reset_nvfp4_lora_log_counters()
-    reset_nvfp4_parity_load_counters()
-    logging.info(
-        "[HSWQ NVFP4] Loading UNet via Comfy parity "
-        "(stock GEMM + act rotate + int8 protect + ConvRot Linear LoRA bake; "
-        "disable_dynamic=True — not AIMDO ModelPatcherDynamic): "
-        "%s (weight_dtype=%s)",
-        unet_name,
-        weight_dtype,
-    )
-    print(
-        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / bench parity, full ModelPatcher): "
-        f"{unet_name}",
-        flush=True,
-    )
-    with _int8_quant_conv_scope():
-        # AIMDO sets CoreModelPatcher = ModelPatcherDynamic. HSWQ bench loads via
-        # stock ModelPatcher (full residency). Dynamic QT streaming breaks ConvRot
-        # NVFP4 quality (grain / mush). Force classic patcher for this UNet only.
-        model = comfy.sd.load_diffusion_model(
-            unet_path, model_options={}, disable_dynamic=True
-        )
-    try:
-        model.model._hswq_nvfp4_disable_dynamic = True
-        model.model._hswq_nvfp4_force_full_load = True
-    except Exception:
-        pass
-    try:
-        # Stamp the ModelPatcher too — load_models_gpu sees the patcher first.
-        model._hswq_nvfp4_force_full_load = True
-    except Exception:
-        pass
-    # Re-arm outermost after INT8 / MultiGPU wraps so sample-time load is full.
-    _patch_load_models_gpu_nvfp4_force_full()
-    log_nvfp4_parity_load_summary(unet_name)
-    summarize_nvfp4_parity_modules(model)
-    summarize_int8_lora_capability(model)
-    return (model,)
-
 def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
-    """Wrap SDXL + Z Image UNet loaders so ConvRot NVFP4 uses nodes/nvfp4 stack.
+    """Wrap SDXL loader so ConvRot NVFP4 uses nodes/nvfp4 (bench) stack.
 
     Must run *after* ``install_int8_option_dispatch``: NVFP4 checkpoints also
-    contain ``int8_tensorwise`` layers (e.g. int8protect), so INT8-only
-    auto-detect would otherwise steal the load path without NVFP4 Linear patches
-    / ConvRot Linear LoRA bake.
+    contain ``int8_tensorwise`` Conv layers, so INT8-only auto-detect would
+    otherwise steal the load path without NVFP4 Linear patches.
     """
     if not isinstance(node_class_mappings, dict):
         return False
 
     _FP8_WEIGHT_DTYPES = frozenset({"fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"})
-    wrapped = False
-
-    unet_cls = node_class_mappings.get("HSWQFP8E4M3UNetLoader")
-    if unet_cls is not None:
-        _prev_load_unet = unet_cls.load_unet
-
-        def load_unet(self, unet_name, weight_dtype):
-            if weight_dtype in _FP8_WEIGHT_DTYPES:
-                return _prev_load_unet(self, unet_name, weight_dtype)
-            if weight_dtype == NVFP4_WEIGHT_DTYPE:
-                return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
-            import folder_paths
-
-            if weight_dtype == "default":
-                unet_path = folder_paths.get_full_path_or_raise(
-                    "diffusion_models", unet_name
-                )
-                if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
-                    return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
-            return _prev_load_unet(self, unet_name, weight_dtype)
-
-        unet_cls.load_unet = load_unet
-        wrapped = True
 
     sdxl_cls = node_class_mappings.get("HSWQCheckpointLoaderSDXL")
-    if sdxl_cls is not None:
-        _prev_load_checkpoint = sdxl_cls.load_checkpoint
+    if sdxl_cls is None:
+        return False
 
-        def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
-            if weight_dtype in _FP8_WEIGHT_DTYPES:
-                return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
-            if weight_dtype == NVFP4_WEIGHT_DTYPE:
+    _prev_load_checkpoint = sdxl_cls.load_checkpoint
+
+    def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
+        if weight_dtype in _FP8_WEIGHT_DTYPES:
+            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+        if weight_dtype == NVFP4_WEIGHT_DTYPE:
+            return load_checkpoint_sdxl_nvfp4_weight_dtype(
+                ckpt_name, weight_dtype, device=device
+            )
+        import folder_paths
+
+        # default (and any non-FP8 path): NVFP4 markers beat INT8-only auto-detect.
+        # Mixed packs also have int8_tensorwise Conv layers.
+        if weight_dtype == "default":
+            ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
+            if checkpoint_looks_like_comfy_quant_nvfp4(ckpt_path):
                 return load_checkpoint_sdxl_nvfp4_weight_dtype(
                     ckpt_name, weight_dtype, device=device
                 )
-            import folder_paths
+        return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
 
-            # default (and any non-FP8 path): NVFP4 markers beat INT8-only auto-detect.
-            # Mixed packs also have int8_tensorwise Conv layers.
-            if weight_dtype == "default":
-                ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
-                if checkpoint_looks_like_comfy_quant_nvfp4(ckpt_path):
-                    return load_checkpoint_sdxl_nvfp4_weight_dtype(
-                        ckpt_name, weight_dtype, device=device
-                    )
-            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
-
-        sdxl_cls.load_checkpoint = load_checkpoint
-        wrapped = True
-
-    if wrapped:
-        _console(
-            "[HSWQ NVFP4] install_nvfp4_option_dispatch: "
-            f"SDXL/UNet weight_dtype includes {NVFP4_WEIGHT_DTYPE!r}"
-        )
-    return wrapped
+    sdxl_cls.load_checkpoint = load_checkpoint
+    _console(
+        "[HSWQ NVFP4] install_nvfp4_option_dispatch: "
+        f"SDXL weight_dtype includes {NVFP4_WEIGHT_DTYPE!r}"
+    )
+    return True

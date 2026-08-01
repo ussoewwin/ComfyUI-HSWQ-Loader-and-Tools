@@ -1,12 +1,13 @@
-"""Z Image ConvRot NVFP4 product helpers (SDXL files untouched)."""
+"""Z Image ConvRot NVFP4 — HSWQ TC stack; INT8 ConvRot = ComfyUI core."""
 
-from .load_unet import apply_nvfp4_patches, load_unet_nvfp4_weight_dtype
-from .nvfp4_comfy_parity import apply_nvfp4_comfy_parity
-from .require_parity import require_convrot_parity_forward
+from .load_unet import (
+    apply_nvfp4_patches,
+    install_zimage_nvfp4_unet_dispatch,
+    load_unet_nvfp4_weight_dtype,
+)
 
 __all__ = [
     "apply_nvfp4_patches",
-    "apply_nvfp4_comfy_parity",
+    "install_zimage_nvfp4_unet_dispatch",
     "load_unet_nvfp4_weight_dtype",
-    "require_convrot_parity_forward",
 ]

@@ -1,74 +1,189 @@
-"""Z Image / ZIT UNet load for product ConvRot NVFP4.
+"""Z Image / ZIT UNet load — ConvRot NVFP4 (HSWQ) + INT8 ConvRot (ComfyUI core).
 
-Delegates to the *saved* product ``load_unet_nvfp4_weight_dtype`` (set by
-``prestartup_script.py`` before rebind), or imports the product function when
-prestartup did not run.
+Same contract as SDXL ``nodes/nvfp4`` checkpoint load:
 
-Product path (must not omit any of these):
+  - ConvRot NVFP4 Linear: HSWQ stack via ``apply_comfy_quant_nvfp4_patches``
+    (detect / load / TC forward act-rotate / LoRA bake). ComfyUI has no NVFP4 ConvRot.
+  - INT8 ConvRot: leave to ComfyUI core / kitchen as-is. Do not re-arm or
+    double-rotate INT8. ``apply_comfy_quant_int8_patches`` only enables load of
+    int8_tensorwise layers; ConvRot INT8 stays stock.
 
-  - stock Comfy GEMM + online act rotate (not TC Linear.forward)
-  - INT8 protect patches (mixed packs e.g. int8protect60)
-  - ConvRot Linear LoRA bake
-  - disable_dynamic=True (full ModelPatcher; not AIMDO DynamicVRAM)
-
-SDXL TC product path is not used here.
+All logic for this UNet entry lives under ``nodes/zimage_nvfp4``.
+Does not edit ``nodes/nvfp4`` (SDXL product).
 """
 from __future__ import annotations
 
-# Set by prestartup_script before rebinding comfy_quant_nvfp4.load_unet_*.
-_PRODUCT_LOAD_UNET = None
+import logging
+import sys
+
+NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"
+
+_DISPATCH_INSTALLED = False
+_INSTALL_HOOKED = False
+
+logger = logging.getLogger(__name__)
 
 
 def apply_nvfp4_patches() -> None:
-    """Arm Z Image ConvRot NVFP4 inference (same stack as product UNet load)."""
-    from ..nvfp4.comfy_quant_nvfp4 import (
-        _patch_convert_old_quants_nvfp4_kitchen_prefix,
-        apply_comfy_quant_nvfp4_patches,
-    )
-    from ..nvfp4.nvfp4_comfy_parity import (
-        apply_nvfp4_comfy_parity,
-        require_convrot_parity_forward,
-    )
+    """Arm Z Image ConvRot NVFP4 (SDXL NVFP4 stack) + INT8 load (core ConvRot)."""
+    from ..nvfp4.comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
     from ...patches.comfy_quant_int8 import apply_comfy_quant_int8_patches
 
-    apply_comfy_quant_nvfp4_patches()
-    _patch_convert_old_quants_nvfp4_kitchen_prefix()
-    if not apply_nvfp4_comfy_parity():
+    if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
-            "Z Image NVFP4: ComfyUI MixedPrecision path failed to apply "
-            "(TC Linear.forward must be off; act-rotate required)"
+            "[HSWQ NVFP4] Z Image: apply_comfy_quant_nvfp4_patches failed "
+            "(ConvRot NVFP4 stack required; see nodes/nvfp4)"
         )
+    # INT8 tensorwise load only — ConvRot INT8 remains ComfyUI core / kitchen.
     apply_comfy_quant_int8_patches()
-    _patch_convert_old_quants_nvfp4_kitchen_prefix()
-    if not apply_nvfp4_comfy_parity():
-        raise RuntimeError(
-            "Z Image NVFP4: comfy_parity lost after INT8 patches"
-        )
-    require_convrot_parity_forward()
     print(
-        "  [HSWQ NVFP4] Z Image: stock Comfy GEMM + act rotate + int8 protect "
-        "+ ConvRot Linear LoRA bake",
+        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 (HSWQ TC) + INT8 ConvRot (ComfyUI core)",
         flush=True,
     )
 
 
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
-    """Load Z Image / ZIT UNet — identical to product ConvRot NVFP4 UNet load."""
-    fn = _PRODUCT_LOAD_UNET
-    if fn is None:
-        # Prestartup not applied: call product module attribute.
-        # Prefer function object from module dict if already rebound to us.
-        import inspect
+    """Load Z Image / ZIT UNet — mirror SDXL NVFP4 checkpoint load for UNet."""
+    import folder_paths
+    import comfy.sd
 
-        from ..nvfp4 import comfy_quant_nvfp4 as cq
+    from ..nvfp4.comfy_quant_nvfp4 import (
+        apply_comfy_quant_nvfp4_patches,
+        reset_nvfp4_lora_log_counters,
+    )
+    from ...patches.comfy_quant_int8 import (
+        _int8_quant_conv_scope,
+        apply_comfy_quant_int8_patches,
+        reset_int8_lora_log_counters,
+        summarize_int8_lora_capability,
+    )
 
-        cand = cq.load_unet_nvfp4_weight_dtype
-        if cand is load_unet_nvfp4_weight_dtype or (
-            inspect.unwrap(cand) is load_unet_nvfp4_weight_dtype
+    unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
+    if not apply_comfy_quant_nvfp4_patches():
+        raise RuntimeError(
+            "[HSWQ NVFP4] Z Image UNet requires ConvRot NVFP4 stack "
+            "(apply_comfy_quant_nvfp4_patches)"
+        )
+    # Mixed pack: Linear=nvfp4, Conv/Linear INT8 = ComfyUI core ConvRot path.
+    apply_comfy_quant_int8_patches()
+    reset_int8_lora_log_counters()
+    reset_nvfp4_lora_log_counters()
+    logging.info(
+        "[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 HSWQ + INT8 ConvRot ComfyUI core): "
+        "%s (weight_dtype=%s)",
+        unet_name,
+        weight_dtype,
+    )
+    print(
+        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / SDXL-same stack): {unet_name}",
+        flush=True,
+    )
+    with _int8_quant_conv_scope():
+        model = comfy.sd.load_diffusion_model(unet_path, model_options={})
+    summarize_int8_lora_capability(model)
+    return (model,)
+
+
+def _attach_to_comfy_quant_module() -> None:
+    """Expose this loader on comfy_quant_nvfp4 so prestartup can bind it."""
+    for name, mod in list(sys.modules.items()):
+        if not (
+            name.endswith("nodes.nvfp4.comfy_quant_nvfp4")
+            or name.endswith(".comfy_quant_nvfp4")
+            or name == "comfy_quant_nvfp4"
         ):
-            raise RuntimeError(
-                "[HSWQ NVFP4] product load_unet missing "
-                "(prestartup did not save _PRODUCT_LOAD_UNET)"
+            continue
+        cur = getattr(mod, "load_unet_nvfp4_weight_dtype", None)
+        if cur is None or cur is load_unet_nvfp4_weight_dtype:
+            mod.load_unet_nvfp4_weight_dtype = load_unet_nvfp4_weight_dtype
+
+
+def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
+    """Wrap HSWQFP8E4M3UNetLoader for weight_dtype ConvRot NVFP4.
+
+    Must run *after* ``install_int8_option_dispatch``: mixed NVFP4 packs also
+    contain ``int8_tensorwise`` layers, so INT8-only auto-detect would otherwise
+    steal the load without NVFP4 Linear patches. INT8 ConvRot stays core.
+    """
+    global _DISPATCH_INSTALLED
+    if node_class_mappings is None:
+        wrapped_any = False
+        for _n, mod in list(sys.modules.items()):
+            mappings = getattr(mod, "NODE_CLASS_MAPPINGS", None)
+            if isinstance(mappings, dict) and install_zimage_nvfp4_unet_dispatch(mappings):
+                wrapped_any = True
+        return wrapped_any
+
+    if not isinstance(node_class_mappings, dict):
+        return False
+
+    from ..nvfp4.nvfp4_conf import checkpoint_looks_like_comfy_quant_nvfp4
+
+    unet_cls = node_class_mappings.get("HSWQFP8E4M3UNetLoader")
+    if unet_cls is None:
+        return False
+    if getattr(unet_cls, "_hswq_zi_nvfp4_dispatch", False):
+        _DISPATCH_INSTALLED = True
+        return True
+
+    _fp8 = frozenset({"fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"})
+    _prev = unet_cls.load_unet
+
+    def load_unet(self, unet_name, weight_dtype):
+        if weight_dtype in _fp8:
+            return _prev(self, unet_name, weight_dtype)
+        if weight_dtype == NVFP4_WEIGHT_DTYPE:
+            return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+        import folder_paths
+
+        if weight_dtype == "default":
+            unet_path = folder_paths.get_full_path_or_raise(
+                "diffusion_models", unet_name
             )
-        fn = cand
-    return fn(unet_name, weight_dtype)
+            if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
+                return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+        # int8_tensorwise / other: leave to INT8 dispatch / original (core ConvRot).
+        return _prev(self, unet_name, weight_dtype)
+
+    unet_cls.load_unet = load_unet
+    unet_cls._hswq_zi_nvfp4_dispatch = True  # type: ignore[attr-defined]
+    _DISPATCH_INSTALLED = True
+    print(
+        "[HSWQ NVFP4] Z Image UNet dispatch: ConvRot NVFP4 -> nodes.zimage_nvfp4 "
+        "(INT8 ConvRot = ComfyUI core)",
+        flush=True,
+    )
+    return True
+
+
+def _hook_nvfp4_install_for_unet_dispatch() -> None:
+    """When package ``__init__`` runs SDXL NVFP4 install, also wrap Z Image UNet."""
+    global _INSTALL_HOOKED
+    if _INSTALL_HOOKED:
+        return
+    for name, mod in list(sys.modules.items()):
+        if not (
+            name.endswith("nodes.nvfp4.comfy_quant_nvfp4")
+            or name.endswith(".comfy_quant_nvfp4")
+            or name == "comfy_quant_nvfp4"
+        ):
+            continue
+        prev = getattr(mod, "install_nvfp4_option_dispatch", None)
+        if prev is None or getattr(prev, "_hswq_zi_unet_hook", False):
+            continue
+
+        def install_nvfp4_option_dispatch(node_class_mappings, _prev=prev):
+            ok = _prev(node_class_mappings)
+            install_zimage_nvfp4_unet_dispatch(node_class_mappings)
+            return ok
+
+        install_nvfp4_option_dispatch._hswq_zi_unet_hook = True  # type: ignore[attr-defined]
+        mod.install_nvfp4_option_dispatch = install_nvfp4_option_dispatch
+        _INSTALL_HOOKED = True
+        return
+
+
+# Import-time: register on comfy_quant; hook SDXL install so UNet wrap runs after INT8.
+_attach_to_comfy_quant_module()
+_hook_nvfp4_install_for_unet_dispatch()
+install_zimage_nvfp4_unet_dispatch()

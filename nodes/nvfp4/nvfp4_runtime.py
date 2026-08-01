@@ -69,10 +69,6 @@ def quantize_nvfp4_act_pooled(
     """CUDA ``quantize_nvfp4`` with reused qx / block-scale buffers.
 
     Returns ``(qx, block_scale_f8e4m3, padded_rows, padded_cols)``.
-
-    After DistOrch / HSWQ INT8 purge, pooled buffers can retain dead CUDA
-    storage (``quantize_nvfp4`` then sees PyCapsule). On TypeError, clear pools
-    once and retry with fresh allocations.
     """
     import torch
     from comfy_kitchen.backends.cuda import _C, _wrap_for_dlpack, roundup
@@ -92,6 +88,31 @@ def quantize_nvfp4_act_pooled(
                 f"got {(orig_rows, orig_cols)}"
             )
 
+    scale_rows = roundup(num_rows, 128)
+    scale_cols = roundup(num_cols // 16, 4)
+    key = (num_rows, num_cols, _dev_key(x))
+    buf = _ACT_Q_POOL.get(key)
+    if buf is None:
+        qx = torch.empty(
+            (num_rows, num_cols // 2),
+            device=x.device,
+            dtype=torch.uint8,
+            memory_format=torch.contiguous_format,
+        )
+        sx_uint8 = torch.empty((scale_rows, scale_cols), device=x.device, dtype=torch.uint8)
+        _ACT_Q_POOL[key] = (qx, sx_uint8)
+    else:
+        qx, sx_uint8 = buf
+
+    # Zero only when padded tiles exist (kitchen always zeros — skip exact shapes).
+    if (
+        scale_rows > orig_rows
+        or scale_cols > (orig_cols // 16)
+        or num_rows > orig_rows
+        or num_cols > orig_cols
+    ):
+        sx_uint8.zero_()
+
     if per_tensor_scale.dim() == 0:
         per_tensor_scale = per_tensor_scale.reshape(1)
     if per_tensor_scale.dtype != torch.float32:
@@ -99,56 +120,19 @@ def quantize_nvfp4_act_pooled(
     if per_tensor_scale.device != x.device:
         per_tensor_scale = per_tensor_scale.to(device=x.device)
 
-    def _run(force_new: bool):
-        scale_rows = roundup(num_rows, 128)
-        scale_cols = roundup(num_cols // 16, 4)
-        key = (num_rows, num_cols, _dev_key(x))
-        if force_new:
-            _ACT_Q_POOL.pop(key, None)
-        buf = _ACT_Q_POOL.get(key)
-        if buf is None:
-            qx = torch.empty(
-                (num_rows, num_cols // 2),
-                device=x.device,
-                dtype=torch.uint8,
-                memory_format=torch.contiguous_format,
-            )
-            sx_uint8 = torch.empty(
-                (scale_rows, scale_cols), device=x.device, dtype=torch.uint8
-            )
-            _ACT_Q_POOL[key] = (qx, sx_uint8)
-        else:
-            qx, sx_uint8 = buf
-
-        # Zero only when padded tiles exist (kitchen always zeros — skip exact shapes).
-        if (
-            scale_rows > orig_rows
-            or scale_cols > (orig_cols // 16)
-            or num_rows > orig_rows
-            or num_cols > orig_cols
-        ):
-            sx_uint8.zero_()
-
-        stream_ptr = torch.cuda.current_stream(x.device).cuda_stream
-        _C.quantize_nvfp4(
-            _wrap_for_dlpack(x),
-            _wrap_for_dlpack(per_tensor_scale),
-            _wrap_for_dlpack(qx),
-            _wrap_for_dlpack(sx_uint8),
-            0.0,  # epsilon
-            pad_16x,
-            True,  # hi_first
-            stream_ptr,
-        )
-        sx = sx_uint8.view(torch.float8_e4m3fn)
-        return qx, sx, num_rows, num_cols
-
-    try:
-        return _run(force_new=False)
-    except TypeError:
-        # Dead pooled storage after VRAM purge → PyCapsule args.
-        clear_nvfp4_runtime_pools()
-        return _run(force_new=True)
+    stream_ptr = torch.cuda.current_stream(x.device).cuda_stream
+    _C.quantize_nvfp4(
+        _wrap_for_dlpack(x),
+        _wrap_for_dlpack(per_tensor_scale),
+        _wrap_for_dlpack(qx),
+        _wrap_for_dlpack(sx_uint8),
+        0.0,  # epsilon
+        pad_16x,
+        True,  # hi_first
+        stream_ptr,
+    )
+    sx = sx_uint8.view(torch.float8_e4m3fn)
+    return qx, sx, num_rows, num_cols
 
 
 def scaled_mm_nvfp4_pooled(
