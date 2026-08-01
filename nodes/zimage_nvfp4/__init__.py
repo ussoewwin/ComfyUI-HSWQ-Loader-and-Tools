@@ -1,4 +1,4 @@
-"""Z Image ConvRot NVFP4 — HSWQ TC stack; INT8 ConvRot = ComfyUI core."""
+"""Z Image ConvRot NVFP4 — comfy_parity (stock GEMM + act rotate); INT8 = core."""
 
 from .load_unet import (
     apply_nvfp4_patches,

@@ -1,15 +1,16 @@
-"""Z Image / ZIT UNet load — ConvRot NVFP4 (HSWQ) + INT8 ConvRot (ComfyUI core).
+"""Z Image / ZIT UNet load — ConvRot NVFP4 (parity) + INT8 ConvRot (ComfyUI core).
 
-Same contract as SDXL ``nodes/nvfp4`` checkpoint load:
+Z Image ConvRot NVFP4 is **not** the SDXL TC Linear.forward path.
+``hswq/benchmark/zi_convrot_nvfp4_bench.py`` ``require_convrot_parity_forward``:
+TC wrap (``_hswq_nvfp4_full_forward``) destroys SSIM; need stock GEMM + online
+act rotate (``_hswq_nvfp4_convrot_parity``) via ``apply_nvfp4_comfy_parity``.
 
-  - ConvRot NVFP4 Linear: HSWQ stack via ``apply_comfy_quant_nvfp4_patches``
-    (detect / load / TC forward act-rotate / LoRA bake). ComfyUI has no NVFP4 ConvRot.
-  - INT8 ConvRot: leave to ComfyUI core / kitchen as-is. Do not re-arm or
-    double-rotate INT8. ``apply_comfy_quant_int8_patches`` only enables load of
-    int8_tensorwise layers; ConvRot INT8 stays stock.
+  - Arm SDXL detect/load/LoRA bake with ``apply_comfy_quant_nvfp4_patches``, then
+    **replace** Linear.forward with comfy_parity (not stacked double-rotate).
+  - INT8 ConvRot: ComfyUI core / kitchen as-is. ``apply_comfy_quant_int8_patches``
+    only for int8_tensorwise load.
 
-All logic for this UNet entry lives under ``nodes/zimage_nvfp4``.
-Does not edit ``nodes/nvfp4`` (SDXL product).
+All logic under ``nodes/zimage_nvfp4``. Does not edit ``nodes/nvfp4`` (SDXL TC).
 """
 from __future__ import annotations
 
@@ -25,25 +26,36 @@ logger = logging.getLogger(__name__)
 
 
 def apply_nvfp4_patches() -> None:
-    """Arm Z Image ConvRot NVFP4 (SDXL NVFP4 stack) + INT8 load (core ConvRot)."""
+    """Arm Z Image ConvRot NVFP4 (parity) + INT8 load (core ConvRot)."""
     from ..nvfp4.comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
     from ...patches.comfy_quant_int8 import apply_comfy_quant_int8_patches
+    from .nvfp4_comfy_parity import (
+        apply_nvfp4_comfy_parity,
+        require_convrot_parity_forward,
+    )
 
     if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image: apply_comfy_quant_nvfp4_patches failed "
-            "(ConvRot NVFP4 stack required; see nodes/nvfp4)"
+            "(detect/load/LoRA bake required; see nodes/nvfp4)"
         )
+    # Replace TC Linear.forward with stock GEMM + act rotate (not double-rotate).
+    if not apply_nvfp4_comfy_parity():
+        raise RuntimeError(
+            "[HSWQ NVFP4] Z Image: apply_nvfp4_comfy_parity failed "
+            "(stock GEMM + act rotate required; TC destroys SSIM)"
+        )
+    require_convrot_parity_forward()
     # INT8 tensorwise load only — ConvRot INT8 remains ComfyUI core / kitchen.
     apply_comfy_quant_int8_patches()
     print(
-        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 (HSWQ TC) + INT8 ConvRot (ComfyUI core)",
+        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 (comfy_parity) + INT8 ConvRot (ComfyUI core)",
         flush=True,
     )
 
 
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
-    """Load Z Image / ZIT UNet — mirror SDXL NVFP4 checkpoint load for UNet."""
+    """Load Z Image / ZIT UNet with ConvRot NVFP4 parity (not SDXL TC forward)."""
     import folder_paths
     import comfy.sd
 
@@ -57,25 +69,35 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
         reset_int8_lora_log_counters,
         summarize_int8_lora_capability,
     )
+    from .nvfp4_comfy_parity import (
+        apply_nvfp4_comfy_parity,
+        require_convrot_parity_forward,
+    )
 
     unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
     if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
-            "[HSWQ NVFP4] Z Image UNet requires ConvRot NVFP4 stack "
+            "[HSWQ NVFP4] Z Image UNet requires NVFP4 detect/load/LoRA bake "
             "(apply_comfy_quant_nvfp4_patches)"
         )
-    # Mixed pack: Linear=nvfp4, Conv/Linear INT8 = ComfyUI core ConvRot path.
+    if not apply_nvfp4_comfy_parity():
+        raise RuntimeError(
+            "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
+            "(stock GEMM + act rotate; not HSWQ TC Linear.forward)"
+        )
+    require_convrot_parity_forward()
+    # Mixed pack: Linear=nvfp4 parity, INT8 = ComfyUI core ConvRot path.
     apply_comfy_quant_int8_patches()
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
     logging.info(
-        "[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 HSWQ + INT8 ConvRot ComfyUI core): "
+        "[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 comfy_parity + INT8 ConvRot ComfyUI core): "
         "%s (weight_dtype=%s)",
         unet_name,
         weight_dtype,
     )
     print(
-        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / SDXL-same stack): {unet_name}",
+        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / comfy_parity): {unet_name}",
         flush=True,
     )
     with _int8_quant_conv_scope():
@@ -150,7 +172,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
     _DISPATCH_INSTALLED = True
     print(
         "[HSWQ NVFP4] Z Image UNet dispatch: ConvRot NVFP4 -> nodes.zimage_nvfp4 "
-        "(INT8 ConvRot = ComfyUI core)",
+        "(comfy_parity; INT8 ConvRot = ComfyUI core)",
         flush=True,
     )
     return True
