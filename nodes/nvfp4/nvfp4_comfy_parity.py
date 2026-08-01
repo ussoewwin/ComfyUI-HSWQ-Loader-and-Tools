@@ -21,10 +21,123 @@ _PARITY_APPLIED = False
 _PRODUCT_LOAD: Optional[Callable] = None
 _PRODUCT_MP: Optional[Callable] = None
 
+# Runtime / load diagnostics (console — owner-ordered visibility).
+_LOAD_NVFP4_SEEN = 0
+_LOAD_CONVROT_ARMED = 0
+_LOAD_NVFP4_NO_CONVROT = 0
+_ACT_ROTATE_HITS = 0
+_ACT_ROTATE_LOG_EVERY = 32
+_ACT_ROTATE_FIRST_N = 4
+
 
 def _console(msg: str) -> None:
     print(msg, flush=True)
     logger.info(msg)
+
+
+def reset_nvfp4_parity_load_counters() -> None:
+    global _LOAD_NVFP4_SEEN, _LOAD_CONVROT_ARMED, _LOAD_NVFP4_NO_CONVROT
+    global _ACT_ROTATE_HITS
+    _LOAD_NVFP4_SEEN = 0
+    _LOAD_CONVROT_ARMED = 0
+    _LOAD_NVFP4_NO_CONVROT = 0
+    _ACT_ROTATE_HITS = 0
+
+
+def log_nvfp4_parity_load_summary(label: str = "") -> None:
+    """Print how many nvfp4 layers were seen / ConvRot-armed during load."""
+    tag = f" ({label})" if label else ""
+    _console(
+        f"[HSWQ NVFP4][diag] load summary{tag}: "
+        f"nvfp4_seen={_LOAD_NVFP4_SEEN} "
+        f"convrot_armed={_LOAD_CONVROT_ARMED} "
+        f"nvfp4_no_convrot={_LOAD_NVFP4_NO_CONVROT}"
+    )
+    if _LOAD_NVFP4_SEEN == 0:
+        _console(
+            "[HSWQ NVFP4][diag] WARNING: zero nvfp4 layers seen during load — "
+            "comfy_quant markers may be missing / wrong prefix "
+            "(kitchen bare→prefixed remap should have run)"
+        )
+    elif _LOAD_CONVROT_ARMED == 0:
+        _console(
+            "[HSWQ NVFP4][diag] WARNING: nvfp4 layers loaded but "
+            "convrot_armed=0 — act rotate will never run"
+        )
+
+
+def summarize_nvfp4_parity_modules(model, max_names: int = 8) -> None:
+    """Post-load walk: Linear counts + forward type + sample ConvRot names."""
+    import torch.nn as nn
+
+    try:
+        import comfy.ops as ops
+    except Exception as e:
+        _console(f"[HSWQ NVFP4][diag] post-load skipped (ops): {e}")
+        return
+
+    # ModelPatcher -> BaseModel -> diffusion_model (same as INT8 summary).
+    diffusion = model
+    if hasattr(model, "model") and hasattr(model.model, "diffusion_model"):
+        diffusion = model.model.diffusion_model
+    elif hasattr(model, "diffusion_model"):
+        diffusion = model.diffusion_model
+
+    n_linear = 0
+    n_convrot = 0
+    n_tc_arm = 0
+    names: list[str] = []
+    for name, mod in diffusion.named_modules():
+        if not isinstance(mod, nn.Linear) and "Linear" not in type(mod).__name__:
+            continue
+        n_linear += 1
+        if getattr(mod, "_hswq_nvfp4_convrot", False):
+            n_convrot += 1
+            if len(names) < max_names:
+                gs = getattr(mod, "_hswq_nvfp4_convrot_groupsize", "?")
+                names.append(f"{name}(gs={gs})")
+        if getattr(mod, "_hswq_nvfp4", False):
+            n_tc_arm += 1
+
+    fwd = ops.mixed_precision_ops().Linear.forward
+    fwd_parity = bool(getattr(fwd, "_hswq_nvfp4_convrot_parity", False))
+    fwd_tc = bool(getattr(fwd, "_hswq_nvfp4_full_forward", False))
+    load_fn = ops._load_quantized_module
+    load_parity = bool(getattr(load_fn, "_hswq_nvfp4_comfy_only", False))
+    # INT8 may wrap load outside; peel once for display.
+    if not load_parity and getattr(load_fn, "_hswq_int8_decode_patched", False):
+        inner = _closure_named(load_fn, "original_load")
+        if inner is not None:
+            load_parity = bool(getattr(inner, "_hswq_nvfp4_comfy_only", False))
+            load_fn = inner
+    load_tc = bool(
+        getattr(load_fn, "_hswq_nvfp4_full_load", False)
+        and not getattr(load_fn, "_hswq_nvfp4_comfy_only", False)
+    )
+
+    _console(
+        "[HSWQ NVFP4][diag] ===== post-load ====="
+    )
+    _console(
+        f"[HSWQ NVFP4][diag] Linear={n_linear} "
+        f"_hswq_nvfp4_convrot={n_convrot} "
+        f"_hswq_nvfp4(TC arm)={n_tc_arm}"
+    )
+    _console(
+        f"[HSWQ NVFP4][diag] Linear.forward: "
+        f"parity={fwd_parity} tc_full={fwd_tc} "
+        f"load: parity={load_parity} tc_full={load_tc} "
+        f"_PARITY_APPLIED={_PARITY_APPLIED}"
+    )
+    if names:
+        _console(
+            "[HSWQ NVFP4][diag] sample ConvRot modules: "
+            + ", ".join(names)
+        )
+    _console(
+        f"[HSWQ NVFP4][diag] act_rotate_hits_so_far={_ACT_ROTATE_HITS}"
+    )
+    _console("[HSWQ NVFP4][diag] =====================")
 
 
 def remember_nvfp4_tc_product_stack(load_fn, mp_fn) -> None:
@@ -130,7 +243,20 @@ def _make_convrot_parity_forward(stock_forward):
     from .nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
+        global _ACT_ROTATE_HITS
         if getattr(self, "_hswq_nvfp4_convrot", False):
+            _ACT_ROTATE_HITS += 1
+            hit = _ACT_ROTATE_HITS
+            if hit <= _ACT_ROTATE_FIRST_N or (
+                _ACT_ROTATE_LOG_EVERY > 0 and hit % _ACT_ROTATE_LOG_EVERY == 0
+            ):
+                cls = type(self).__name__
+                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+                shape = tuple(getattr(input, "shape", ()))
+                _console(
+                    f"[HSWQ NVFP4][diag] act_rotate hit#{hit} "
+                    f"Linear={cls} gs={gs} x.shape={shape}"
+                )
             gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
             h = getattr(self, "_hswq_nvfp4_parity_H", None)
             if h is None or h.device != input.device or h.dtype != input.dtype:
@@ -144,13 +270,33 @@ def _make_convrot_parity_forward(stock_forward):
 
 
 def _arm_convrot_after_stock_load(module, conf) -> None:
+    global _LOAD_NVFP4_SEEN, _LOAD_CONVROT_ARMED, _LOAD_NVFP4_NO_CONVROT
     from .nvfp4_conf import convrot_flags_from_conf, is_nvfp4_conf
 
     if not is_nvfp4_conf(conf):
         return
+    _LOAD_NVFP4_SEEN += 1
     enabled, gs = convrot_flags_from_conf(conf)
     module._hswq_nvfp4_convrot = bool(enabled)
     module._hswq_nvfp4_convrot_groupsize = int(gs)
+    if enabled:
+        _LOAD_CONVROT_ARMED += 1
+        if _LOAD_CONVROT_ARMED <= 4 or _LOAD_CONVROT_ARMED % 40 == 0:
+            fmt = conf.get("format")
+            top = conf.get("convrot")
+            params = conf.get("params") if isinstance(conf.get("params"), dict) else {}
+            _console(
+                f"[HSWQ NVFP4][diag] arm ConvRot #{_LOAD_CONVROT_ARMED} "
+                f"gs={gs} format={fmt} convrot={top!r} "
+                f"params.convrot={params.get('convrot')!r}"
+            )
+    else:
+        _LOAD_NVFP4_NO_CONVROT += 1
+        if _LOAD_NVFP4_NO_CONVROT <= 4:
+            _console(
+                f"[HSWQ NVFP4][diag] nvfp4 without convrot "
+                f"(#{_LOAD_NVFP4_NO_CONVROT}) keys={list(conf.keys())[:12]}"
+            )
     # Do not set _hswq_nvfp4 (TC full-forward arm).
 
 
@@ -227,7 +373,7 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
     from .nvfp4_conf import decode_comfy_quant_conf, is_nvfp4_conf
-    from .nvfp4_forward import attach_nvfp4_linear_lora_bake
+    # Bench parity: no attach_nvfp4_linear_lora_bake (SDXL TC keeps bake).
 
     register_nvfp4_addmm_handler()
 
@@ -251,7 +397,6 @@ def apply_nvfp4_comfy_parity() -> bool:
                     Lin.forward = _make_convrot_parity_forward(stock)
             elif not getattr(Lin.forward, "_hswq_nvfp4_convrot_parity", False):
                 Lin.forward = _make_convrot_parity_forward(Lin.forward)
-            attach_nvfp4_linear_lora_bake(Lin)
             return mp
 
         mixed_precision_ops_parity_refresh._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
@@ -270,7 +415,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         _PARITY_APPLIED = True
         _console(
             "[HSWQ NVFP4] comfy_parity refresh: stock GEMM + act rotate "
-            "(Z Image / bench path; ConvRot Linear LoRA bake kept)"
+            "(Z Image / bench path; no ConvRot Linear LoRA bake)"
         )
         return True
 
@@ -324,8 +469,6 @@ def apply_nvfp4_comfy_parity() -> bool:
             Lin.forward = _make_convrot_parity_forward(stock)
         elif not getattr(Lin.forward, "_hswq_nvfp4_convrot_parity", False):
             Lin.forward = _make_convrot_parity_forward(Lin.forward)
-        # Keep ConvRot Linear LoRA bake (convert unrotate / set re-rotate).
-        attach_nvfp4_linear_lora_bake(Lin)
         return mp
 
     mixed_precision_ops_comfy_only._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
@@ -352,6 +495,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     _PARITY_APPLIED = True
     _console(
         "[HSWQ NVFP4] comfy_parity ON: stock MixedPrecision GEMM + online act rotate "
-        "(Z Image / zi_convrot_nvfp4_bench path; not HSWQ TC Linear.forward)"
+        "(Z Image / zi_convrot_nvfp4_bench path; not HSWQ TC Linear.forward; "
+        "no ConvRot Linear LoRA bake)"
     )
     return True

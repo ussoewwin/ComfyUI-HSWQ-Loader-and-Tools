@@ -57,15 +57,33 @@ def is_nvfp4_conf(conf: Optional[dict]) -> bool:
     return isinstance(conf, dict) and conf.get("format") == "nvfp4"
 
 
+def _truthy_convrot(value: Any) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    if isinstance(value, (int, float)) and value == 1:
+        return True
+    if isinstance(value, str) and value.strip().lower() in ("1", "true", "yes"):
+        return True
+    return False
+
+
 def convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
-    """Return (enabled, groupsize) from an nvfp4 comfy_quant dict."""
+    """Return (enabled, groupsize) from an nvfp4 comfy_quant dict.
+
+    Checks top-level ``convrot`` and ``params.convrot`` (same as INT8 helpers).
+    """
     if not is_nvfp4_conf(conf):
-        return False, 256
-    if not bool(conf.get("convrot", False)):
         return False, 256
     params_conf = conf.get("params", {})
     if not isinstance(params_conf, dict):
         params_conf = {}
+    enabled = _truthy_convrot(conf.get("convrot")) or _truthy_convrot(
+        params_conf.get("convrot")
+    )
+    if not enabled:
+        return False, 256
     gs = int(conf.get("convrot_groupsize", params_conf.get("convrot_groupsize", 256)) or 256)
     return True, gs
 

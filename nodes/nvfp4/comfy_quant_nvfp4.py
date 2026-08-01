@@ -58,6 +58,102 @@ def _console(msg: str) -> None:
     logger.info(msg)
 
 
+def _callable_chain_has_attr(fn, attr: str) -> bool:
+    """True if ``fn`` or a closed-over callable wrapper has ``attr``."""
+    cur = fn
+    seen = set()
+    for _ in range(12):
+        if cur is None or not callable(cur) or id(cur) in seen:
+            return False
+        seen.add(id(cur))
+        if getattr(cur, attr, False):
+            return True
+        closure = getattr(cur, "__closure__", None) or ()
+        freevars = getattr(getattr(cur, "__code__", None), "co_freevars", ()) or ()
+        next_fn = None
+        prefer = (
+            "_orig",
+            "original",
+            "original_convert",
+            "_orig_convert_old_quants",
+        )
+        for name, cell in zip(freevars, closure):
+            val = cell.cell_contents
+            if not callable(val):
+                continue
+            if getattr(val, attr, False):
+                return True
+            if name in prefer:
+                next_fn = val
+        if next_fn is None:
+            for cell in closure:
+                val = cell.cell_contents
+                if callable(val):
+                    next_fn = val
+                    break
+        cur = next_fn
+    return False
+
+
+def _patch_convert_old_quants_nvfp4_kitchen_prefix() -> bool:
+    """Remap bare kitchen ``.comfy_quant`` keys under ``model_prefix``.
+
+    Kitchen Z Image / ZIT packs store ``_quantization_metadata`` layer keys
+    **without** ``model.diffusion_model.``. Stock ``convert_old_quants`` then
+    injects markers at bare paths (``layers.0.attention.qkv.comfy_quant``) while
+    weights live at ``model.diffusion_model.layers.0...weight``. MixedPrecision
+    load peeks ``{prefix}comfy_quant`` under the full module prefix → **miss** →
+    no ConvRot arm / wrong path. Same fix as ``hswq/benchmark/nvfp4/comfy_quant_nvfp4.py``.
+    """
+    try:
+        import comfy.utils as comfy_utils
+    except Exception as e:
+        logger.warning("[HSWQ NVFP4] convert_old remap skipped: %s", e)
+        return False
+
+    current = comfy_utils.convert_old_quants
+    if _callable_chain_has_attr(current, "_hswq_nvfp4_kitchen_prefix"):
+        return True
+
+    _orig = current
+
+    def convert_old_quants_nvfp4_prefix(state_dict, model_prefix="", metadata=None):
+        if metadata is None:
+            metadata = {}
+        state_dict, metadata = _orig(state_dict, model_prefix, metadata=metadata)
+        moved = 0
+        if model_prefix:
+            for k in list(state_dict.keys()):
+                if not k.endswith(".comfy_quant") or k.startswith(model_prefix):
+                    continue
+                try:
+                    conf = decode_comfy_quant_conf(state_dict[k])
+                except Exception:
+                    continue
+                if not is_nvfp4_conf(conf):
+                    continue
+                layer = k[: -len(".comfy_quant")]
+                if f"{model_prefix}{layer}.weight" not in state_dict:
+                    continue
+                state_dict[f"{model_prefix}{k}"] = state_dict.pop(k)
+                moved += 1
+        if moved:
+            _console(
+                f"[HSWQ NVFP4] convert_old: remapped {moved} bare nvfp4 "
+                f".comfy_quant marker(s) under prefix={model_prefix!r}"
+            )
+        return state_dict, metadata
+
+    convert_old_quants_nvfp4_prefix._hswq_nvfp4_kitchen_prefix = True  # type: ignore[attr-defined]
+    if getattr(_orig, "_hswq_int8_patched", False):
+        convert_old_quants_nvfp4_prefix._hswq_int8_patched = True  # type: ignore[attr-defined]
+    comfy_utils.convert_old_quants = convert_old_quants_nvfp4_prefix
+    _console(
+        "[HSWQ NVFP4] convert_old_quants: kitchen bare→prefixed .comfy_quant remap ON"
+    )
+    return True
+
+
 def apply_comfy_quant_nvfp4_patches() -> bool:
     """Install NVFP4 detection + full load + TC Linear forward + ConvRot LoRA bake."""
     global _PATCHES_APPLIED
@@ -67,6 +163,9 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
     except Exception as e:
         logger.warning("[HSWQ NVFP4] comfy import failed: %s", e)
         return False
+
+    # Always (re)ensure kitchen prefix remap — early-return paths must not skip it.
+    _patch_convert_old_quants_nvfp4_kitchen_prefix()
 
     mp_fn = getattr(ops, "mixed_precision_ops", None)
     stack_ver = int(getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0) or 0) if mp_fn else 0
@@ -319,7 +418,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     it destroys Pixel SSIM on Z Image ConvRot packs. SDXL still uses TC.
 
     Mixed kitchen packs (Linear nvfp4 + int8protect) need INT8 patches too.
-    ConvRot Linear LoRA bake (unrotate / re-rotate) stays attached.
+    Bench parity does **not** attach ConvRot Linear LoRA bake (SDXL TC does).
     """
     import logging
 
@@ -334,11 +433,16 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     )
     from .nvfp4_comfy_parity import (
         apply_nvfp4_comfy_parity,
+        log_nvfp4_parity_load_summary,
         require_convrot_parity_forward,
+        reset_nvfp4_parity_load_counters,
+        summarize_nvfp4_parity_modules,
     )
 
     unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
     apply_comfy_quant_nvfp4_patches()
+    # Re-assert kitchen remap after any prior INT8 wrap of convert_old_quants.
+    _patch_convert_old_quants_nvfp4_kitchen_prefix()
     if not apply_nvfp4_comfy_parity():
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
@@ -347,6 +451,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     # INT8 after parity (mixed packs). Re-arm parity then require — INT8 must not
     # leave TC Linear.forward or drop act-rotate.
     apply_comfy_quant_int8_patches()
+    _patch_convert_old_quants_nvfp4_kitchen_prefix()
     if not apply_nvfp4_comfy_parity():
         raise RuntimeError(
             "[HSWQ NVFP4] comfy_parity lost after INT8 patches"
@@ -354,9 +459,10 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     require_convrot_parity_forward()
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
+    reset_nvfp4_parity_load_counters()
     logging.info(
         "[HSWQ NVFP4] Loading UNet via Comfy parity "
-        "(stock GEMM + act rotate + int8 protect + ConvRot Linear LoRA bake): "
+        "(stock GEMM + act rotate + int8 protect; no ConvRot Linear LoRA bake): "
         "%s (weight_dtype=%s)",
         unet_name,
         weight_dtype,
@@ -367,9 +473,10 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     )
     with _int8_quant_conv_scope():
         model = comfy.sd.load_diffusion_model(unet_path, model_options={})
+    log_nvfp4_parity_load_summary(unet_name)
+    summarize_nvfp4_parity_modules(model)
     summarize_int8_lora_capability(model)
     return (model,)
-
 
 def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
     """Wrap SDXL + Z Image UNet loaders so ConvRot NVFP4 uses nodes/nvfp4 stack.
