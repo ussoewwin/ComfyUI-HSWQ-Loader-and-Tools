@@ -43,38 +43,52 @@ def reset_nvfp4_parity_load_counters() -> None:
 
 
 def clear_nvfp4_parity_hadamard_caches(root=None) -> int:
-    """Drop cached ``_hswq_nvfp4_parity_H`` after DistOrch nuclear VRAM purge.
+    """Drop parity ``H`` attrs + global Hadamard dicts after DistOrch purge.
 
-    Method 3 may free Hadamard CUDA storage while the Python attribute remains.
-    The next sample then rotates with a dead ``H`` (device/dtype still match) and
-    the image becomes noise. DistOrch Method 2c calls this via ``sys.modules``.
+    Method 3 may ``t.data = empty`` on module ``_hswq_nvfp4_parity_H`` while the
+    same tensor remains in ``nvfp4_hadamard._HADAMARD_CACHE``. The next gen then
+    gets a dead/garbage ``H`` from the global cache (nbytes==0 rebuild still
+    returns the poisoned entry) and quality decays as CUDA reuses the region
+    (2nd→3rd→4th gen gradually worse). DistOrch Method 2c calls this via
+    ``sys.modules``.
     """
     import gc
 
     import torch
 
-    cleared = 0
+    from ..nvfp4.nvfp4_hadamard import clear_hadamard_global_caches
 
-    def _clear_one(mod) -> None:
+    cleared = 0
+    cleared += int(clear_hadamard_global_caches() or 0)
+
+    def _drop_attr(mod, name: str) -> None:
         nonlocal cleared
-        if not isinstance(mod, torch.nn.Module):
-            return
-        if not hasattr(mod, "_hswq_nvfp4_parity_H"):
+        if not hasattr(mod, name):
             return
         try:
-            delattr(mod, "_hswq_nvfp4_parity_H")
+            delattr(mod, name)
             cleared += 1
         except Exception:
             try:
-                mod._hswq_nvfp4_parity_H = None
+                setattr(mod, name, None)
                 cleared += 1
             except Exception:
                 pass
+
+    def _clear_one(mod) -> None:
+        if not isinstance(mod, torch.nn.Module):
+            return
+        _drop_attr(mod, "_hswq_nvfp4_parity_H")
+        _drop_attr(mod, "_hswq_nvfp4_H")
+        # Z Image Dynamic LoRA bake bookkeeping — DistOrch INT8 clear missed these.
+        _drop_attr(mod, "_hswq_zi_nvfp4_baked_keys")
+        _drop_attr(mod, "_hswq_zi_nvfp4_baked_uuid")
 
     if root is not None:
         if isinstance(root, torch.nn.Module):
             for m in root.modules():
                 _clear_one(m)
+            _clear_one(root)
         return cleared
 
     for obj in gc.get_objects():
@@ -619,11 +633,30 @@ def apply_nvfp4_comfy_parity() -> bool:
     # Prefer refs already saved by apply_comfy_quant_nvfp4_patches (TC only).
     remember_nvfp4_tc_product_stack(patched_load, ops.mixed_precision_ops)
 
+    def _parity_mp_base(mp_fn):
+        """Innermost non-parity ``mixed_precision_ops`` (TC / product stack).
+
+        Refresh used to wrap the previous refresh wrapper every reload, stacking
+        ``attach_nvfp4_linear_lora_bake`` / forward ensure. Peel to ``_orig_mp``.
+        """
+        cur = mp_fn
+        seen: set[int] = set()
+        while id(cur) not in seen:
+            seen.add(id(cur))
+            if not getattr(cur, "_hswq_nvfp4_comfy_only", False):
+                return cur
+            nxt = getattr(cur, "_hswq_nvfp4_orig_mp", None)
+            if nxt is None or nxt is cur:
+                return cur
+            cur = nxt
+        return cur
+
     def _refresh_parity_mp() -> None:
         _cur_mp = ops.mixed_precision_ops
+        _base_mp = _parity_mp_base(_cur_mp)
 
         def mixed_precision_ops_parity_refresh(*args, **kwargs):
-            mp = _cur_mp(*args, **kwargs)
+            mp = _base_mp(*args, **kwargs)
             Lin = mp.Linear
             attach_nvfp4_linear_lora_bake(Lin)
             _ensure_single_parity_linear_forward(Lin)
@@ -631,12 +664,9 @@ def apply_nvfp4_comfy_parity() -> bool:
 
         mixed_precision_ops_parity_refresh._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
         mixed_precision_ops_parity_refresh._hswq_nvfp4_stack_ver = getattr(
-            _cur_mp, "_hswq_nvfp4_stack_ver", 0
+            _base_mp, "_hswq_nvfp4_stack_ver", getattr(_cur_mp, "_hswq_nvfp4_stack_ver", 0)
         )  # type: ignore[attr-defined]
-        if getattr(_cur_mp, "_hswq_nvfp4_orig_mp", None) is not None:
-            mixed_precision_ops_parity_refresh._hswq_nvfp4_orig_mp = (  # type: ignore[attr-defined]
-                _cur_mp._hswq_nvfp4_orig_mp
-            )
+        mixed_precision_ops_parity_refresh._hswq_nvfp4_orig_mp = _base_mp  # type: ignore[attr-defined]
         ops.mixed_precision_ops = mixed_precision_ops_parity_refresh
 
     # Already on parity load (possibly under INT8 decode wrap): keep load chain.
@@ -690,9 +720,10 @@ def apply_nvfp4_comfy_parity() -> bool:
     ops._load_quantized_module = _load_quantized_module_comfy_only
 
     _cur_mp = ops.mixed_precision_ops
+    _base_install = _parity_mp_base(_cur_mp)
 
     def mixed_precision_ops_comfy_only(*args, **kwargs):
-        mp = _cur_mp(*args, **kwargs)
+        mp = _base_install(*args, **kwargs)
         Lin = mp.Linear
         attach_nvfp4_linear_lora_bake(Lin)
         _ensure_single_parity_linear_forward(Lin)
@@ -700,16 +731,13 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     mixed_precision_ops_comfy_only._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
     mixed_precision_ops_comfy_only._hswq_nvfp4_stack_ver = getattr(
-        _cur_mp, "_hswq_nvfp4_stack_ver", 0
+        _base_install, "_hswq_nvfp4_stack_ver", 0
     )  # type: ignore[attr-defined]
-    if getattr(_cur_mp, "_hswq_nvfp4_orig_mp", None) is not None:
-        mixed_precision_ops_comfy_only._hswq_nvfp4_orig_mp = (  # type: ignore[attr-defined]
-            _cur_mp._hswq_nvfp4_orig_mp
-        )
+    mixed_precision_ops_comfy_only._hswq_nvfp4_orig_mp = _base_install  # type: ignore[attr-defined]
     ops.mixed_precision_ops = mixed_precision_ops_comfy_only
 
     # Prove unwrap once at install; keep LoRA bake attached for product use.
-    mp0 = _cur_mp()
+    mp0 = _base_install()
     attach_nvfp4_linear_lora_bake(mp0.Linear)
     _ensure_single_parity_linear_forward(mp0.Linear)
 
