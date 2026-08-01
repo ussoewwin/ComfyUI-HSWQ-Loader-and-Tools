@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 
-__version__ = "3.3.1"
+__version__ = "3.3.2"
 
 import torch
 from packaging.version import InvalidVersion, Version
