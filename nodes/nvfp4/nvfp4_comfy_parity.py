@@ -399,6 +399,15 @@ def _arm_convrot_after_stock_load(module, conf) -> None:
     enabled, gs = convrot_flags_from_conf(conf)
     module._hswq_nvfp4_convrot = bool(enabled)
     module._hswq_nvfp4_convrot_groupsize = int(gs)
+    try:
+        import comfy.quant_ops as quant_ops
+
+        p = getattr(module, "weight", None)
+        layout = getattr(p, "layout_params", None) if p is not None else None
+        if isinstance(layout, quant_ops.Params) and getattr(layout, "convrot", False):
+            layout.convrot = False
+    except Exception:
+        pass
     if enabled:
         _LOAD_CONVROT_ARMED += 1
         if _LOAD_CONVROT_ARMED <= 4 or _LOAD_CONVROT_ARMED % 40 == 0:
