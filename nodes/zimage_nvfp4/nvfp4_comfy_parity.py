@@ -354,16 +354,46 @@ def _ensure_int8_protect_arm_overlay() -> None:
 
 
 def _unwrap_stock_forward(forward_fn):
-    """Peel HSWQ TC wrappers until stock MixedPrecision Linear.forward."""
+    """Peel HSWQ TC *and* ConvRot parity wrappers until Comfy stock forward.
+
+    After DistOrch purge, Z Image reload may hit NVFP4 ``upgraded stack`` which
+    wraps TC over an already-parity ``Linear.forward``. Refresh then used to
+    peel only TC and re-wrap parity on top of parity → double online rotate →
+    noise. Always flatten both wrapper kinds before a single parity wrap.
+    """
     f = forward_fn
     for _ in range(8):
-        if not getattr(f, "_hswq_nvfp4_full_forward", False):
-            return f
-        stock = _closure_named(f, "stock_forward")
-        if stock is None:
-            return None
-        f = stock
+        if getattr(f, "_hswq_nvfp4_full_forward", False) or getattr(
+            f, "_hswq_nvfp4_convrot_parity", False
+        ):
+            stock = _closure_named(f, "stock_forward")
+            if stock is None:
+                return None
+            f = stock
+            continue
+        return f
     return None
+
+
+def _ensure_single_parity_linear_forward(Lin) -> None:
+    """Idempotent: one ConvRot parity wrap over true stock MixedPrecision forward."""
+    fwd = Lin.forward
+    stock = _unwrap_stock_forward(fwd)
+    if stock is None:
+        raise RuntimeError(
+            "[HSWQ NVFP4] comfy_parity: could not unwrap Linear.forward "
+            "to Comfy stock (TC/parity chain broken)"
+        )
+    # Already exactly parity(stock) with no nested wrappers under stock.
+    if (
+        getattr(fwd, "_hswq_nvfp4_convrot_parity", False)
+        and not getattr(fwd, "_hswq_nvfp4_full_forward", False)
+        and _closure_named(fwd, "stock_forward") is stock
+        and not getattr(stock, "_hswq_nvfp4_full_forward", False)
+        and not getattr(stock, "_hswq_nvfp4_convrot_parity", False)
+    ):
+        return
+    Lin.forward = _make_convrot_parity_forward(stock)
 
 
 def _is_int8_tensorwise_convrot_conf(conf) -> bool:
@@ -596,12 +626,7 @@ def apply_nvfp4_comfy_parity() -> bool:
             mp = _cur_mp(*args, **kwargs)
             Lin = mp.Linear
             attach_nvfp4_linear_lora_bake(Lin)
-            if getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
-                stock = _unwrap_stock_forward(Lin.forward)
-                if stock is not None:
-                    Lin.forward = _make_convrot_parity_forward(stock)
-            elif not getattr(Lin.forward, "_hswq_nvfp4_convrot_parity", False):
-                Lin.forward = _make_convrot_parity_forward(Lin.forward)
+            _ensure_single_parity_linear_forward(Lin)
             return mp
 
         mixed_precision_ops_parity_refresh._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
@@ -670,15 +695,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         mp = _cur_mp(*args, **kwargs)
         Lin = mp.Linear
         attach_nvfp4_linear_lora_bake(Lin)
-        if getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
-            stock = _unwrap_stock_forward(Lin.forward)
-            if stock is None:
-                raise RuntimeError(
-                    "Could not unwrap HSWQ TC Linear.forward for ConvRot parity"
-                )
-            Lin.forward = _make_convrot_parity_forward(stock)
-        elif not getattr(Lin.forward, "_hswq_nvfp4_convrot_parity", False):
-            Lin.forward = _make_convrot_parity_forward(Lin.forward)
+        _ensure_single_parity_linear_forward(Lin)
         return mp
 
     mixed_precision_ops_comfy_only._hswq_nvfp4_comfy_only = True  # type: ignore[attr-defined]
@@ -694,14 +711,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     # Prove unwrap once at install; keep LoRA bake attached for product use.
     mp0 = _cur_mp()
     attach_nvfp4_linear_lora_bake(mp0.Linear)
-    if getattr(mp0.Linear.forward, "_hswq_nvfp4_full_forward", False):
-        stock0 = _unwrap_stock_forward(mp0.Linear.forward)
-        if stock0 is None:
-            raise RuntimeError(
-                "[HSWQ NVFP4] comfy_parity: failed to unwrap Linear.forward "
-                "to Comfy stock at install"
-            )
-        mp0.Linear.forward = _make_convrot_parity_forward(stock0)
+    _ensure_single_parity_linear_forward(mp0.Linear)
 
     _PARITY_APPLIED = True
     _console(

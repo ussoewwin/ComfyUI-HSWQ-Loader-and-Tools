@@ -57,6 +57,40 @@ def _console(msg: str) -> None:
     logger.info(msg)
 
 
+def _effective_nvfp4_stack_ver(mp_fn) -> int:
+    """Read stack_ver through INT8 / comfy_parity wraps (attrs may live on inner)."""
+    cur = mp_fn
+    seen: set[int] = set()
+    for _ in range(8):
+        if cur is None or id(cur) in seen:
+            return 0
+        seen.add(id(cur))
+        v = int(getattr(cur, "_hswq_nvfp4_stack_ver", 0) or 0)
+        if v > 0:
+            return v
+        if getattr(cur, "_hswq_int8_conv_patched", False):
+            cur = getattr(cur, "_hswq_orig_mixed_precision_ops", None)
+            continue
+        cur = getattr(cur, "_hswq_nvfp4_orig_mp", None)
+    return 0
+
+
+def _mp_chain_has_comfy_only(mp_fn) -> bool:
+    cur = mp_fn
+    seen: set[int] = set()
+    for _ in range(8):
+        if cur is None or id(cur) in seen:
+            return False
+        seen.add(id(cur))
+        if getattr(cur, "_hswq_nvfp4_comfy_only", False):
+            return True
+        if getattr(cur, "_hswq_int8_conv_patched", False):
+            cur = getattr(cur, "_hswq_orig_mixed_precision_ops", None)
+            continue
+        cur = getattr(cur, "_hswq_nvfp4_orig_mp", None)
+    return False
+
+
 def apply_comfy_quant_nvfp4_patches() -> bool:
     """Install NVFP4 detection + full load + TC Linear forward + ConvRot LoRA bake."""
     global _PATCHES_APPLIED
@@ -68,7 +102,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         return False
 
     mp_fn = getattr(ops, "mixed_precision_ops", None)
-    stack_ver = int(getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0) or 0) if mp_fn else 0
+    stack_ver = _effective_nvfp4_stack_ver(mp_fn)
     if (
         _PATCHES_APPLIED
         and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
@@ -78,11 +112,36 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
 
     # Already patched detect/load but LoRA bake missing: re-wrap mixed_precision_ops only.
     if getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False) and stack_ver < _NVFP4_STACK_VER:
-        _orig_mp = getattr(mp_fn, "_hswq_nvfp4_orig_mp", mp_fn)
+        # Z Image: INT8 wrap used to drop _hswq_nvfp4_stack_ver → false "upgrade"
+        # that wrapped TC over ConvRot parity → double online rotate after refresh.
+        if _mp_chain_has_comfy_only(mp_fn) or (
+            _PATCHES_APPLIED
+            and stack_ver == 0
+            and getattr(mp_fn, "_hswq_int8_conv_patched", False)
+        ):
+            try:
+                if mp_fn is not None:
+                    mp_fn._hswq_nvfp4_stack_ver = _NVFP4_STACK_VER  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            _PATCHES_APPLIED = True
+            _console(
+                "[HSWQ NVFP4] stack ver stamped "
+                "(skip TC upgrade; comfy_parity / INT8 chain intact)"
+            )
+            return True
+
+        _orig_mp = getattr(mp_fn, "_hswq_nvfp4_orig_mp", None)
+        if _orig_mp is None:
+            _orig_mp = mp_fn
 
         def mixed_precision_ops_upgraded(*args, **kwargs):
             mp = _orig_mp(*args, **kwargs)
             Lin = mp.Linear
+            # Never wrap TC over ConvRot parity (Z Image double-rotate / noise).
+            if getattr(Lin.forward, "_hswq_nvfp4_convrot_parity", False):
+                attach_nvfp4_linear_lora_bake(Lin)
+                return mp
             if not getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
                 Lin.forward = make_nvfp4_linear_forward(Lin.forward)
             attach_nvfp4_linear_lora_bake(Lin)
