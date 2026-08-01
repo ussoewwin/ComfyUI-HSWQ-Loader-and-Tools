@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.1
+
+- **Added**: Z Image / ZIT **ConvRot NVFP4** support on **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `ConvRot NVFP4`, or `default` with NVFP4 auto-detect). Uses the bench-matched Comfy parity path (stock MixedPrecision GEMM + online act rotate) under `nodes/zimage_nvfp4`, including mixed NVFP4 + INT8 protect packs and Dynamic VRAM LoRA bake — not the SDXL Checkpoint Loader Tensor Core product path. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).**
+- See [Release Notes v3.3.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.1) for details.
+
 ## Version 3.3.0
 
 - **Changed**: Remaining ComfyUI node class IDs renamed from Nunchaku-prefixed names to HSWQ-prefixed IDs (`HSWQSaveImage`, `HSWQCheckpointLoaderSDXL`, `HSWQSDXLLoraStackV3`, `HSWQZImageDiTLoader`, and related JS hooks).
