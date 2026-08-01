@@ -465,13 +465,10 @@ def _closure_named(fn, name: str):
 
 
 def detach_nvfp4_linear_lora_bake(Lin) -> bool:
-    """Remove ConvRot Linear LoRA bake wraps (Z Image / HSWQ bench parity).
+    """Remove ConvRot Linear LoRA bake wraps (debug / restore only).
 
-    ``hswq/benchmark/nvfp4_comfy_parity.py`` never attaches convert_weight /
-    set_weight unrotate+re-rotate. Product TC ``attach_nvfp4_linear_lora_bake``
-    stays on SDXL; Z Image parity must peel it so MultiGPU / ModelPatcher
-    convert_weight cannot unrotate offline-rotated weights while act rotate
-    still runs.
+    Product Z Image and SDXL keep ``attach_nvfp4_linear_lora_bake``. Do not call
+    this from the normal load path.
     """
     detached = False
     cvt = getattr(Lin, "convert_weight", None)

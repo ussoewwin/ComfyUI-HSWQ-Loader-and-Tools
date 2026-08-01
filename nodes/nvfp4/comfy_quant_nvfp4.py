@@ -433,7 +433,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     it destroys Pixel SSIM on Z Image ConvRot packs. SDXL still uses TC.
 
     Mixed kitchen packs (Linear nvfp4 + int8protect) need INT8 patches too.
-    Bench parity does **not** attach ConvRot Linear LoRA bake (SDXL TC does).
+    ConvRot Linear LoRA bake stays on (same convert_weight / set_weight as SDXL).
     """
     import logging
 
@@ -477,8 +477,8 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     reset_nvfp4_parity_load_counters()
     logging.info(
         "[HSWQ NVFP4] Loading UNet via Comfy parity "
-        "(stock GEMM + act rotate + int8 protect; no ConvRot Linear LoRA bake; "
-        "disable_dynamic=True — match HSWQ bench, not AIMDO ModelPatcherDynamic): "
+        "(stock GEMM + act rotate + int8 protect + ConvRot Linear LoRA bake; "
+        "disable_dynamic=True — not AIMDO ModelPatcherDynamic): "
         "%s (weight_dtype=%s)",
         unet_name,
         weight_dtype,

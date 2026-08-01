@@ -373,8 +373,8 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
     from .nvfp4_conf import decode_comfy_quant_conf, is_nvfp4_conf
-    from .nvfp4_forward import detach_nvfp4_linear_lora_bake
-    # Bench parity: no attach_nvfp4_linear_lora_bake (SDXL TC keeps bake).
+    from .nvfp4_forward import attach_nvfp4_linear_lora_bake
+    # Product Z Image: keep ConvRot Linear LoRA bake (same as SDXL). Do not peel.
 
     register_nvfp4_addmm_handler()
 
@@ -392,8 +392,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         def mixed_precision_ops_parity_refresh(*args, **kwargs):
             mp = _cur_mp(*args, **kwargs)
             Lin = mp.Linear
-            # HSWQ bench never attaches LoRA bake; peel if TC mp re-wrapped it.
-            detach_nvfp4_linear_lora_bake(Lin)
+            attach_nvfp4_linear_lora_bake(Lin)
             if getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
                 stock = _unwrap_stock_forward(Lin.forward)
                 if stock is not None:
@@ -418,7 +417,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         _PARITY_APPLIED = True
         _console(
             "[HSWQ NVFP4] comfy_parity refresh: stock GEMM + act rotate "
-            "(Z Image / bench path; no ConvRot Linear LoRA bake)"
+            "+ ConvRot Linear LoRA bake (Z Image)"
         )
         return True
 
@@ -463,8 +462,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     def mixed_precision_ops_comfy_only(*args, **kwargs):
         mp = _cur_mp(*args, **kwargs)
         Lin = mp.Linear
-        # HSWQ bench never attaches LoRA bake; peel if TC mp re-wrapped it.
-        detach_nvfp4_linear_lora_bake(Lin)
+        attach_nvfp4_linear_lora_bake(Lin)
         if getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
             stock = _unwrap_stock_forward(Lin.forward)
             if stock is None:
@@ -486,9 +484,9 @@ def apply_nvfp4_comfy_parity() -> bool:
         )
     ops.mixed_precision_ops = mixed_precision_ops_comfy_only
 
-    # Prove unwrap once at install (bench does this).
+    # Prove unwrap once at install; keep LoRA bake attached for product use.
     mp0 = _cur_mp()
-    detach_nvfp4_linear_lora_bake(mp0.Linear)
+    attach_nvfp4_linear_lora_bake(mp0.Linear)
     if getattr(mp0.Linear.forward, "_hswq_nvfp4_full_forward", False):
         stock0 = _unwrap_stock_forward(mp0.Linear.forward)
         if stock0 is None:
@@ -501,7 +499,6 @@ def apply_nvfp4_comfy_parity() -> bool:
     _PARITY_APPLIED = True
     _console(
         "[HSWQ NVFP4] comfy_parity ON: stock MixedPrecision GEMM + online act rotate "
-        "(Z Image / zi_convrot_nvfp4_bench path; not HSWQ TC Linear.forward; "
-        "no ConvRot Linear LoRA bake)"
+        "+ ConvRot Linear LoRA bake (Z Image; not HSWQ TC Linear.forward)"
     )
     return True
