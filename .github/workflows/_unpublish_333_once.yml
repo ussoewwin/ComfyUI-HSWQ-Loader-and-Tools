@@ -10,10 +10,48 @@ jobs:
           TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /tmp/out.txt -w "%{http_code}" -X DELETE \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            "https://api.comfy.org/publishers/ussoewwin/nodes/comfyui-hswq-loader-and-tools/versions/3.3.3")
-          echo "HTTP $code"
-          cat /tmp/out.txt || true
-          test "$code" = "204" -o "$code" = "200" -o "$code" = "404"
+          TOKEN="$(printf '%s' "$TOKEN" | tr -d '\r\n\x16')"
+          if [ -z "$TOKEN" ]; then echo "TOKEN empty"; exit 1; fi
+          try_del() {
+            local path="$1"
+            local hdr="$2"
+            local code
+            code=$(curl -sS -o /tmp/out.txt -w "%{http_code}" -X DELETE \
+              -H "$hdr" \
+              "https://api.comfy.org/publishers/ussoewwin/nodes/comfyui-hswq-loader-and-tools/versions/${path}")
+            echo "TRY path=${path} hdr=${hdr%% *} HTTP ${code}"
+            cat /tmp/out.txt || true
+            echo
+            if [ "$code" = "204" ] || [ "$code" = "200" ] || [ "$code" = "404" ]; then
+              echo OK
+              return 0
+            fi
+            return 1
+          }
+          ok=0
+          try_del "3.3.3" "Authorization: Bearer ${TOKEN}" && ok=1 || true
+          if [ "$ok" != "1" ]; then
+            try_del "564746b7-5765-464d-8ea7-841b13221f80" "Authorization: Bearer ${TOKEN}" && ok=1 || true
+          fi
+          if [ "$ok" != "1" ]; then
+            try_del "3.3.3" "Authorization: ${TOKEN}" && ok=1 || true
+          fi
+          if [ "$ok" != "1" ]; then
+            try_del "3.3.3" "X-API-Key: ${TOKEN}" && ok=1 || true
+          fi
+          if [ "$ok" != "1" ]; then
+            pip install -q comfy-cli
+            printf '%s\n' "$TOKEN" | comfy --skip-prompt node unpublish comfyui-hswq-loader-and-tools 3.3.3 && ok=1 || true
+          fi
+          test "$ok" = "1"
+      - name: Verify 3.3.3 gone from public list
+        run: |
+          set -euo pipefail
+          curl -sS "https://api.comfy.org/nodes/comfyui-hswq-loader-and-tools/versions?pageSize=30" > /tmp/vers.json
+          if grep -q '"version":"3.3.3"' /tmp/vers.json; then
+            echo "STILL PRESENT"
+            cat /tmp/vers.json
+            exit 1
+          fi
+          echo "3.3.3 not in version list"
+          python3 -c "import json; v=json.load(open('/tmp/vers.json')); print([x.get('version') for x in v])"
