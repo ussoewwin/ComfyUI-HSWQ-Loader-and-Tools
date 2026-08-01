@@ -373,6 +373,7 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
     from .nvfp4_conf import decode_comfy_quant_conf, is_nvfp4_conf
+    from .nvfp4_forward import detach_nvfp4_linear_lora_bake
     # Bench parity: no attach_nvfp4_linear_lora_bake (SDXL TC keeps bake).
 
     register_nvfp4_addmm_handler()
@@ -391,6 +392,8 @@ def apply_nvfp4_comfy_parity() -> bool:
         def mixed_precision_ops_parity_refresh(*args, **kwargs):
             mp = _cur_mp(*args, **kwargs)
             Lin = mp.Linear
+            # HSWQ bench never attaches LoRA bake; peel if TC mp re-wrapped it.
+            detach_nvfp4_linear_lora_bake(Lin)
             if getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
                 stock = _unwrap_stock_forward(Lin.forward)
                 if stock is not None:
@@ -460,6 +463,8 @@ def apply_nvfp4_comfy_parity() -> bool:
     def mixed_precision_ops_comfy_only(*args, **kwargs):
         mp = _cur_mp(*args, **kwargs)
         Lin = mp.Linear
+        # HSWQ bench never attaches LoRA bake; peel if TC mp re-wrapped it.
+        detach_nvfp4_linear_lora_bake(Lin)
         if getattr(Lin.forward, "_hswq_nvfp4_full_forward", False):
             stock = _unwrap_stock_forward(Lin.forward)
             if stock is None:
@@ -483,6 +488,7 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     # Prove unwrap once at install (bench does this).
     mp0 = _cur_mp()
+    detach_nvfp4_linear_lora_bake(mp0.Linear)
     if getattr(mp0.Linear.forward, "_hswq_nvfp4_full_forward", False):
         stock0 = _unwrap_stock_forward(mp0.Linear.forward)
         if stock0 is None:

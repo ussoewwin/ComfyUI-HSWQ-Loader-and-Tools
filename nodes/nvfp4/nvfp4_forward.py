@@ -453,3 +453,37 @@ def attach_nvfp4_linear_lora_bake(Lin) -> bool:
         Lin.set_weight = make_nvfp4_linear_set_weight(sw)
         applied = True
     return applied
+
+
+def _closure_named(fn, name: str):
+    if fn is None or getattr(fn, "__closure__", None) is None:
+        return None
+    for n, cell in zip(fn.__code__.co_freevars, fn.__closure__):
+        if n == name:
+            return cell.cell_contents
+    return None
+
+
+def detach_nvfp4_linear_lora_bake(Lin) -> bool:
+    """Remove ConvRot Linear LoRA bake wraps (Z Image / HSWQ bench parity).
+
+    ``hswq/benchmark/nvfp4_comfy_parity.py`` never attaches convert_weight /
+    set_weight unrotate+re-rotate. Product TC ``attach_nvfp4_linear_lora_bake``
+    stays on SDXL; Z Image parity must peel it so MultiGPU / ModelPatcher
+    convert_weight cannot unrotate offline-rotated weights while act rotate
+    still runs.
+    """
+    detached = False
+    cvt = getattr(Lin, "convert_weight", None)
+    if callable(cvt) and getattr(cvt, "_hswq_nvfp4_lora_bake_ver", 0):
+        stock = _closure_named(cvt, "stock_convert_weight")
+        if callable(stock):
+            Lin.convert_weight = stock
+            detached = True
+    sw = getattr(Lin, "set_weight", None)
+    if callable(sw) and getattr(sw, "_hswq_nvfp4_lora_bake_ver", 0):
+        stock = _closure_named(sw, "stock_set_weight")
+        if callable(stock):
+            Lin.set_weight = stock
+            detached = True
+    return detached
