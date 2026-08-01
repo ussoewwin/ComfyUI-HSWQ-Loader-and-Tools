@@ -397,7 +397,7 @@ def _arm_convrot_after_stock_load(module, conf) -> None:
         return
     _LOAD_NVFP4_SEEN += 1
     enabled, gs = convrot_flags_from_conf(conf)
-    module._hswq_nvfp4_convrot = bool(enabled)
+    module._hswq_nvfp4_convrot = False
     module._hswq_nvfp4_convrot_groupsize = int(gs)
     try:
         import comfy.quant_ops as quant_ops
