@@ -348,33 +348,27 @@ def _is_int8_tensorwise_convrot_conf(conf) -> bool:
 def _make_convrot_parity_forward(stock_forward):
     """Stock MixedPrecision forward + online act rotate for ConvRot weights.
 
-    Covers:
-    - NVFP4 ConvRot Linear (``_hswq_nvfp4_convrot``)
-    - INT8 protect ConvRot Linear (``_hswq_int8_convrot``)
+    INT8 protect ConvRot Linear only (``_hswq_int8_convrot``). NVFP4 ConvRot
+    (``_hswq_nvfp4_convrot``) is left to the kitchen NVFP4 path; rotating
+    activations in stock forward double-rotates NVFP4 and destroys the image.
 
-    Convert stores offline ``W @ H^T``. Online must apply ``x @ H`` on *every*
-    path that still uses those rotated weights — including Dynamic /
-    ``_full_precision_mm`` / ``weight_function`` dequant to ``F.linear``.
-    Kitchen QT ``int8_linear(convrot=True)`` only rotates when QuantTensor
-    survives; after float dequant there is no rotate → bit-crush / blocky fur.
+    Convert stores offline ``W @ H^T``. For INT8 protect, online must apply
+    ``x @ H`` when Dynamic / dequant / ``F.linear`` would otherwise skip the
+    kitchen ``int8_linear(convrot=True)`` rotate.
     """
     from .nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
-        global _ACT_ROTATE_HITS, _ACT_ROTATE_INT8_HITS
-        nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
+        global _ACT_ROTATE_INT8_HITS
+        # INT8 protect only: after Dynamic / dequant / F.linear, kitchen
+        # int8_linear(convrot=True) does not rotate — apply x @ H here.
+        # NVFP4 must NOT rotate here; kitchen NVFP4 path already handles ConvRot.
         i8 = bool(getattr(self, "_hswq_int8_convrot", False))
-        if nv or i8:
-            if nv:
-                _ACT_ROTATE_HITS += 1
-                hit = _ACT_ROTATE_HITS
-                tag = "nvfp4"
-                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
-            else:
-                _ACT_ROTATE_INT8_HITS += 1
-                hit = _ACT_ROTATE_INT8_HITS
-                tag = "int8protect"
-                gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
+        if i8:
+            _ACT_ROTATE_INT8_HITS += 1
+            hit = _ACT_ROTATE_INT8_HITS
+            tag = "int8protect"
+            gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
             if hit <= _ACT_ROTATE_FIRST_N or (
                 _ACT_ROTATE_LOG_EVERY > 0 and hit % _ACT_ROTATE_LOG_EVERY == 0
             ):
