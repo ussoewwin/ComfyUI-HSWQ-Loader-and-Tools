@@ -8,12 +8,16 @@ INT8 Dynamic bake (``patches/comfy_quant_int8.py``) often does **not** fire on t
 hybrid pack (no INT8 bake dump in logs), so INT8-protect keys stay as
 LowVramPatch. NVFP4 ConvRot bake alone leaves ``patches_left=60`` → broken.
 
-v3 (owner: bake dump missing / LoRA inert):
-  - Always log ENTER on Dynamic.load wrap (prove wrap fired)
-  - Always dump bake summary (even zeros)
-  - Bake by iterating ``patcher.patches`` keys (not only named_modules)
-  - Force ZI wrap outermost; also bake after ``load_models_gpu`` (MultiGPU path)
-  - leftover INT8/QT bake until patches_left=0
+v3: ENTER proved wrap fires; bake still silent (``nvfp4_convrot=False``).
+
+v4 (owner: まだ駄目だ — ENTER patches=180 nvfp4_convrot=False):
+  Root cause: kitchen ``QuantizedTensor`` inherits ``torch.Tensor.layout``
+  (``torch.strided`` → type name ``\"layout\"``). Old ``_qt_layout_name``
+  read ``qt.layout`` first and never saw ``_layout_cls``
+  (``TensorCoreNVFP4Layout``), so ``_qt_is_nvfp4`` was always False → gate
+  closed → no bake dump → LoRA LowVramPatch left attached.
+  Fix: prefer ``_layout_cls`` / ``layout_cls``; gate on ConvRot **flag**
+  (do not require QT on ``module.weight`` under Dynamic VRAM).
 
 Does **not** edit ``nodes/nvfp4`` (SDXL).
 """
@@ -23,7 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_BAKE_HOOK_VER = 3
+_BAKE_HOOK_VER = 4
 _STATUS_LOGS = 0
 _STATUS_LOG_MAX = 24
 _ENTER_LOGS = 0
@@ -50,16 +54,28 @@ def _qt_payload(weight, QuantizedTensor):
 
 
 def _qt_layout_name(qt) -> str:
+    """Kitchen QT layout class name.
+
+    Do **not** use ``qt.layout`` — that is ``torch.Tensor.layout``
+    (``torch.strided``), whose type name is literally ``\"layout\"``.
+    Real name lives in ``_layout_cls`` (str) / ``layout_cls`` (type).
+    """
     if qt is None:
         return ""
-    layout = getattr(qt, "layout", None)
-    if layout is None:
-        layout = getattr(qt, "_layout", None)
-    if layout is not None:
-        return type(layout).__name__ or ""
     layout_cls = getattr(qt, "_layout_cls", None)
-    if isinstance(layout_cls, str):
+    if isinstance(layout_cls, str) and layout_cls:
         return layout_cls
+    layout_cls_t = getattr(qt, "layout_cls", None)
+    if layout_cls_t is not None and not isinstance(layout_cls_t, str):
+        name = getattr(layout_cls_t, "__name__", "") or ""
+        if name:
+            return name
+    # Legacy object layout (not torch.layout)
+    legacy = getattr(qt, "_layout", None)
+    if legacy is not None:
+        name = type(legacy).__name__ or ""
+        if name and name != "layout":
+            return name
     return ""
 
 
@@ -95,20 +111,36 @@ def _get_baked_key_set(model) -> set:
     return keys
 
 
-def _model_has_nvfp4_convrot(model) -> bool:
+def _nvfp4_convrot_diag(model) -> dict:
+    """Count ConvRot-armed modules and how many still expose NVFP4 on ``.weight``."""
+    out = {"flagged": 0, "qt_on_weight": 0, "has": False}
     if model is None:
-        return False
+        return out
     try:
         from comfy.quant_ops import QuantizedTensor
     except ImportError:
-        return False
+        QuantizedTensor = None
     for _name, module in model.named_modules():
         if not _module_is_nvfp4_convrot(module):
             continue
+        out["flagged"] += 1
+        if QuantizedTensor is None:
+            continue
         w = getattr(module, "weight", None)
         if _qt_is_nvfp4(w, QuantizedTensor):
-            return True
-    return False
+            out["qt_on_weight"] += 1
+    out["has"] = out["flagged"] > 0
+    return out
+
+
+def _model_has_nvfp4_convrot(model) -> bool:
+    """True if any module was armed with ConvRot NVFP4 (``_hswq_nvfp4_convrot``).
+
+    Do **not** require QT on ``module.weight``: under Dynamic VRAM / LowVramPatch
+    the QT often lives behind ``get_key_weight``, while the flag remains on the
+    module (act_rotate still hits). v3 gate required both → always False.
+    """
+    return bool(_nvfp4_convrot_diag(model)["has"])
 
 
 def _resolve_module(model, module_path: str):
@@ -340,16 +372,39 @@ def _dump_bake_status(nv_stats: dict, rem_stats: dict, patcher, reason: str) -> 
         )
 
 
+def _patcher_has_quant_via_keys(patcher) -> bool:
+    """True if any LoRA patch key resolves to NVFP4/INT8 QT via get_key_weight."""
+    if not getattr(patcher, "patches", None):
+        return False
+    try:
+        import comfy.model_patcher as mp
+        from comfy.quant_ops import QuantizedTensor
+    except ImportError:
+        return False
+    for key, _module_path, _param_key, _module in _iter_patch_weight_keys(patcher):
+        weight, _set_func, _convert = mp.get_key_weight(patcher.model, key)
+        if weight is None:
+            continue
+        if _qt_is_nvfp4(weight, QuantizedTensor) or _qt_is_int8_tensorwise(
+            weight, QuantizedTensor
+        ):
+            return True
+    return False
+
+
 def run_zimage_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str = "wrap") -> bool:
     """Bake NVFP4 ConvRot + leftover QT if this patcher is a ZI NVFP4 pack with LoRA."""
     model = getattr(patcher, "model", None)
     if model is None:
         return False
-    has_flag = _model_has_nvfp4_convrot(model)
+    diag = _nvfp4_convrot_diag(model)
+    has_flag = bool(diag["has"])
     has_baked = bool(getattr(model, "_hswq_zi_nvfp4_baked_keys", None))
     n_patches = len(getattr(patcher, "patches", None) or {})
     if not has_flag and not has_baked:
-        return False
+        # Fallback: patches present and QT visible via get_key_weight
+        if n_patches == 0 or not _patcher_has_quant_via_keys(patcher):
+            return False
     if n_patches == 0 and not has_baked:
         return False
     if device_to is None:
@@ -417,10 +472,13 @@ def install_zimage_nvfp4_lora_bake(force: bool = False) -> bool:
             _ENTER_LOGS += 1
             n_patches = len(getattr(self, "patches", None) or {})
             model = getattr(self, "model", None)
+            diag = _nvfp4_convrot_diag(model)
             _console(
                 f"[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #{_ENTER_LOGS}: "
                 f"patches={n_patches} "
-                f"nvfp4_convrot={_model_has_nvfp4_convrot(model)} "
+                f"nvfp4_convrot={diag['has']} "
+                f"flagged={diag['flagged']} "
+                f"qt_on_weight={diag['qt_on_weight']} "
                 f"model={type(model).__name__ if model is not None else None}"
             )
         result = prev_load(
