@@ -15,14 +15,15 @@
 
 本自定义节点包用于加载和运行 **[Hybrid-Sensitivity-Weighted-Quantization (HSWQ)](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)** 量化包以及相关的 ComfyUI 兼容 SDXL / Z Image 量化权重。
 
-HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作聚焦于 **SDXL** 的 **ConvRot INT8** 与 **ConvRot NVFP4**（敏感度 / 重要性分析、DualMonitor + 加权直方图 FP16 保护，对其余部分执行全量 ConvRot）。它**不是**按 keep ratio 百分比保留的方案：keep ratio 固定为 **0 (r0)**；在固定的 MiB 预算下，由自动分析选择 FP16 层。
+HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作聚焦于 **SDXL** 的 **ConvRot INT8** 与 **ConvRot NVFP4**，以及 **Z Image / ZIT** UNet 的 **ConvRot NVFP4**（敏感度 / 重要性分析、DualMonitor + 加权直方图 FP16 保护，对其余部分执行全量 ConvRot）。它**不是**按 keep ratio 百分比保留的方案：keep ratio 固定为 **0 (r0)**；在固定的 MiB 预算下，由自动分析选择 FP16 层。
 
 | 路径 | 在本仓库中的定位 |
 | :--- | :--- |
 | **HSWQ ConvRot INT8 (SDXL V3.1)** | ComfyUI `int8_tensorwise` 包；通过 **HSWQ Checkpoint Loader (SDXL)** 加载（`weight_dtype`：`int8_tensorwise` / INT8 自动检测）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
 | **HSWQ ConvRot NVFP4 (SDXL)** | ComfyUI `nvfp4` 包（Linear→NVFP4，Conv2d→INT8 + ConvRot）；通过**同一个** **HSWQ Checkpoint Loader (SDXL)** 加载（`weight_dtype`：`ConvRot NVFP4`，或 `default` 触发 NVFP4 自动检测）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
+| **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet 包（常见为 Linear NVFP4 + INT8 protect）；通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 加载（`weight_dtype`：`ConvRot NVFP4`，或 `default` 触发 NVFP4 自动检测）。走与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock GEMM + online act rotate），**不是** SDXL 的 Tensor Core 产品路径。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
 | **FP8 (E4M3)** | HSWQ **FP8 开发已结束**（技术文档仍保留在上游）。只要 ComfyUI 支持，这里的加载器仍可接受现有的 FP8 权重 |
-| **Z Image 8-bit** | HSWQ 专属的 Z Image INT8 开发 / 发布**已结束**。Z Image 推荐使用**原生 ConvRot INT8**（通常 SSIM > 0.99）。HSWQ INT8 仅继续用于 **SDXL** |
+| **Z Image 8-bit** | HSWQ 专属的 Z Image INT8 开发 / 发布**已结束**。Z Image 推荐使用**原生 ConvRot INT8**（通常 SSIM > 0.99）。HSWQ INT8 仅继续用于 **SDXL**。**Z Image ConvRot NVFP4** 由上方的 UNet 加载器支持 |
 
 上游 HSWQ 参考指标：ConvRot INT8 SSIM 约 **0.94–0.98**，ConvRot NVFP4 约 **0.95**，相比 FP16 文件体积减小约 **30–40%**，同时保持与标准 ComfyUI 加载器兼容。
 
@@ -140,13 +141,21 @@ ComfyUI 输出节点，将图像以 **PNG** 或 **JPG** 保存到 ComfyUI 的 **
 - **分类**：`image`（输出节点；无返回 socket）
 - **输出路径**：通过 `folder_paths.get_output_directory()` 使用 ComfyUI 的标准输出目录
 
-### HSWQ FP8 E4M3/INT8 UNet Loader
+### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
 
-<img src="../png/hswqunet.png?v=3" alt="HSWQ FP8 E4M3/INT8 UNet Loader" width="400">
+<img src="../png/hswqunet.png?v=3" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader" width="400">
 
-标准 ComfyUI UNet 加载器的封装，用于加载 FP8 与 INT8 扩散模型（**通用 FP8 与 INT8**，不限于 HSWQ 专属权重）。像标准 UNet 加载器一样从 FP8 / INT8 检查点加载 UNet (MODEL)（HSWQ FP8 E4M3、Scaled FP8，以及在被选择或自动检测到时使用原生 comfy_quant / `int8_tensorwise`）。
+标准 ComfyUI UNet 加载器的封装，用于 `diffusion_models` 下的扩散 UNet（**Z Image / ZIT** 及其他 UNet 包）。以 FP8、INT8 与 **ConvRot NVFP4** 权重类型加载 **MODEL**。
 
-本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。UI 输入仅为 UNet 名称 / weight dtype；本扩展仅保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff），不提供单独的 Triton accelerate 控件。
+- **通用 FP8 / INT8**：与库存 UNet 加载器思路相同（HSWQ FP8 E4M3、Scaled FP8，以及在被选择或自动检测到时使用原生 comfy_quant / `int8_tensorwise`）。这些模式不限于 HSWQ 专属权重。
+- **ConvRot NVFP4（Z Image / ZIT）**：将 `weight_dtype` 设为 **`ConvRot NVFP4`**，或在 UNet safetensors 带有 comfy_quant / HSWQ `nvfp4` 标记时保持 **`default`**。走本扩展 `nodes/nvfp4/` 下的 UNet NVFP4 栈，并使用与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock MixedPrecision GEMM + online act rotate；保留 ConvRot Linear LoRA bake）。**不要**在此期望 SDXL Checkpoint Loader 的 Tensor Core 产品路径——SDXL NVFP4 仍用 Checkpoint Loader；Z Image NVFP4 用本 UNet 加载器。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
+- **INT8 / NVFP4 自动检测**：看起来像 INT8 的包走 INT8 路径；看起来像 NVFP4 的包在 `weight_dtype` 为 `default` 时走 ConvRot NVFP4（NVFP4 分发安装在 INT8 之后，避免混合包被 INT8-only 检测抢走）。
+
+**输入**：`unet_name`、`weight_dtype`（`default` / FP8 选项 / `int8_tensorwise` / `ConvRot NVFP4`）。
+
+本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。本扩展保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff）以及 `nodes/nvfp4/` 下的 **NVFP4** UNet 补丁。
+
+**VRAM 清理**：加载 **ConvRot NVFP4**（以及 HSWQ INT8）UNet 时，请在工作流末尾放置 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并打开 **`HSWQ`**——原因与 SDXL Checkpoint Loader 一节相同。
 
 ### HSWQ Batched Detailer (SEGS)
 

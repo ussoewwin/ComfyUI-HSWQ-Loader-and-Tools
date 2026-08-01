@@ -15,14 +15,15 @@
 
 This custom node pack loads and runs **[Hybrid-Sensitivity-Weighted-Quantization (HSWQ)](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)** packs and related ComfyUI-compatible quantized SDXL / Z Image weights.
 
-HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HSWQ work focuses on **ConvRot INT8** and **ConvRot NVFP4** for **SDXL** (sensitivity / importance analysis, DualMonitor + weighted-histogram FP16 protection, then FULL ConvRot on the remainder). It is **not** a keep-ratio percentage scheme: keep ratio is fixed at **0 (r0)**; FP16 layers are chosen by automatic analysis under a fixed MiB budget.
+HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HSWQ work focuses on **ConvRot INT8** and **ConvRot NVFP4** for **SDXL**, plus **ConvRot NVFP4** for **Z Image / ZIT** UNets (sensitivity / importance analysis, DualMonitor + weighted-histogram FP16 protection, then FULL ConvRot on the remainder). It is **not** a keep-ratio percentage scheme: keep ratio is fixed at **0 (r0)**; FP16 layers are chosen by automatic analysis under a fixed MiB budget.
 
 | Path | Role in this repo |
 | :--- | :--- |
 | **HSWQ ConvRot INT8 (SDXL V3.1)** | ComfyUI `int8_tensorwise` packs; load via **HSWQ Checkpoint Loader (SDXL)** (`weight_dtype`: `int8_tensorwise` / INT8 auto-detect). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **HSWQ ConvRot NVFP4 (SDXL)** | ComfyUI `nvfp4` packs (Linear→NVFP4, Conv2d→INT8 + ConvRot); load via the **same** **HSWQ Checkpoint Loader (SDXL)** (`weight_dtype`: `ConvRot NVFP4`, or `default` with NVFP4 auto-detect). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
+| **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet packs (often Linear NVFP4 + INT8 protect); load via **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `ConvRot NVFP4`, or `default` with NVFP4 auto-detect). Uses the bench-matched **Comfy parity** path (stock GEMM + online act rotate), not the SDXL Tensor Core product path. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **FP8 (E4M3)** | HSWQ **FP8 development has ended** (technical docs remain upstream). Loaders here may still accept existing FP8 weights where ComfyUI supports them |
-| **Z Image 8-bit** | HSWQ-specific Z Image INT8 development / publication **ended**. Prefer **native ConvRot INT8** for Z Image (typically SSIM > 0.99). HSWQ INT8 continues for **SDXL** |
+| **Z Image 8-bit** | HSWQ-specific Z Image INT8 development / publication **ended**. Prefer **native ConvRot INT8** for Z Image (typically SSIM > 0.99). HSWQ INT8 continues for **SDXL**. **Z Image ConvRot NVFP4** is supported via the UNet loader above |
 
 Upstream HSWQ targets (reference): ConvRot INT8 SSIM about **0.94–0.98**, ConvRot NVFP4 about **0.95**, with roughly **30–40%** smaller files than FP16 while keeping standard ComfyUI loader compatibility.
 
@@ -140,13 +141,21 @@ ComfyUI output node that saves images to your ComfyUI **output** folder as **PNG
 - **Category**: `image` (output node; no return socket)
 - **Output path**: Uses ComfyUI's standard output directory via `folder_paths.get_output_directory()`
 
-### HSWQ FP8 E4M3/INT8 UNet Loader
+### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
 
-<img src="png/hswqunet.png?v=3" alt="HSWQ FP8 E4M3/INT8 UNet Loader" width="400">
+<img src="png/hswqunet.png?v=3" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader" width="400">
 
-Standard ComfyUI UNet loader wrapper that loads FP8 and INT8 diffusion models (**general FP8 and INT8**, not limited to HSWQ-only weights). Loads the UNet (MODEL) from FP8 / INT8 checkpoints like the standard UNet loader (HSWQ FP8 E4M3, Scaled FP8, and native comfy_quant / `int8_tensorwise` when selected or auto-detected).
+Standard ComfyUI UNet loader wrapper for diffusion models under `diffusion_models` (**Z Image / ZIT** and other UNet packs). Loads **MODEL** with FP8, INT8, and **ConvRot NVFP4** weight dtypes.
 
-This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear speed is left to **ComfyUI + `comfy_kitchen`** (`int8_linear`: cuda → triton → eager). UI inputs are UNet name / weight dtype only; this extension keeps INT8 **load compatibility** patches (Conv2d / LoRA / ControlLora / handoff), not a separate Triton accelerate widget.
+- **General FP8 / INT8**: Same idea as the stock UNet loader (HSWQ FP8 E4M3, Scaled FP8, and native comfy_quant / `int8_tensorwise` when selected or auto-detected). Not limited to HSWQ-only weights for those modes.
+- **ConvRot NVFP4 (Z Image / ZIT)**: Select `weight_dtype` = **`ConvRot NVFP4`**, or leave **`default`** when the UNet safetensors has comfy_quant / HSWQ `nvfp4` markers. Routes to this extension’s UNet NVFP4 stack under `nodes/nvfp4/` with the **Comfy parity** path used by `hswq/benchmark` (stock MixedPrecision GEMM + online act rotate; ConvRot Linear LoRA bake kept). **Do not** expect the SDXL Checkpoint Loader’s Tensor Core product path here — SDXL NVFP4 stays on the Checkpoint Loader; Z Image NVFP4 stays on this UNet loader. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).**
+- **INT8 / NVFP4 auto-detect**: INT8-looking packs use the INT8 path; NVFP4-looking packs use the ConvRot NVFP4 path when `weight_dtype` is `default` (NVFP4 dispatch is installed after INT8 so mixed packs are not stolen by INT8-only detect).
+
+**Inputs**: `unet_name`, `weight_dtype` (`default` / FP8 options / `int8_tensorwise` / `ConvRot NVFP4`).
+
+This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear speed is left to **ComfyUI + `comfy_kitchen`** (`int8_linear`: cuda → triton → eager). This extension keeps INT8 **load compatibility** patches (Conv2d / LoRA / ControlLora / handoff) and the **NVFP4** UNet patches under `nodes/nvfp4/`.
+
+**VRAM purge**: For **ConvRot NVFP4** (and HSWQ INT8) UNet loads, place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the end of the workflow with **`HSWQ`** on — same reason as the SDXL Checkpoint Loader section.
 
 ### HSWQ Batched Detailer (SEGS)
 
