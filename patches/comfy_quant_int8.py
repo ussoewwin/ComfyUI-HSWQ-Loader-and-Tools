@@ -1177,6 +1177,31 @@ def _patch_ops_decode_and_conv() -> bool:
         getattr(original_mp, "_hswq_int8_ops_ver", 0) >= _OPS_PATCH_VER
         and getattr(original_mp, "_hswq_int8_conv_patched", False)
     ):
+        # Heal older INT8 wraps that dropped NVFP4 stack markers (false upgrade).
+        if int(getattr(original_mp, "_hswq_nvfp4_stack_ver", 0) or 0) <= 0:
+            inner = true_orig
+            for _ in range(6):
+                if inner is None:
+                    break
+                v = int(getattr(inner, "_hswq_nvfp4_stack_ver", 0) or 0)
+                if v > 0:
+                    try:
+                        original_mp._hswq_nvfp4_stack_ver = v
+                    except Exception:
+                        pass
+                    break
+                if getattr(inner, "_hswq_nvfp4_comfy_only", False):
+                    try:
+                        original_mp._hswq_nvfp4_comfy_only = True
+                        if hasattr(inner, "_hswq_nvfp4_orig_mp"):
+                            original_mp._hswq_nvfp4_orig_mp = getattr(
+                                inner, "_hswq_nvfp4_orig_mp"
+                            )
+                    except Exception:
+                        pass
+                inner = getattr(inner, "_hswq_nvfp4_orig_mp", None) or getattr(
+                    inner, "_hswq_orig_mixed_precision_ops", None
+                )
         return True
 
     def mixed_precision_ops_force_conv(
@@ -1206,6 +1231,22 @@ def _patch_ops_decode_and_conv() -> bool:
     mixed_precision_ops_force_conv._hswq_orig_mixed_precision_ops = true_orig
     mixed_precision_ops_force_conv._hswq_int8_conv_patched = True
     mixed_precision_ops_force_conv._hswq_int8_ops_ver = _OPS_PATCH_VER
+    # Preserve NVFP4 markers through INT8 wrap so Z Image early-return works
+    # (lost stack_ver → false "upgraded stack" → TC over parity → noise).
+    for _attr in (
+        "_hswq_nvfp4_stack_ver",
+        "_hswq_nvfp4_comfy_only",
+        "_hswq_nvfp4_orig_mp",
+    ):
+        if hasattr(original_mp, _attr):
+            try:
+                setattr(
+                    mixed_precision_ops_force_conv,
+                    _attr,
+                    getattr(original_mp, _attr),
+                )
+            except Exception:
+                pass
     ops_module.mixed_precision_ops = mixed_precision_ops_force_conv
     return True
 
