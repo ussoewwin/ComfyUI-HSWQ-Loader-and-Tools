@@ -7,6 +7,11 @@ the module attribute to ``nodes.zimage_nvfp4.load_unet`` which *delegates* to th
 saved original — never to the rebound name (that would recurse).
 
 SDXL ``load_checkpoint_sdxl_nvfp4_weight_dtype`` is left unchanged.
+
+Do NOT insert this package root onto ``sys.path``. That shadows ComfyUI's top-level
+``nodes`` module and crashes startup with::
+
+    AttributeError: module 'nodes' has no attribute 'init_extra_nodes'
 """
 from __future__ import annotations
 
@@ -16,8 +21,6 @@ import os
 import sys
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
 
 _PATCHED = False
 _ORIG_IMPORT = builtins.__import__
@@ -25,6 +28,7 @@ _PRODUCT_LOAD_UNET = None
 
 
 def _zimage_load_module():
+    """Resolve zimage load only via the already-imported HSWQ package prefix."""
     for name in list(sys.modules):
         if not name.endswith("nodes.nvfp4.comfy_quant_nvfp4"):
             continue
@@ -32,7 +36,10 @@ def _zimage_load_module():
         if not pkg:
             continue
         return importlib.import_module(f"{pkg}.nodes.zimage_nvfp4.load_unet")
-    return importlib.import_module("nodes.zimage_nvfp4.load_unet")
+    raise ImportError(
+        "comfy_quant_nvfp4 not in sys.modules yet "
+        "(cannot import nodes.zimage_nvfp4 without shadowing ComfyUI nodes)"
+    )
 
 
 def _try_patch() -> bool:
