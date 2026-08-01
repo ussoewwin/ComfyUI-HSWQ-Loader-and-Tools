@@ -62,6 +62,25 @@ def apply_nvfp4_patches() -> None:
     )
 
 
+def _ensure_dynamic_load_bake_wrap() -> None:
+    """Re-arm ZI NVFP4 bake wrap if MultiGPU etc. overwrote ModelPatcherDynamic.load."""
+    try:
+        import comfy.model_patcher as mp
+    except ImportError:
+        return
+    Dynamic = getattr(mp, "ModelPatcherDynamic", None)
+    if Dynamic is None:
+        return
+    cur = getattr(Dynamic, "load", None)
+    if cur is None:
+        return
+    if getattr(cur, "_hswq_zi_nvfp4_lora_bake_ver", 0) >= 2:
+        return
+    from .nvfp4_lora_bake import install_zimage_nvfp4_lora_bake
+
+    install_zimage_nvfp4_lora_bake()
+
+
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     """Load Z Image / ZIT UNet with ConvRot NVFP4 parity (not SDXL TC forward)."""
     import folder_paths
@@ -104,6 +123,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image UNet requires Dynamic ConvRot NVFP4 LoRA bake"
         )
+    _ensure_dynamic_load_bake_wrap()
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
     reset_zimage_nvfp4_lora_bake_log_counters()
@@ -169,6 +189,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
     _prev = unet_cls.load_unet
 
     def load_unet(self, unet_name, weight_dtype):
+        _ensure_dynamic_load_bake_wrap()
         if weight_dtype in _fp8:
             return _prev(self, unet_name, weight_dtype)
         if weight_dtype == NVFP4_WEIGHT_DTYPE:
