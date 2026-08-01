@@ -109,6 +109,13 @@ def checkpoint_looks_like_comfy_quant_nvfp4(state_dict_or_path) -> bool:
 
 
 def _probe_path_comfy_quant_nvfp4(path: str) -> bool:
+    """Lightweight safetensors probe for nvfp4 (comfy_quant keys or kitchen metadata).
+
+    Z Image / ZIT kitchen packs often ship ``_quantization_metadata`` +
+    ``hswq_nvfp4_convrot`` before convert_old injects ``.comfy_quant`` tensors.
+    Those must still route to the NVFP4 stack (otherwise INT8-only auto-detect
+    steals mixed NVFP4+int8protect packs).
+    """
     try:
         from safetensors import safe_open
     except ImportError:
@@ -120,6 +127,25 @@ def _probe_path_comfy_quant_nvfp4(path: str) -> bool:
             for ck in comfy_keys[:64]:
                 conf = decode_comfy_quant_conf(f.get_tensor(ck))
                 if is_nvfp4_conf(conf):
+                    return True
+            meta = f.metadata() or {}
+            stamp = str(meta.get("hswq_nvfp4_convrot", "") or "").strip().lower()
+            if stamp in ("1", "true", "yes"):
+                return True
+            if "_quantization_metadata" in meta:
+                try:
+                    qm = json.loads(meta["_quantization_metadata"])
+                    layers = qm.get("layers", {}) if isinstance(qm, dict) else {}
+                    for v in layers.values():
+                        if isinstance(v, str) and v == "nvfp4":
+                            return True
+                        if isinstance(v, dict) and v.get("format") == "nvfp4":
+                            return True
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            # weight_scale_2 is NVFP4-specific (double-scale); INT8 packs lack it.
+            for k in keys:
+                if k.endswith("weight_scale_2"):
                     return True
     except Exception as e:
         logger.debug("NVFP4 probe failed for %s: %s", path, e)

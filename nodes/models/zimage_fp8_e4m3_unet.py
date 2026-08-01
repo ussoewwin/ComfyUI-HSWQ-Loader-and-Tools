@@ -45,7 +45,7 @@ class HSWQZImageFP8E4M3UNetLoader:
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "load_model"
     CATEGORY = "HSWQ-ussoewwin"
-    TITLE = "HSWQ FP8 E4M3/INT8 UNet Loader"
+    TITLE = "HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader"
 
     def load_model(
         self,

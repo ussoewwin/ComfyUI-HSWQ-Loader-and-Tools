@@ -953,13 +953,20 @@ class HSWQFP8E4M3UNetLoader:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": { "unet_name": (folder_paths.get_filename_list("diffusion_models"), ),
-                              "weight_dtype": (["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2", "int8_tensorwise"],),
+                              "weight_dtype": ([
+                                  "default",
+                                  "fp8_e4m3fn",
+                                  "fp8_e4m3fn_fast",
+                                  "fp8_e5m2",
+                                  "int8_tensorwise",
+                                  "ConvRot NVFP4",
+                              ],),
                              }}
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "load_unet"
 
     CATEGORY = "advanced/loaders"
-    TITLE = "HSWQ FP8 E4M3/INT8 UNet Loader"
+    TITLE = "HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader"
 
     def load_unet(self, unet_name, weight_dtype):
         model_options = {}

@@ -45,6 +45,7 @@ __all__ = [
     "install_nvfp4_option_dispatch",
     "is_nvfp4_conf",
     "load_checkpoint_sdxl_nvfp4_weight_dtype",
+    "load_unet_nvfp4_weight_dtype",
     "logical_linear_in_features",
     "nvfp4_forward_stats",
     "reset_nvfp4_forward_stats",
@@ -285,46 +286,113 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         set_current_device(original_device)
 
 
+def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
+    """Load Z Image / ZIT diffusion UNet with HSWQ ConvRot NVFP4 (+ INT8 protect) stack.
+
+    Same TC / LoRA-bake patches as SDXL ``load_checkpoint_sdxl_nvfp4_weight_dtype``,
+    but via ``comfy.sd.load_diffusion_model`` on ``diffusion_models``.
+    Mixed kitchen packs (Linear nvfp4 + int8protect Linear/Conv) need both
+    NVFP4 and INT8 patches so INT8 layers and ConvRot Linear LoRA bake work.
+    """
+    import logging
+
+    import folder_paths
+    import comfy.sd
+
+    from ...patches.comfy_quant_int8 import (
+        _int8_quant_conv_scope,
+        apply_comfy_quant_int8_patches,
+        reset_int8_lora_log_counters,
+        summarize_int8_lora_capability,
+    )
+
+    unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
+    apply_comfy_quant_nvfp4_patches()
+    apply_comfy_quant_int8_patches()
+    reset_int8_lora_log_counters()
+    reset_nvfp4_lora_log_counters()
+    logging.info(
+        "[HSWQ NVFP4] Loading UNet via MixedPrecisionOps "
+        "(nvfp4 Linear + int8 protect / ConvRot + ConvRot Linear LoRA bake): "
+        "%s (weight_dtype=%s)",
+        unet_name,
+        weight_dtype,
+    )
+    print(
+        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4): {unet_name}",
+        flush=True,
+    )
+    with _int8_quant_conv_scope():
+        model = comfy.sd.load_diffusion_model(unet_path, model_options={})
+    summarize_int8_lora_capability(model)
+    return (model,)
+
+
 def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
-    """Wrap SDXL loader so ConvRot NVFP4 uses nodes/nvfp4 (bench) stack.
+    """Wrap SDXL + Z Image UNet loaders so ConvRot NVFP4 uses nodes/nvfp4 stack.
 
     Must run *after* ``install_int8_option_dispatch``: NVFP4 checkpoints also
-    contain ``int8_tensorwise`` Conv layers, so INT8-only auto-detect would
-    otherwise steal the load path without NVFP4 Linear patches.
+    contain ``int8_tensorwise`` layers (e.g. int8protect), so INT8-only
+    auto-detect would otherwise steal the load path without NVFP4 Linear patches
+    / ConvRot Linear LoRA bake.
     """
     if not isinstance(node_class_mappings, dict):
         return False
 
     _FP8_WEIGHT_DTYPES = frozenset({"fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"})
+    wrapped = False
+
+    unet_cls = node_class_mappings.get("HSWQFP8E4M3UNetLoader")
+    if unet_cls is not None:
+        _prev_load_unet = unet_cls.load_unet
+
+        def load_unet(self, unet_name, weight_dtype):
+            if weight_dtype in _FP8_WEIGHT_DTYPES:
+                return _prev_load_unet(self, unet_name, weight_dtype)
+            if weight_dtype == NVFP4_WEIGHT_DTYPE:
+                return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+            import folder_paths
+
+            if weight_dtype == "default":
+                unet_path = folder_paths.get_full_path_or_raise(
+                    "diffusion_models", unet_name
+                )
+                if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
+                    return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+            return _prev_load_unet(self, unet_name, weight_dtype)
+
+        unet_cls.load_unet = load_unet
+        wrapped = True
 
     sdxl_cls = node_class_mappings.get("HSWQCheckpointLoaderSDXL")
-    if sdxl_cls is None:
-        return False
+    if sdxl_cls is not None:
+        _prev_load_checkpoint = sdxl_cls.load_checkpoint
 
-    _prev_load_checkpoint = sdxl_cls.load_checkpoint
-
-    def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
-        if weight_dtype in _FP8_WEIGHT_DTYPES:
-            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
-        if weight_dtype == NVFP4_WEIGHT_DTYPE:
-            return load_checkpoint_sdxl_nvfp4_weight_dtype(
-                ckpt_name, weight_dtype, device=device
-            )
-        import folder_paths
-
-        # default (and any non-FP8 path): NVFP4 markers beat INT8-only auto-detect.
-        # Mixed packs also have int8_tensorwise Conv layers.
-        if weight_dtype == "default":
-            ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
-            if checkpoint_looks_like_comfy_quant_nvfp4(ckpt_path):
+        def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
+            if weight_dtype in _FP8_WEIGHT_DTYPES:
+                return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+            if weight_dtype == NVFP4_WEIGHT_DTYPE:
                 return load_checkpoint_sdxl_nvfp4_weight_dtype(
                     ckpt_name, weight_dtype, device=device
                 )
-        return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+            import folder_paths
 
-    sdxl_cls.load_checkpoint = load_checkpoint
-    _console(
-        "[HSWQ NVFP4] install_nvfp4_option_dispatch: "
-        f"SDXL weight_dtype includes {NVFP4_WEIGHT_DTYPE!r}"
-    )
-    return True
+            # default (and any non-FP8 path): NVFP4 markers beat INT8-only auto-detect.
+            # Mixed packs also have int8_tensorwise Conv layers.
+            if weight_dtype == "default":
+                ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
+                if checkpoint_looks_like_comfy_quant_nvfp4(ckpt_path):
+                    return load_checkpoint_sdxl_nvfp4_weight_dtype(
+                        ckpt_name, weight_dtype, device=device
+                    )
+            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+
+        sdxl_cls.load_checkpoint = load_checkpoint
+        wrapped = True
+
+    if wrapped:
+        _console(
+            "[HSWQ NVFP4] install_nvfp4_option_dispatch: "
+            f"SDXL/UNet weight_dtype includes {NVFP4_WEIGHT_DTYPE!r}"
+        )
+    return wrapped
