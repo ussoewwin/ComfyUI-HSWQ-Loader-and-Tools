@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.3
+
+- **Fixed**: Z Image hybrid packs (**ConvRot NVFP4** + **ConvRot INT8 protect**) — Dynamic VRAM LoRA bake now covers **both** Linear families. INT8 protect is armed like Conv2d (clear kitchen `Params.convrot`, keep False after requant); dual bake + pass-delta EVIDENCE (`NVFP4_LORA_BAKE_*` / `INT8_PROTECT_LORA_BAKE_*`) so leftover LowVramPatch on protect layers no longer leaves dead LoRA or noise.
+- See [Release Notes v3.3.3](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.3) for details.
+
 ## Version 3.3.2
 
 - **Fixed**: Z Image / ZIT **ConvRot NVFP4** salt-and-pepper noise on the **2nd generation after a DistOrch VRAM purge**. INT8 decode wrap was dropping NVFP4 stack markers, so a later “upgrade” re-wrapped the Tensor Core product path over the Comfy parity stack; DistOrch refresh then peeled only the TC layer and left **double online act rotate** on reload. Markers are preserved through the INT8 wrap so parity refresh no longer re-arms a second rotate.
