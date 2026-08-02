@@ -10,7 +10,7 @@
 ## Version 3.3.3
 
 - **修复**：Z Image 混合包（**ConvRot NVFP4** + **ConvRot INT8 protect**）—— Dynamic VRAM 下 LoRA bake 现覆盖 **两系** Linear。INT8 protect 按 Conv2d 同型武装（清除 kitchen `Params.convrot`，requant 后保持 False）；二段 bake + pass-delta EVIDENCE（`NVFP4_LORA_BAKE_*` / `INT8_PROTECT_LORA_BAKE_*`），protect 层上残留的 LowVramPatch 不再导致 LoRA 无效或噪声。
-- 详情见 [Release Notes v3.3.3](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.3)。
+- 详情见 [Release Notes v3.3.3](v3.3.3.md)。
 
 ## Version 3.3.2
 
