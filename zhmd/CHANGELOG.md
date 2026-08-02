@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.4
+
+- **修复**：Z Image / ZIT **ConvRot NVFP4**（及 INT8 protect 在线 rotate）—— **Distorch** VRAM purge 之后，模块本地 Hadamard `H`（`_hswq_nvfp4_parity_H`）仅用 `nbytes==0` 判断是否复用，而全局 Hadamard cache 已用 `_tensor_storage_ok` 拒绝毒化张量。device/dtype 仍看起来正常的空壳 / 垃圾 `H` 会在 **第 2 次及之后的生成**继续旋转激活并导致画质劣化。parity forward 现与全局相同，复用前走 `_tensor_storage_ok`。
+- 详情见 [Release Notes v3.3.4](v3.3.4.md)。
+
 ## Version 3.3.3
 
 - **修复**：Z Image 混合包（**ConvRot NVFP4** + **ConvRot INT8 protect**）—— Dynamic VRAM 下 LoRA bake 现覆盖 **两系** Linear。INT8 protect 按 Conv2d 同型武装（清除 kitchen `Params.convrot`，requant 后保持 False）；二段 bake + pass-delta EVIDENCE（`NVFP4_LORA_BAKE_*` / `INT8_PROTECT_LORA_BAKE_*`），protect 层上残留的 LowVramPatch 不再导致 LoRA 无效或噪声。

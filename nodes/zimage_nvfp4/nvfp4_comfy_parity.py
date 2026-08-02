@@ -43,13 +43,13 @@ def reset_nvfp4_parity_load_counters() -> None:
 
 
 def clear_nvfp4_parity_hadamard_caches(root=None) -> int:
-    """Drop parity ``H`` attrs + global Hadamard dicts after DistOrch purge.
+    """Drop parity ``H`` attrs + global Hadamard dicts after Distorch purge.
 
     Method 3 may ``t.data = empty`` on module ``_hswq_nvfp4_parity_H`` while the
     same tensor remains in ``nvfp4_hadamard._HADAMARD_CACHE``. The next gen then
     gets a dead/garbage ``H`` from the global cache (nbytes==0 rebuild still
     returns the poisoned entry) and quality decays as CUDA reuses the region
-    (2nd→3rd→4th gen gradually worse). DistOrch Method 2c calls this via
+    (2nd→3rd→4th gen gradually worse). Distorch Method 2c calls this via
     ``sys.modules``.
     """
     import gc
@@ -80,7 +80,7 @@ def clear_nvfp4_parity_hadamard_caches(root=None) -> int:
             return
         _drop_attr(mod, "_hswq_nvfp4_parity_H")
         _drop_attr(mod, "_hswq_nvfp4_H")
-        # Z Image Dynamic LoRA bake bookkeeping — DistOrch INT8 clear missed these.
+        # Z Image Dynamic LoRA bake bookkeeping — Distorch INT8 clear missed these.
         _drop_attr(mod, "_hswq_zi_nvfp4_baked_keys")
         _drop_attr(mod, "_hswq_zi_nvfp4_baked_uuid")
 
@@ -370,7 +370,7 @@ def _ensure_int8_protect_arm_overlay() -> None:
 def _unwrap_stock_forward(forward_fn):
     """Peel HSWQ TC *and* ConvRot parity wrappers until Comfy stock forward.
 
-    After DistOrch purge, Z Image reload may hit NVFP4 ``upgraded stack`` which
+    After Distorch purge, Z Image reload may hit NVFP4 ``upgraded stack`` which
     wraps TC over an already-parity ``Linear.forward``. Refresh then used to
     peel only TC and re-wrap parity on top of parity → double online rotate →
     noise. Always flatten both wrapper kinds before a single parity wrap.
@@ -440,21 +440,19 @@ def _make_convrot_parity_forward(stock_forward):
             need_rebuild = True
             if h is not None:
                 try:
+                    from ..nvfp4.nvfp4_hadamard import _tensor_storage_ok
+
+                    # Global cache already rejects poisoned H via
+                    # _tensor_storage_ok; module-local H must use the same
+                    # check. nbytes==0 alone misses emptied shells that still
+                    # report device/dtype (Distorch Method 3), so 2nd+ gen
+                    # rotates with garbage and quality decays.
                     need_rebuild = (
                         h.device != input.device
                         or h.dtype != input.dtype
-                        or int(h.numel()) == 0
                         or (bool(input.is_cuda) and not bool(h.is_cuda))
+                        or not _tensor_storage_ok(h)
                     )
-                    if not need_rebuild:
-                        # DistOrch Method 3 may empty storage while device/dtype
-                        # still match — rebuild or 2nd gen becomes noise.
-                        st = (
-                            h.untyped_storage()
-                            if hasattr(h, "untyped_storage")
-                            else h.storage()
-                        )
-                        need_rebuild = int(st.nbytes()) == 0
                 except Exception:
                     need_rebuild = True
             if need_rebuild:

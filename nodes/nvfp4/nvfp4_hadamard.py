@@ -8,7 +8,7 @@ _H4_CACHE: dict = {}
 
 
 def _tensor_storage_ok(t) -> bool:
-    """False after DistOrch nuclear kill / empty-storage reuse (UAF risk)."""
+    """False after Distorch nuclear kill / empty-storage reuse (UAF risk)."""
     if t is None:
         return False
     try:
@@ -27,7 +27,7 @@ def _tensor_storage_ok(t) -> bool:
 
 
 def clear_hadamard_global_caches() -> int:
-    """Drop module-level Hadamard caches (DistOrch Method 2c / parity clear).
+    """Drop module-level Hadamard caches (Distorch Method 2c / parity clear).
 
     Method 3 may ``t.data = empty`` on tensors still referenced by these dicts.
     Returning them on the next gen rotates with dead/garbage ``H`` and quality
