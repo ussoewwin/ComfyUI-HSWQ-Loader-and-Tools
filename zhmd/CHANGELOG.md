@@ -10,7 +10,7 @@
 ## Version 3.3.4
 
 - **修复**：Z Image / ZIT **ConvRot NVFP4** / INT8 protect —— **Distorch** purge 后，模块本地 `_hswq_nvfp4_parity_H` 的复用判定弱于全局 `_tensor_storage_ok` → **第 2 次及之后**画质劣化。parity 现共用 `_tensor_storage_ok`。
-- 发布说明（①问题 / ②文件名 / ③代码全文 / ④含义）：[v3.3.4](v3.3.4.md) · [EN Release](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.4)
+- 详情见 [Release Notes v3.3.4](v3.3.4.md)。
 
 ## Version 3.3.3
 
