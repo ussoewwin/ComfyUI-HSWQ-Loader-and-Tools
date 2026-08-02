@@ -57,7 +57,8 @@ _LORA_KIND_LOG_MAX = 4
 # v5: Conv2d twin — arm flag + clear Params; after set_weight keep Params=False
 #     (noise was requant restoring Params while parity still rotated).
 # v6: per-kind LoRA bake counters + EVIDENCE log (int8_protect must be visible).
-_NVFP4_LORA_BAKE_VER = 6
+# v7: pass-delta EVIDENCE only (no stale OK spam on empty re-bake / VAE load).
+_NVFP4_LORA_BAKE_VER = 7
 
 
 def reset_nvfp4_lora_log_counters() -> None:
@@ -93,23 +94,89 @@ def nvfp4_lora_bake_counters() -> dict:
     }
 
 
-def log_nvfp4_lora_bake_evidence(tag: str = "") -> None:
-    """One unmistakable console line: INT8 protect LoRA bake did unrotate/re-rotate."""
-    c = nvfp4_lora_bake_counters()
-    i8c = c["convert_unrotate_int8_protect"]
-    i8s = c["set_rerotate_int8_protect"]
-    nvc = c["convert_unrotate_nvfp4"]
-    nvs = c["set_rerotate_nvfp4"]
-    ok = i8c > 0 and i8s > 0 and i8c == i8s
-    verdict = "INT8_PROTECT_LORA_BAKE_OK" if ok else "INT8_PROTECT_LORA_BAKE_MISSING"
-    suffix = f" ({tag})" if tag else ""
-    msg = (
-        f"[HSWQ ConvRot LoRA] EVIDENCE{suffix}: {verdict} "
-        f"int8_protect convert_unrotate={i8c} set_rerotate={i8s} | "
-        f"nvfp4 convert_unrotate={nvc} set_rerotate={nvs}"
+def snapshot_nvfp4_lora_bake_counters() -> dict:
+    """Copy of totals for pass-delta EVIDENCE (before bake → after bake)."""
+    return dict(nvfp4_lora_bake_counters())
+
+
+def _counter_delta(before: dict | None, after: dict | None) -> dict:
+    b = before or {}
+    a = after or nvfp4_lora_bake_counters()
+    keys = (
+        "convert_unrotate_nvfp4",
+        "convert_unrotate_int8_protect",
+        "set_rerotate_nvfp4",
+        "set_rerotate_int8_protect",
     )
+    return {k: int(a.get(k, 0)) - int(b.get(k, 0)) for k in keys}
+
+
+def log_nvfp4_lora_bake_evidence(
+    tag: str = "",
+    *,
+    before: dict | None = None,
+    nvfp4_baked: int = 0,
+    int8_baked: int = 0,
+    sample_int8_keys: list | None = None,
+    force: bool = False,
+) -> str | None:
+    """Emit pass-scoped EVIDENCE only when this bake pass actually ran hooks.
+
+    Returns the message if emitted, else None (silent skip for empty re-bake).
+    """
+    after = nvfp4_lora_bake_counters()
+    d = _counter_delta(before, after)
+    i8c = d["convert_unrotate_int8_protect"]
+    i8s = d["set_rerotate_int8_protect"]
+    nvc = d["convert_unrotate_nvfp4"]
+    nvs = d["set_rerotate_nvfp4"]
+    this_pass_hooks = (i8c + i8s + nvc + nvs) > 0
+    this_pass_layer = (int(nvfp4_baked) + int(int8_baked)) > 0
+    if not force and not this_pass_hooks and not this_pass_layer:
+        return None
+
+    # Cross-check: hook deltas vs layer bake counts for this pass.
+    nv_match = nvc == nvs == int(nvfp4_baked)
+    i8_match = i8c == i8s == int(int8_baked)
+    if int(int8_baked) > 0 and i8_match and i8c > 0:
+        verdict = "INT8_PROTECT_LORA_BAKE_OK"
+    elif int(int8_baked) > 0 and not i8_match:
+        verdict = "INT8_PROTECT_LORA_BAKE_MISMATCH"
+    elif int(int8_baked) == 0 and i8c == 0:
+        verdict = "INT8_PROTECT_LORA_BAKE_N/A"
+    else:
+        verdict = "INT8_PROTECT_LORA_BAKE_MISSING"
+
+    if int(nvfp4_baked) > 0 and not nv_match:
+        nv_verdict = "NVFP4_MISMATCH"
+    elif int(nvfp4_baked) > 0 and nv_match:
+        nv_verdict = "NVFP4_OK"
+    else:
+        nv_verdict = "NVFP4_N/A"
+
+    suffix = f" ({tag})" if tag else ""
+    samples = ""
+    if sample_int8_keys:
+        shown = ", ".join(str(k) for k in sample_int8_keys[:3])
+        samples = f" sample_int8_keys=[{shown}]"
+    msg = (
+        f"[HSWQ ConvRot LoRA] EVIDENCE{suffix}: {verdict} {nv_verdict} "
+        f"this_pass int8_protect convert_unrotate={i8c} set_rerotate={i8s} "
+        f"int8_baked={int(int8_baked)} | "
+        f"nvfp4 convert_unrotate={nvc} set_rerotate={nvs} "
+        f"nvfp4_baked={int(nvfp4_baked)} | "
+        f"session_total int8_c/s="
+        f"{after['convert_unrotate_int8_protect']}/"
+        f"{after['set_rerotate_int8_protect']} "
+        f"nv_c/s="
+        f"{after['convert_unrotate_nvfp4']}/"
+        f"{after['set_rerotate_nvfp4']}"
+        f"{samples}"
+    )
+    # Single emit path (caller may also _console — prefer logger+print once here).
     logger.info(msg)
     print(msg, flush=True)
+    return msg
 
 
 def _clear_int8_qt_params_convrot(module) -> bool:

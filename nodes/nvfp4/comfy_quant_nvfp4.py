@@ -30,6 +30,7 @@ from .nvfp4_forward import (
     nvfp4_lora_bake_counters,
     reset_nvfp4_forward_stats,
     reset_nvfp4_lora_log_counters,
+    snapshot_nvfp4_lora_bake_counters,
 )
 from .nvfp4_load import load_nvfp4_linear_module, peek_nvfp4_conf
 
@@ -51,6 +52,7 @@ __all__ = [
     "nvfp4_forward_stats",
     "nvfp4_lora_bake_counters",
     "log_nvfp4_lora_bake_evidence",
+    "snapshot_nvfp4_lora_bake_counters",
     "reset_nvfp4_forward_stats",
     "reset_nvfp4_lora_log_counters",
 ]

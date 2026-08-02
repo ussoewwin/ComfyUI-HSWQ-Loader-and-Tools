@@ -27,7 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_BAKE_HOOK_VER = 5
+_BAKE_HOOK_VER = 6
 _STATUS_LOGS = 0
 _STATUS_LOG_MAX = 24
 _ENTER_LOGS = 0
@@ -240,10 +240,12 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
                 params = getattr(qt, "_params", None) if qt is not None else None
                 params_convrot = bool(getattr(params, "convrot", False)) if params else False
                 _console(
-                    f"[HSWQ ZI NVFP4 LoRA] skip_not_nvfp4_convrot sample "
+                    f"[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample "
                     f"#{_SKIP_SAMPLE_LOGS}: {key} layout={_qt_layout_name(qt)!r} "
                     f"nvfp4_convrot={getattr(module, '_hswq_nvfp4_convrot', False)} "
-                    f"params_convrot={params_convrot}"
+                    f"int8_convrot={getattr(module, '_hswq_int8_convrot', False)} "
+                    f"params_convrot={params_convrot} "
+                    f"(not a failure — baked in INT8 rem pass)"
                 )
             continue
         weight, set_func, _convert_func = mp.get_key_weight(patcher.model, key)
@@ -287,6 +289,7 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         "skipped_no_set": 0,
         "skipped_not_qt": 0,
         "cleared_already": 0,
+        "sample_int8_keys": [],
     }
     if not getattr(patcher, "patches", None):
         return stats
@@ -344,6 +347,12 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         )
         if kinds.get(module_path) == "int8":
             stats["baked_int8"] += n
+            if len(stats["sample_int8_keys"]) < 3:
+                for _pk, full_key in keys_to_bake:
+                    if full_key not in stats["sample_int8_keys"]:
+                        stats["sample_int8_keys"].append(full_key)
+                    if len(stats["sample_int8_keys"]) >= 3:
+                        break
         else:
             stats["baked_other_qt"] += n
 
@@ -355,39 +364,50 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
     return stats
 
 
-def _dump_bake_status(nv_stats: dict, rem_stats: dict, patcher, reason: str) -> None:
+def _dump_bake_status(
+    nv_stats: dict,
+    rem_stats: dict,
+    patcher,
+    reason: str,
+    counters_before: dict | None = None,
+) -> None:
     global _STATUS_LOGS
+    nv_n = int(nv_stats.get("baked_nvfp4", 0) or 0)
+    i8 = int(rem_stats.get("baked_int8", 0) or 0)
+    # Empty re-bake / VAE: do not spam status or stale EVIDENCE.
+    if nv_n == 0 and i8 == 0 and int(rem_stats.get("baked_other_qt", 0) or 0) == 0:
+        return
     if _STATUS_LOGS >= _STATUS_LOG_MAX:
         return
     _STATUS_LOGS += 1
     left = len(getattr(patcher, "patches", None) or {})
-    i8 = int(rem_stats.get("baked_int8", 0) or 0)
     skip_i8_in_nv_pass = int(nv_stats.get("skipped_not_convrot", 0) or 0)
+    uuid = getattr(patcher, "patches_uuid", None)
+    uuid_s = f"{uuid}"[:8] if uuid is not None else "-"
     _console(
         "[HSWQ ZI NVFP4 LoRA] Dynamic.load bake "
         f"#{_STATUS_LOGS} ({reason}): "
-        f"nvfp4_baked={nv_stats.get('baked_nvfp4', 0)} "
+        f"nvfp4_baked={nv_n} "
         f"int8_baked={i8} "
         f"other_qt_baked={rem_stats.get('baked_other_qt', 0)} "
         f"nv_candidates={nv_stats.get('candidates', 0)} "
         f"rem_candidates={rem_stats.get('candidates', 0)} "
         f"nv_pass_skip_int8_rem={skip_i8_in_nv_pass} "
         f"(INT8 rem baked separately as int8_baked) "
-        f"patches_left={left}"
+        f"patches_left={left} patches_uuid={uuid_s}"
     )
-    # Unmistakable proof that INT8 protect convert/set Hadamard path ran.
     try:
         from ..nvfp4.nvfp4_forward import log_nvfp4_lora_bake_evidence
 
-        log_nvfp4_lora_bake_evidence(tag=f"bake#{_STATUS_LOGS}/{reason}")
+        log_nvfp4_lora_bake_evidence(
+            tag=f"bake#{_STATUS_LOGS}/{reason}",
+            before=counters_before,
+            nvfp4_baked=nv_n,
+            int8_baked=i8,
+            sample_int8_keys=list(rem_stats.get("sample_int8_keys") or []),
+        )
     except Exception as e:
         _console(f"[HSWQ ConvRot LoRA] EVIDENCE log failed: {e}")
-    if i8 > 0:
-        _console(
-            f"[HSWQ ConvRot LoRA] EVIDENCE int8_protect layers flagged_baked={i8} "
-            f"— look for convert_weight/set_weight lines with (int8_protect) above, "
-            f"and EVIDENCE INT8_PROTECT_LORA_BAKE_OK line"
-        )
     if left > 0:
         sample = list((getattr(patcher, "patches", None) or {}).keys())[:4]
         _console(
@@ -433,11 +453,19 @@ def run_zimage_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str =
         return False
     if device_to is None:
         device_to = getattr(patcher, "load_device", None)
+    try:
+        from ..nvfp4.nvfp4_forward import snapshot_nvfp4_lora_bake_counters
+
+        counters_before = snapshot_nvfp4_lora_bake_counters()
+    except Exception:
+        counters_before = None
     nv_stats = bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to=device_to)
     rem_stats = bake_remaining_quant_patches_on_dynamic_patcher(
         patcher, device_to=device_to
     )
-    _dump_bake_status(nv_stats, rem_stats, patcher, reason=reason)
+    _dump_bake_status(
+        nv_stats, rem_stats, patcher, reason=reason, counters_before=counters_before
+    )
     return True
 
 
