@@ -27,7 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_BAKE_HOOK_VER = 6
+_BAKE_HOOK_VER = 7
 _STATUS_LOGS = 0
 _STATUS_LOG_MAX = 24
 _ENTER_LOGS = 0
@@ -200,6 +200,7 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         "skipped_not_convrot": 0,
         "cleared_already": 0,
         "unresolved": 0,
+        "sample_nvfp4_keys": [],
     }
     if not getattr(patcher, "patches", None):
         return stats
@@ -265,9 +266,16 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         modules[module_path] = module
 
     for module_path, keys_to_bake in by_module.items():
-        stats["baked_nvfp4"] += _bake_keys_on_module(
+        n = _bake_keys_on_module(
             patcher, modules[module_path], keys_to_bake, device_to, already
         )
+        stats["baked_nvfp4"] += n
+        if n > 0 and len(stats["sample_nvfp4_keys"]) < 3:
+            for _pk, full_key in keys_to_bake:
+                if full_key not in stats["sample_nvfp4_keys"]:
+                    stats["sample_nvfp4_keys"].append(full_key)
+                if len(stats["sample_nvfp4_keys"]) >= 3:
+                    break
 
     if stats["baked_nvfp4"] > 0:
         patcher.model._hswq_zi_nvfp4_baked_uuid = uuid
@@ -404,6 +412,7 @@ def _dump_bake_status(
             before=counters_before,
             nvfp4_baked=nv_n,
             int8_baked=i8,
+            sample_nvfp4_keys=list(nv_stats.get("sample_nvfp4_keys") or []),
             sample_int8_keys=list(rem_stats.get("sample_int8_keys") or []),
         )
     except Exception as e:

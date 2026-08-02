@@ -58,7 +58,8 @@ _LORA_KIND_LOG_MAX = 4
 #     (noise was requant restoring Params while parity still rotated).
 # v6: per-kind LoRA bake counters + EVIDENCE log (int8_protect must be visible).
 # v7: pass-delta EVIDENCE only (no stale OK spam on empty re-bake / VAE load).
-_NVFP4_LORA_BAKE_VER = 7
+# v8: peer NVFP4_LORA_BAKE_* verdict + sample_nvfp4_keys (same weight as INT8).
+_NVFP4_LORA_BAKE_VER = 8
 
 
 def reset_nvfp4_lora_log_counters() -> None:
@@ -111,17 +112,38 @@ def _counter_delta(before: dict | None, after: dict | None) -> dict:
     return {k: int(a.get(k, 0)) - int(b.get(k, 0)) for k in keys}
 
 
+def _lora_bake_side_verdict(prefix: str, baked: int, convert_n: int, set_n: int) -> str:
+    """Peer verdict for one ConvRot kind (NVFP4 or INT8 protect)."""
+    match = convert_n == set_n == int(baked)
+    if int(baked) > 0 and match and convert_n > 0:
+        return f"{prefix}_OK"
+    if int(baked) > 0 and not match:
+        return f"{prefix}_MISMATCH"
+    if int(baked) == 0 and convert_n == 0:
+        return f"{prefix}_N/A"
+    return f"{prefix}_MISSING"
+
+
+def _fmt_sample_keys(label: str, keys: list | None) -> str:
+    if not keys:
+        return ""
+    shown = ", ".join(str(k) for k in keys[:3])
+    return f" {label}=[{shown}]"
+
+
 def log_nvfp4_lora_bake_evidence(
     tag: str = "",
     *,
     before: dict | None = None,
     nvfp4_baked: int = 0,
     int8_baked: int = 0,
+    sample_nvfp4_keys: list | None = None,
     sample_int8_keys: list | None = None,
     force: bool = False,
 ) -> str | None:
     """Emit pass-scoped EVIDENCE only when this bake pass actually ran hooks.
 
+    NVFP4 and INT8 protect are peer sides (same verdict shape + key samples).
     Returns the message if emitted, else None (silent skip for empty re-bake).
     """
     after = nvfp4_lora_bake_counters()
@@ -135,43 +157,29 @@ def log_nvfp4_lora_bake_evidence(
     if not force and not this_pass_hooks and not this_pass_layer:
         return None
 
-    # Cross-check: hook deltas vs layer bake counts for this pass.
-    nv_match = nvc == nvs == int(nvfp4_baked)
-    i8_match = i8c == i8s == int(int8_baked)
-    if int(int8_baked) > 0 and i8_match and i8c > 0:
-        verdict = "INT8_PROTECT_LORA_BAKE_OK"
-    elif int(int8_baked) > 0 and not i8_match:
-        verdict = "INT8_PROTECT_LORA_BAKE_MISMATCH"
-    elif int(int8_baked) == 0 and i8c == 0:
-        verdict = "INT8_PROTECT_LORA_BAKE_N/A"
-    else:
-        verdict = "INT8_PROTECT_LORA_BAKE_MISSING"
-
-    if int(nvfp4_baked) > 0 and not nv_match:
-        nv_verdict = "NVFP4_MISMATCH"
-    elif int(nvfp4_baked) > 0 and nv_match:
-        nv_verdict = "NVFP4_OK"
-    else:
-        nv_verdict = "NVFP4_N/A"
+    nv_verdict = _lora_bake_side_verdict(
+        "NVFP4_LORA_BAKE", int(nvfp4_baked), nvc, nvs
+    )
+    i8_verdict = _lora_bake_side_verdict(
+        "INT8_PROTECT_LORA_BAKE", int(int8_baked), i8c, i8s
+    )
 
     suffix = f" ({tag})" if tag else ""
-    samples = ""
-    if sample_int8_keys:
-        shown = ", ".join(str(k) for k in sample_int8_keys[:3])
-        samples = f" sample_int8_keys=[{shown}]"
+    nv_samples = _fmt_sample_keys("sample_nvfp4_keys", sample_nvfp4_keys)
+    i8_samples = _fmt_sample_keys("sample_int8_keys", sample_int8_keys)
     msg = (
-        f"[HSWQ ConvRot LoRA] EVIDENCE{suffix}: {verdict} {nv_verdict} "
-        f"this_pass int8_protect convert_unrotate={i8c} set_rerotate={i8s} "
-        f"int8_baked={int(int8_baked)} | "
+        f"[HSWQ ConvRot LoRA] EVIDENCE{suffix}: {nv_verdict} {i8_verdict} "
+        f"this_pass | "
         f"nvfp4 convert_unrotate={nvc} set_rerotate={nvs} "
-        f"nvfp4_baked={int(nvfp4_baked)} | "
-        f"session_total int8_c/s="
-        f"{after['convert_unrotate_int8_protect']}/"
-        f"{after['set_rerotate_int8_protect']} "
-        f"nv_c/s="
+        f"nvfp4_baked={int(nvfp4_baked)}{nv_samples} | "
+        f"int8_protect convert_unrotate={i8c} set_rerotate={i8s} "
+        f"int8_baked={int(int8_baked)}{i8_samples} | "
+        f"session_total nv_c/s="
         f"{after['convert_unrotate_nvfp4']}/"
-        f"{after['set_rerotate_nvfp4']}"
-        f"{samples}"
+        f"{after['set_rerotate_nvfp4']} "
+        f"int8_c/s="
+        f"{after['convert_unrotate_int8_protect']}/"
+        f"{after['set_rerotate_int8_protect']}"
     )
     # Single emit path (caller may also _console — prefer logger+print once here).
     logger.info(msg)
