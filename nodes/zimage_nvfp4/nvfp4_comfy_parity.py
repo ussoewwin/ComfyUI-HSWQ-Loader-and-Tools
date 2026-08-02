@@ -419,18 +419,23 @@ def _is_int8_tensorwise_convrot_conf(conf) -> bool:
 
 
 def _make_convrot_parity_forward(stock_forward):
-    """Stock MixedPrecision forward + online act rotate for NVFP4 ConvRot only.
+    """Stock MixedPrecision forward + online act rotate for ConvRot Linears.
 
-    INT8 protect ConvRot keeps kitchen ``Params.convrot`` / ``int8_linear``.
-    Never rotate here for ``_hswq_int8_convrot`` — that double-rotates with
-    kitchen and destroys the image (yellow/green noise).
+    NVFP4: ``_hswq_nvfp4_convrot`` (Params.convrot cleared at load).
+    INT8 protect: ``_hswq_int8_convrot`` (Params.convrot cleared at load —
+    same as Conv2d). Kitchen must **not** see Params.convrot=True or
+    int8_linear double-rotates with this path.
     """
     from ..nvfp4.nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
         nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
-        if nv:
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+        i8 = bool(getattr(self, "_hswq_int8_convrot", False))
+        if nv or i8:
+            if nv:
+                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+            else:
+                gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
             h = getattr(self, "_hswq_nvfp4_parity_H", None)
             need_rebuild = True
             if h is not None:
@@ -502,18 +507,63 @@ def _arm_convrot_after_stock_load(module, conf) -> None:
     # Do not set _hswq_nvfp4 (TC full-forward arm).
 
 
-def _arm_int8_protect_convrot_after_stock_load(module, conf) -> None:
-    """Do **not** arm parity act-rotate for INT8 protect Linear.
+def _clear_int8_qt_params_convrot(module) -> bool:
+    """Force ``Params.convrot=False`` on INT8 QT weight (Conv2d-style).
 
-    Hybrid packs keep kitchen ``Params.convrot`` + ``int8_linear`` for protect
-    layers. Setting ``_hswq_int8_convrot`` and clearing ``Params.convrot`` made
-    parity rotate while bake/requant restored ``Params.convrot`` → double
-    Hadamard on activations → yellow/green noise.
-
-    LoRA bake unrotate/re-rotate is handled in ``nvfp4_forward`` via
-    bake-only detection of ``Params.convrot`` (no forward flag).
+    ``layout_params`` on Parameter is unreliable for QuantizedTensor; clear
+    ``qt._params`` via dataclasses.replace. Leaving Params.convrot=True while
+    ``_hswq_int8_convrot`` is set double-rotates acts (parity + kitchen).
     """
-    return
+    import dataclasses
+
+    try:
+        from comfy.quant_ops import QuantizedTensor
+    except ImportError:
+        return False
+    w = getattr(module, "weight", None)
+    qt = w if isinstance(w, QuantizedTensor) else getattr(w, "data", None)
+    if qt is None or not isinstance(qt, QuantizedTensor):
+        return False
+    params = getattr(qt, "_params", None)
+    if params is None or not bool(getattr(params, "convrot", False)):
+        return False
+    new_params = dataclasses.replace(params, convrot=False)
+    try:
+        object.__setattr__(qt, "_params", new_params)
+        return True
+    except Exception:
+        pass
+    try:
+        qt._params = new_params
+        return True
+    except Exception:
+        return False
+
+
+def _arm_int8_protect_convrot_after_stock_load(module, conf) -> None:
+    """Arm INT8 protect ConvRot Linear like Conv2d: flag + clear Params.convrot.
+
+    Kitchen ``dequantize_int8_convrot_weight`` already unrotates when
+    Params.convrot=True — LoRA bake must see Params=False so convert gets
+    rotated-basis float and unrotates once. Online act rotate is parity
+    (``_hswq_int8_convrot``). Requant must keep Params.convrot=False
+    (see ``nvfp4_forward`` set_weight).
+    """
+    global _LOAD_INT8_CONVROT_ARMED
+    from ..nvfp4.nvfp4_conf import int8_convrot_flags_from_conf
+
+    enabled, gs = int8_convrot_flags_from_conf(conf)
+    if not enabled:
+        return
+    module._hswq_int8_convrot = True
+    module._hswq_int8_convrot_groupsize = int(gs)
+    cleared = _clear_int8_qt_params_convrot(module)
+    _LOAD_INT8_CONVROT_ARMED += 1
+    if _LOAD_INT8_CONVROT_ARMED <= 4 or _LOAD_INT8_CONVROT_ARMED % 20 == 0:
+        _console(
+            f"[HSWQ NVFP4][diag] arm INT8 protect ConvRot "
+            f"#{_LOAD_INT8_CONVROT_ARMED} gs={gs} params_cleared={cleared}"
+        )
 
 
 

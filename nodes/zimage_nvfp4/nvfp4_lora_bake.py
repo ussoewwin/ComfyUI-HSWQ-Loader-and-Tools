@@ -277,8 +277,8 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
     """Bake leftover QT LoRA (ConvRot INT8 protect etc.) that NVFP4 pass skipped.
 
     Hybrid packs: NVFP4 ConvRot is baked first; INT8 protect ConvRot Linears
-    keep kitchen ``Params.convrot`` and bake via ``Linear.convert_weight`` /
-    ``set_weight`` bake-only unrotate/re-rotate (``_NVFP4_LORA_BAKE_VER`` >= 4).
+    use ``_hswq_int8_convrot`` + cleared Params (Conv2d twin) via
+    ``Linear.convert_weight`` / ``set_weight`` (``_NVFP4_LORA_BAKE_VER`` >= 5).
     """
     stats = {
         "baked_int8": 0,

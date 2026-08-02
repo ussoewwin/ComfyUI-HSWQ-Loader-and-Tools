@@ -78,8 +78,8 @@ def int8_convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
     """Return (enabled, groupsize) for INT8 protect ConvRot comfy_quant.
 
     Do **not** reuse ``convrot_flags_from_conf`` — that helper is NVFP4-only and
-    always returns False for ``int8_tensorwise``. Used for conf probes / docs;
-    LoRA bake detects INT8 ConvRot via ``Params.convrot`` (bake-only sticky).
+    always returns False for ``int8_tensorwise``. Used by load arm to set
+    ``_hswq_int8_convrot`` and clear kitchen ``Params.convrot`` (Conv2d twin).
     """
     if not is_int8_tensorwise_conf(conf):
         return False, 256
