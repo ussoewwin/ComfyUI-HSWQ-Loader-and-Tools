@@ -24,8 +24,10 @@ from .nvfp4_conf import (
 )
 from .nvfp4_forward import (
     attach_nvfp4_linear_lora_bake,
+    log_nvfp4_lora_bake_evidence,
     make_nvfp4_linear_forward,
     nvfp4_forward_stats,
+    nvfp4_lora_bake_counters,
     reset_nvfp4_forward_stats,
     reset_nvfp4_lora_log_counters,
 )
@@ -47,6 +49,8 @@ __all__ = [
     "load_checkpoint_sdxl_nvfp4_weight_dtype",
     "logical_linear_in_features",
     "nvfp4_forward_stats",
+    "nvfp4_lora_bake_counters",
+    "log_nvfp4_lora_bake_evidence",
     "reset_nvfp4_forward_stats",
     "reset_nvfp4_lora_log_counters",
 ]

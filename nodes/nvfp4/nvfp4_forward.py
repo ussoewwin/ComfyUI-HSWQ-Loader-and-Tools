@@ -41,9 +41,13 @@ logger = logging.getLogger(__name__)
 # Counters for bench / diagnostics (reset per run if needed)
 _TC_HITS = 0
 _DEQUANT_FALLBACKS = 0
-_LORA_CONVERT_LOGS = 0
-_LORA_SET_LOGS = 0
-_LORA_LOG_MAX = 8
+# Per-kind totals (always incremented) + per-kind sample log caps.
+# Shared max of 8 hid all int8_protect samples (nvfp4 filled the quota first).
+_LORA_CONVERT_TOTAL = {"nvfp4": 0, "int8_protect": 0}
+_LORA_SET_TOTAL = {"nvfp4": 0, "int8_protect": 0}
+_LORA_CONVERT_LOGGED = {"nvfp4": 0, "int8_protect": 0}
+_LORA_SET_LOGGED = {"nvfp4": 0, "int8_protect": 0}
+_LORA_KIND_LOG_MAX = 4
 # Bump when convert_weight / set_weight ConvRot LoRA bake changes.
 # v2: also unrotate/re-rotate INT8 protect ConvRot (``_hswq_int8_convrot``).
 # Hybrid ZI packs = ConvRot NVFP4 + ConvRot INT8 protect — both need bake basis.
@@ -52,19 +56,60 @@ _LORA_LOG_MAX = 8
 #     unrotates when Params.convrot=True → double unrotate → LoRA dead.
 # v5: Conv2d twin — arm flag + clear Params; after set_weight keep Params=False
 #     (noise was requant restoring Params while parity still rotated).
-_NVFP4_LORA_BAKE_VER = 5
+# v6: per-kind LoRA bake counters + EVIDENCE log (int8_protect must be visible).
+_NVFP4_LORA_BAKE_VER = 6
 
 
 def reset_nvfp4_lora_log_counters() -> None:
-    global _LORA_CONVERT_LOGS, _LORA_SET_LOGS
-    _LORA_CONVERT_LOGS = 0
-    _LORA_SET_LOGS = 0
+    for d in (
+        _LORA_CONVERT_TOTAL,
+        _LORA_SET_TOTAL,
+        _LORA_CONVERT_LOGGED,
+        _LORA_SET_LOGGED,
+    ):
+        for k in d:
+            d[k] = 0
 
 
 def reset_nvfp4_forward_stats() -> None:
     global _TC_HITS, _DEQUANT_FALLBACKS
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
+
+
+def _lora_bake_kind(module) -> str:
+    if getattr(module, "_hswq_nvfp4_convrot", False):
+        return "nvfp4"
+    return "int8_protect"
+
+
+def nvfp4_lora_bake_counters() -> dict:
+    """Totals for convert unrotate / set re-rotate by ConvRot kind."""
+    return {
+        "convert_unrotate_nvfp4": int(_LORA_CONVERT_TOTAL.get("nvfp4", 0)),
+        "convert_unrotate_int8_protect": int(_LORA_CONVERT_TOTAL.get("int8_protect", 0)),
+        "set_rerotate_nvfp4": int(_LORA_SET_TOTAL.get("nvfp4", 0)),
+        "set_rerotate_int8_protect": int(_LORA_SET_TOTAL.get("int8_protect", 0)),
+    }
+
+
+def log_nvfp4_lora_bake_evidence(tag: str = "") -> None:
+    """One unmistakable console line: INT8 protect LoRA bake did unrotate/re-rotate."""
+    c = nvfp4_lora_bake_counters()
+    i8c = c["convert_unrotate_int8_protect"]
+    i8s = c["set_rerotate_int8_protect"]
+    nvc = c["convert_unrotate_nvfp4"]
+    nvs = c["set_rerotate_nvfp4"]
+    ok = i8c > 0 and i8s > 0 and i8c == i8s
+    verdict = "INT8_PROTECT_LORA_BAKE_OK" if ok else "INT8_PROTECT_LORA_BAKE_MISSING"
+    suffix = f" ({tag})" if tag else ""
+    msg = (
+        f"[HSWQ ConvRot LoRA] EVIDENCE{suffix}: {verdict} "
+        f"int8_protect convert_unrotate={i8c} set_rerotate={i8s} | "
+        f"nvfp4 convert_unrotate={nvc} set_rerotate={nvs}"
+    )
+    logger.info(msg)
+    print(msg, flush=True)
 
 
 def _clear_int8_qt_params_convrot(module) -> bool:
@@ -443,7 +488,6 @@ def make_nvfp4_linear_convert_weight(stock_convert_weight):
     from comfy.quant_ops import QuantizedTensor
 
     def convert_weight(self, weight, inplace=False, **kwargs):
-        global _LORA_CONVERT_LOGS
         # Arm / clear Params before dequant (Conv2d twin).
         gs = _linear_convrot_lora_groupsize(self)
         if callable(stock_convert_weight):
@@ -457,24 +501,21 @@ def make_nvfp4_linear_convert_weight(stock_convert_weight):
         if gs is not None and out is not None and getattr(out, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             out = unrotate_weight_linear(out, h, gs)
-        if _LORA_CONVERT_LOGS < _LORA_LOG_MAX and gs is not None:
-            _LORA_CONVERT_LOGS += 1
-            kind = (
-                "nvfp4"
-                if getattr(self, "_hswq_nvfp4_convrot", False)
-                else "int8_protect"
-            )
-            logger.info(
-                "[HSWQ ConvRot LoRA] Linear.convert_weight #%s (%s): unrotate "
-                "gs=%s in=%s/%s -> out=%s/%s",
-                _LORA_CONVERT_LOGS,
-                kind,
-                gs,
-                type(weight).__name__,
-                getattr(weight, "dtype", None),
-                type(out).__name__,
-                getattr(out, "dtype", None),
-            )
+            kind = _lora_bake_kind(self)
+            _LORA_CONVERT_TOTAL[kind] = int(_LORA_CONVERT_TOTAL.get(kind, 0)) + 1
+            if int(_LORA_CONVERT_LOGGED.get(kind, 0)) < _LORA_KIND_LOG_MAX:
+                _LORA_CONVERT_LOGGED[kind] = int(_LORA_CONVERT_LOGGED.get(kind, 0)) + 1
+                logger.info(
+                    "[HSWQ ConvRot LoRA] Linear.convert_weight #%s (%s): unrotate "
+                    "gs=%s in=%s/%s -> out=%s/%s",
+                    _LORA_CONVERT_TOTAL[kind],
+                    kind,
+                    gs,
+                    type(weight).__name__,
+                    getattr(weight, "dtype", None),
+                    type(out).__name__,
+                    getattr(out, "dtype", None),
+                )
         return out
 
     convert_weight._hswq_nvfp4_lora_bake_ver = _NVFP4_LORA_BAKE_VER  # type: ignore[attr-defined]
@@ -498,22 +539,18 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
         return_weight=False,
         **kwargs,
     ):
-        global _LORA_SET_LOGS
         gs = _linear_convrot_lora_groupsize(self)
         if gs is not None and getattr(weight, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             weight = rotate_weight_linear(weight, h, gs)
-            if _LORA_SET_LOGS < _LORA_LOG_MAX:
-                _LORA_SET_LOGS += 1
-                kind = (
-                    "nvfp4"
-                    if getattr(self, "_hswq_nvfp4_convrot", False)
-                    else "int8_protect"
-                )
+            kind = _lora_bake_kind(self)
+            _LORA_SET_TOTAL[kind] = int(_LORA_SET_TOTAL.get(kind, 0)) + 1
+            if int(_LORA_SET_LOGGED.get(kind, 0)) < _LORA_KIND_LOG_MAX:
+                _LORA_SET_LOGGED[kind] = int(_LORA_SET_LOGGED.get(kind, 0)) + 1
                 logger.info(
                     "[HSWQ ConvRot LoRA] Linear.set_weight #%s (%s): re-rotate "
                     "gs=%s shape=%s layout=%s",
-                    _LORA_SET_LOGS,
+                    _LORA_SET_TOTAL[kind],
                     kind,
                     gs,
                     tuple(weight.shape) if hasattr(weight, "shape") else "?",

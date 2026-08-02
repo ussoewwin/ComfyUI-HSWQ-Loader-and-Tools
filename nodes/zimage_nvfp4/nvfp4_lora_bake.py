@@ -27,7 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_BAKE_HOOK_VER = 4
+_BAKE_HOOK_VER = 5
 _STATUS_LOGS = 0
 _STATUS_LOG_MAX = 24
 _ENTER_LOGS = 0
@@ -361,17 +361,33 @@ def _dump_bake_status(nv_stats: dict, rem_stats: dict, patcher, reason: str) -> 
         return
     _STATUS_LOGS += 1
     left = len(getattr(patcher, "patches", None) or {})
+    i8 = int(rem_stats.get("baked_int8", 0) or 0)
+    skip_i8_in_nv_pass = int(nv_stats.get("skipped_not_convrot", 0) or 0)
     _console(
         "[HSWQ ZI NVFP4 LoRA] Dynamic.load bake "
         f"#{_STATUS_LOGS} ({reason}): "
         f"nvfp4_baked={nv_stats.get('baked_nvfp4', 0)} "
-        f"int8_baked={rem_stats.get('baked_int8', 0)} "
+        f"int8_baked={i8} "
         f"other_qt_baked={rem_stats.get('baked_other_qt', 0)} "
         f"nv_candidates={nv_stats.get('candidates', 0)} "
         f"rem_candidates={rem_stats.get('candidates', 0)} "
-        f"skip_not_convrot={nv_stats.get('skipped_not_convrot', 0)} "
+        f"nv_pass_skip_int8_rem={skip_i8_in_nv_pass} "
+        f"(INT8 rem baked separately as int8_baked) "
         f"patches_left={left}"
     )
+    # Unmistakable proof that INT8 protect convert/set Hadamard path ran.
+    try:
+        from ..nvfp4.nvfp4_forward import log_nvfp4_lora_bake_evidence
+
+        log_nvfp4_lora_bake_evidence(tag=f"bake#{_STATUS_LOGS}/{reason}")
+    except Exception as e:
+        _console(f"[HSWQ ConvRot LoRA] EVIDENCE log failed: {e}")
+    if i8 > 0:
+        _console(
+            f"[HSWQ ConvRot LoRA] EVIDENCE int8_protect layers flagged_baked={i8} "
+            f"— look for convert_weight/set_weight lines with (int8_protect) above, "
+            f"and EVIDENCE INT8_PROTECT_LORA_BAKE_OK line"
+        )
     if left > 0:
         sample = list((getattr(patcher, "patches", None) or {}).keys())[:4]
         _console(
