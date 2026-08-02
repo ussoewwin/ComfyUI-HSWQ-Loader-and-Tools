@@ -237,11 +237,13 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
                 w, _, _ = mp.get_key_weight(patcher.model, key)
                 qt = _qt_payload(w, QuantizedTensor)
                 _SKIP_SAMPLE_LOGS += 1
+                params = getattr(qt, "_params", None) if qt is not None else None
+                params_convrot = bool(getattr(params, "convrot", False)) if params else False
                 _console(
                     f"[HSWQ ZI NVFP4 LoRA] skip_not_nvfp4_convrot sample "
                     f"#{_SKIP_SAMPLE_LOGS}: {key} layout={_qt_layout_name(qt)!r} "
                     f"nvfp4_convrot={getattr(module, '_hswq_nvfp4_convrot', False)} "
-                    f"int8_convrot={getattr(module, '_hswq_int8_convrot', False)}"
+                    f"params_convrot={params_convrot}"
                 )
             continue
         weight, set_func, _convert_func = mp.get_key_weight(patcher.model, key)
@@ -275,9 +277,8 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
     """Bake leftover QT LoRA (ConvRot INT8 protect etc.) that NVFP4 pass skipped.
 
     Hybrid packs: NVFP4 ConvRot is baked first; INT8 protect ConvRot Linears
-    (``_hswq_int8_convrot``, Params.convrot cleared) are baked here via
-    ``Linear.convert_weight`` / ``set_weight`` which must unrotate/re-rotate
-    (see ``nodes/nvfp4/nvfp4_forward.py`` ``_NVFP4_LORA_BAKE_VER`` >= 2).
+    keep kitchen ``Params.convrot`` and bake via ``Linear.convert_weight`` /
+    ``set_weight`` bake-only unrotate/re-rotate (``_NVFP4_LORA_BAKE_VER`` >= 4).
     """
     stats = {
         "baked_int8": 0,

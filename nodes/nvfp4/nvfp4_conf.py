@@ -78,9 +78,8 @@ def int8_convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
     """Return (enabled, groupsize) for INT8 protect ConvRot comfy_quant.
 
     Do **not** reuse ``convrot_flags_from_conf`` — that helper is NVFP4-only and
-    always returns False for ``int8_tensorwise``, which previously left hybrid
-    pack protect Linears with ``_hswq_int8_convrot=False`` and LoRA bake in the
-    wrong Hadamard basis.
+    always returns False for ``int8_tensorwise``. Used for conf probes / docs;
+    LoRA bake detects INT8 ConvRot via ``Params.convrot`` (bake-only sticky).
     """
     if not is_int8_tensorwise_conf(conf):
         return False, 256

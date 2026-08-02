@@ -48,7 +48,9 @@ _LORA_LOG_MAX = 8
 # v2: also unrotate/re-rotate INT8 protect ConvRot (``_hswq_int8_convrot``).
 # Hybrid ZI packs = ConvRot NVFP4 + ConvRot INT8 protect — both need bake basis.
 # v3: bake-time fallback if load arm missed and Params.convrot still True on INT8 QT.
-_NVFP4_LORA_BAKE_VER = 3
+# v4: INT8 protect bake-only (Params.convrot); never latch forward flag / clear Params
+#     (arm+parity caused double act-rotate → noise).
+_NVFP4_LORA_BAKE_VER = 4
 
 
 def reset_nvfp4_lora_log_counters() -> None:
@@ -66,19 +68,16 @@ def reset_nvfp4_forward_stats() -> None:
 def _linear_convrot_lora_groupsize(module) -> int | None:
     """Groupsize for offline ConvRot Linear LoRA bake, or None if not ConvRot.
 
-    Hybrid Z Image packs arm either:
-      - ``_hswq_nvfp4_convrot`` (NVFP4 Linear), or
-      - ``_hswq_int8_convrot`` (INT8 protect Linear).
-    Params.convrot is cleared at load; bake must still unrotate/re-rotate.
-
-    Fallback: if arm never set ``_hswq_int8_convrot`` but the QT still has
-    ``Params.convrot`` (legacy bug: NVFP4-only ``convrot_flags_from_conf``),
-    treat as INT8 protect ConvRot and latch the module flags.
+    Hybrid Z Image packs:
+      - NVFP4: ``_hswq_nvfp4_convrot`` (Params.convrot cleared; parity rotates).
+      - INT8 protect: kitchen ``Params.convrot`` stays True — bake-only detect.
+        Do **not** set ``_hswq_int8_convrot`` or clear Params (double rotate).
     """
     if getattr(module, "_hswq_nvfp4_convrot", False):
         return int(getattr(module, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
-    if getattr(module, "_hswq_int8_convrot", False):
-        return int(getattr(module, "_hswq_int8_convrot_groupsize", 256) or 256)
+    # Bake sticky only — never a forward/parity arm.
+    if getattr(module, "_hswq_int8_convrot_bake", False):
+        return int(getattr(module, "_hswq_int8_convrot_bake_gs", 256) or 256)
     try:
         from comfy.quant_ops import QuantizedTensor
 
@@ -95,12 +94,8 @@ def _linear_convrot_lora_groupsize(module) -> int | None:
         if params is None or not bool(getattr(params, "convrot", False)):
             return None
         gs = int(getattr(params, "convrot_groupsize", 256) or 256)
-        module._hswq_int8_convrot = True
-        module._hswq_int8_convrot_groupsize = gs
-        try:
-            params.convrot = False
-        except Exception:
-            pass
+        module._hswq_int8_convrot_bake = True
+        module._hswq_int8_convrot_bake_gs = gs
         return gs
     except Exception:
         return None
@@ -466,6 +461,7 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
     ):
         global _LORA_SET_LOGS
         gs = _linear_convrot_lora_groupsize(self)
+        bake_i8 = bool(getattr(self, "_hswq_int8_convrot_bake", False))
         if gs is not None and getattr(weight, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             weight = rotate_weight_linear(weight, h, gs)
@@ -485,7 +481,7 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
                     tuple(weight.shape) if hasattr(weight, "shape") else "?",
                     getattr(self, "layout_type", None),
                 )
-        return stock_set_weight(
+        out = stock_set_weight(
             self,
             weight,
             inplace_update=inplace_update,
@@ -493,6 +489,24 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
             return_weight=return_weight,
             **kwargs,
         )
+        # Kitchen INT8 ConvRot must keep Params.convrot after requant.
+        if bake_i8:
+            try:
+                from comfy.quant_ops import QuantizedTensor
+
+                w = getattr(self, "weight", None)
+                qt = w if isinstance(w, QuantizedTensor) else getattr(w, "data", None)
+                if isinstance(qt, QuantizedTensor):
+                    params = getattr(qt, "_params", None)
+                    if params is not None and not bool(getattr(params, "convrot", False)):
+                        params.convrot = True
+                        if hasattr(params, "convrot_groupsize"):
+                            params.convrot_groupsize = int(
+                                getattr(self, "_hswq_int8_convrot_bake_gs", 256) or 256
+                            )
+            except Exception:
+                pass
+        return out
 
     set_weight._hswq_nvfp4_lora_bake_ver = _NVFP4_LORA_BAKE_VER  # type: ignore[attr-defined]
     return set_weight

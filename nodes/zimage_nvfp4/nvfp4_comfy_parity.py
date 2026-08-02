@@ -419,26 +419,18 @@ def _is_int8_tensorwise_convrot_conf(conf) -> bool:
 
 
 def _make_convrot_parity_forward(stock_forward):
-    """Stock MixedPrecision forward + online act rotate for ConvRot weights.
+    """Stock MixedPrecision forward + online act rotate for NVFP4 ConvRot only.
 
-    INT8 protect ConvRot Linear only (``_hswq_int8_convrot``). NVFP4 ConvRot
-    (``_hswq_nvfp4_convrot``) is left to the kitchen NVFP4 path; rotating
-    activations in stock forward double-rotates NVFP4 and destroys the image.
-
-    Convert stores offline ``W @ H^T``. For INT8 protect, online must apply
-    ``x @ H`` when Dynamic / dequant / ``F.linear`` would otherwise skip the
-    kitchen ``int8_linear(convrot=True)`` rotate.
+    INT8 protect ConvRot keeps kitchen ``Params.convrot`` / ``int8_linear``.
+    Never rotate here for ``_hswq_int8_convrot`` — that double-rotates with
+    kitchen and destroys the image (yellow/green noise).
     """
     from ..nvfp4.nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
         nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
-        i8 = bool(getattr(self, "_hswq_int8_convrot", False))
-        if nv or i8:
-            if nv:
-                gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
-            else:
-                gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
+        if nv:
+            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
             h = getattr(self, "_hswq_nvfp4_parity_H", None)
             need_rebuild = True
             if h is not None:
@@ -511,35 +503,18 @@ def _arm_convrot_after_stock_load(module, conf) -> None:
 
 
 def _arm_int8_protect_convrot_after_stock_load(module, conf) -> None:
-    """Arm parity act-rotate for INT8 protect Linear (offline W@H^T).
+    """Do **not** arm parity act-rotate for INT8 protect Linear.
 
-    Clears ``Params.convrot`` so kitchen QT path does not double-rotate when
-    QuantTensor still reaches ``int8_linear``. Same pattern as INT8 Conv2d
-    (``_hswq_convrot`` + cleared Params.convrot).
+    Hybrid packs keep kitchen ``Params.convrot`` + ``int8_linear`` for protect
+    layers. Setting ``_hswq_int8_convrot`` and clearing ``Params.convrot`` made
+    parity rotate while bake/requant restored ``Params.convrot`` → double
+    Hadamard on activations → yellow/green noise.
+
+    LoRA bake unrotate/re-rotate is handled in ``nvfp4_forward`` via
+    bake-only detection of ``Params.convrot`` (no forward flag).
     """
-    global _LOAD_INT8_CONVROT_ARMED
-    from ..nvfp4.nvfp4_conf import int8_convrot_flags_from_conf
+    return
 
-    enabled, gs = int8_convrot_flags_from_conf(conf)
-    if not enabled:
-        return
-    module._hswq_int8_convrot = True
-    module._hswq_int8_convrot_groupsize = int(gs)
-    try:
-        import comfy.quant_ops as quant_ops
-
-        p = getattr(module, "weight", None)
-        layout = getattr(p, "layout_params", None) if p is not None else None
-        if isinstance(layout, quant_ops.Params) and getattr(layout, "convrot", False):
-            layout.convrot = False
-    except Exception:
-        pass
-    _LOAD_INT8_CONVROT_ARMED += 1
-    if _LOAD_INT8_CONVROT_ARMED <= 4 or _LOAD_INT8_CONVROT_ARMED % 20 == 0:
-        _console(
-            f"[HSWQ NVFP4][diag] arm INT8 protect ConvRot "
-            f"#{_LOAD_INT8_CONVROT_ARMED} gs={gs}"
-        )
 
 
 def require_convrot_parity_forward() -> None:
