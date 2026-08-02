@@ -47,7 +47,8 @@ _LORA_LOG_MAX = 8
 # Bump when convert_weight / set_weight ConvRot LoRA bake changes.
 # v2: also unrotate/re-rotate INT8 protect ConvRot (``_hswq_int8_convrot``).
 # Hybrid ZI packs = ConvRot NVFP4 + ConvRot INT8 protect — both need bake basis.
-_NVFP4_LORA_BAKE_VER = 2
+# v3: bake-time fallback if load arm missed and Params.convrot still True on INT8 QT.
+_NVFP4_LORA_BAKE_VER = 3
 
 
 def reset_nvfp4_lora_log_counters() -> None:
@@ -69,12 +70,40 @@ def _linear_convrot_lora_groupsize(module) -> int | None:
       - ``_hswq_nvfp4_convrot`` (NVFP4 Linear), or
       - ``_hswq_int8_convrot`` (INT8 protect Linear).
     Params.convrot is cleared at load; bake must still unrotate/re-rotate.
+
+    Fallback: if arm never set ``_hswq_int8_convrot`` but the QT still has
+    ``Params.convrot`` (legacy bug: NVFP4-only ``convrot_flags_from_conf``),
+    treat as INT8 protect ConvRot and latch the module flags.
     """
     if getattr(module, "_hswq_nvfp4_convrot", False):
         return int(getattr(module, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
     if getattr(module, "_hswq_int8_convrot", False):
         return int(getattr(module, "_hswq_int8_convrot_groupsize", 256) or 256)
-    return None
+    try:
+        from comfy.quant_ops import QuantizedTensor
+
+        w = getattr(module, "weight", None)
+        qt = w if isinstance(w, QuantizedTensor) else getattr(w, "data", None)
+        if qt is None or not isinstance(qt, QuantizedTensor):
+            return None
+        layout_cls = getattr(qt, "_layout_cls", None) or ""
+        if isinstance(layout_cls, type):
+            layout_cls = getattr(layout_cls, "__name__", "") or ""
+        if str(layout_cls) != "TensorWiseINT8Layout":
+            return None
+        params = getattr(qt, "_params", None)
+        if params is None or not bool(getattr(params, "convrot", False)):
+            return None
+        gs = int(getattr(params, "convrot_groupsize", 256) or 256)
+        module._hswq_int8_convrot = True
+        module._hswq_int8_convrot_groupsize = gs
+        try:
+            params.convrot = False
+        except Exception:
+            pass
+        return gs
+    except Exception:
+        return None
 
 
 def nvfp4_forward_stats() -> dict:

@@ -412,14 +412,9 @@ def _ensure_single_parity_linear_forward(Lin) -> None:
 
 def _is_int8_tensorwise_convrot_conf(conf) -> bool:
     """True for INT8 protect Linear layers stamped with ConvRot offline rotate."""
-    if not isinstance(conf, dict):
-        return False
-    fmt = conf.get("format")
-    if fmt is not None and str(fmt).lower() != "int8_tensorwise":
-        return False
-    from ..nvfp4.nvfp4_conf import convrot_flags_from_conf
+    from ..nvfp4.nvfp4_conf import int8_convrot_flags_from_conf
 
-    enabled, _gs = convrot_flags_from_conf(conf)
+    enabled, _gs = int8_convrot_flags_from_conf(conf)
     return bool(enabled)
 
 
@@ -523,11 +518,11 @@ def _arm_int8_protect_convrot_after_stock_load(module, conf) -> None:
     (``_hswq_convrot`` + cleared Params.convrot).
     """
     global _LOAD_INT8_CONVROT_ARMED
-    if not _is_int8_tensorwise_convrot_conf(conf):
-        return
-    from ..nvfp4.nvfp4_conf import convrot_flags_from_conf
+    from ..nvfp4.nvfp4_conf import int8_convrot_flags_from_conf
 
-    _enabled, gs = convrot_flags_from_conf(conf)
+    enabled, gs = int8_convrot_flags_from_conf(conf)
+    if not enabled:
+        return
     module._hswq_int8_convrot = True
     module._hswq_int8_convrot_groupsize = int(gs)
     try:

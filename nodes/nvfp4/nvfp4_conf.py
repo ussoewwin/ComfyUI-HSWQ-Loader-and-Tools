@@ -70,6 +70,30 @@ def convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
     return True, gs
 
 
+def is_int8_tensorwise_conf(conf: Optional[dict]) -> bool:
+    return isinstance(conf, dict) and str(conf.get("format") or "").lower() == "int8_tensorwise"
+
+
+def int8_convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
+    """Return (enabled, groupsize) for INT8 protect ConvRot comfy_quant.
+
+    Do **not** reuse ``convrot_flags_from_conf`` — that helper is NVFP4-only and
+    always returns False for ``int8_tensorwise``, which previously left hybrid
+    pack protect Linears with ``_hswq_int8_convrot=False`` and LoRA bake in the
+    wrong Hadamard basis.
+    """
+    if not is_int8_tensorwise_conf(conf):
+        return False, 256
+    params_conf = conf.get("params", {})
+    if not isinstance(params_conf, dict):
+        params_conf = {}
+    enabled = bool(conf.get("convrot", False)) or bool(params_conf.get("convrot", False))
+    if not enabled:
+        return False, 256
+    gs = int(conf.get("convrot_groupsize", params_conf.get("convrot_groupsize", 256)) or 256)
+    return True, gs
+
+
 def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
     """Return logical in_features for a Linear weight (expand packed NVFP4 K)."""
     import torch
