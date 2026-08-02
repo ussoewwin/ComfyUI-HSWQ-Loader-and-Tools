@@ -45,7 +45,9 @@ _LORA_CONVERT_LOGS = 0
 _LORA_SET_LOGS = 0
 _LORA_LOG_MAX = 8
 # Bump when convert_weight / set_weight ConvRot LoRA bake changes.
-_NVFP4_LORA_BAKE_VER = 1
+# v2: also unrotate/re-rotate INT8 protect ConvRot (``_hswq_int8_convrot``).
+# Hybrid ZI packs = ConvRot NVFP4 + ConvRot INT8 protect — both need bake basis.
+_NVFP4_LORA_BAKE_VER = 2
 
 
 def reset_nvfp4_lora_log_counters() -> None:
@@ -58,6 +60,21 @@ def reset_nvfp4_forward_stats() -> None:
     global _TC_HITS, _DEQUANT_FALLBACKS
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
+
+
+def _linear_convrot_lora_groupsize(module) -> int | None:
+    """Groupsize for offline ConvRot Linear LoRA bake, or None if not ConvRot.
+
+    Hybrid Z Image packs arm either:
+      - ``_hswq_nvfp4_convrot`` (NVFP4 Linear), or
+      - ``_hswq_int8_convrot`` (INT8 protect Linear).
+    Params.convrot is cleared at load; bake must still unrotate/re-rotate.
+    """
+    if getattr(module, "_hswq_nvfp4_convrot", False):
+        return int(getattr(module, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+    if getattr(module, "_hswq_int8_convrot", False):
+        return int(getattr(module, "_hswq_int8_convrot_groupsize", 256) or 256)
+    return None
 
 
 def nvfp4_forward_stats() -> dict:
@@ -360,7 +377,10 @@ def make_nvfp4_linear_forward(stock_forward):
 
 
 def make_nvfp4_linear_convert_weight(stock_convert_weight):
-    """Wrap Linear.convert_weight: dequant then unrotate ConvRot weights for LoRA bake."""
+    """Wrap Linear.convert_weight: dequant then unrotate ConvRot weights for LoRA bake.
+
+    Handles ConvRot NVFP4 **and** ConvRot INT8 protect (hybrid Z Image packs).
+    """
     import torch
     from comfy.quant_ops import QuantizedTensor
 
@@ -372,22 +392,23 @@ def make_nvfp4_linear_convert_weight(stock_convert_weight):
             out = weight.dequantize()
         else:
             out = weight
-        if (
-            getattr(self, "_hswq_nvfp4_convrot", False)
-            and out is not None
-            and getattr(out, "ndim", 0) == 2
-        ):
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+        gs = _linear_convrot_lora_groupsize(self)
+        if gs is not None and out is not None and getattr(out, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             out = unrotate_weight_linear(out, h, gs)
-        if _LORA_CONVERT_LOGS < _LORA_LOG_MAX and getattr(
-            self, "_hswq_nvfp4_convrot", False
-        ):
+        if _LORA_CONVERT_LOGS < _LORA_LOG_MAX and gs is not None:
             _LORA_CONVERT_LOGS += 1
+            kind = (
+                "nvfp4"
+                if getattr(self, "_hswq_nvfp4_convrot", False)
+                else "int8_protect"
+            )
             logger.info(
-                "[HSWQ NVFP4 LoRA] Linear.convert_weight #%s: unrotate ConvRot "
-                "in=%s/%s -> out=%s/%s",
+                "[HSWQ ConvRot LoRA] Linear.convert_weight #%s (%s): unrotate "
+                "gs=%s in=%s/%s -> out=%s/%s",
                 _LORA_CONVERT_LOGS,
+                kind,
+                gs,
                 type(weight).__name__,
                 getattr(weight, "dtype", None),
                 type(out).__name__,
@@ -400,7 +421,10 @@ def make_nvfp4_linear_convert_weight(stock_convert_weight):
 
 
 def make_nvfp4_linear_set_weight(stock_set_weight):
-    """Wrap Linear.set_weight: re-rotate ConvRot float weights before requant."""
+    """Wrap Linear.set_weight: re-rotate ConvRot float weights before requant.
+
+    Handles ConvRot NVFP4 **and** ConvRot INT8 protect (hybrid Z Image packs).
+    """
     import torch
 
     def set_weight(
@@ -412,19 +436,23 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
         **kwargs,
     ):
         global _LORA_SET_LOGS
-        if (
-            getattr(self, "_hswq_nvfp4_convrot", False)
-            and getattr(weight, "ndim", 0) == 2
-        ):
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+        gs = _linear_convrot_lora_groupsize(self)
+        if gs is not None and getattr(weight, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             weight = rotate_weight_linear(weight, h, gs)
             if _LORA_SET_LOGS < _LORA_LOG_MAX:
                 _LORA_SET_LOGS += 1
+                kind = (
+                    "nvfp4"
+                    if getattr(self, "_hswq_nvfp4_convrot", False)
+                    else "int8_protect"
+                )
                 logger.info(
-                    "[HSWQ NVFP4 LoRA] Linear.set_weight #%s: re-rotate ConvRot "
-                    "shape=%s layout=%s",
+                    "[HSWQ ConvRot LoRA] Linear.set_weight #%s (%s): re-rotate "
+                    "gs=%s shape=%s layout=%s",
                     _LORA_SET_LOGS,
+                    kind,
+                    gs,
                     tuple(weight.shape) if hasattr(weight, "shape") else "?",
                     getattr(self, "layout_type", None),
                 )

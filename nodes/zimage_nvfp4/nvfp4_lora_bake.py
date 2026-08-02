@@ -238,9 +238,10 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
                 qt = _qt_payload(w, QuantizedTensor)
                 _SKIP_SAMPLE_LOGS += 1
                 _console(
-                    f"[HSWQ ZI NVFP4 LoRA] skip_not_convrot sample "
+                    f"[HSWQ ZI NVFP4 LoRA] skip_not_nvfp4_convrot sample "
                     f"#{_SKIP_SAMPLE_LOGS}: {key} layout={_qt_layout_name(qt)!r} "
-                    f"convrot={getattr(module, '_hswq_nvfp4_convrot', False)}"
+                    f"nvfp4_convrot={getattr(module, '_hswq_nvfp4_convrot', False)} "
+                    f"int8_convrot={getattr(module, '_hswq_int8_convrot', False)}"
                 )
             continue
         weight, set_func, _convert_func = mp.get_key_weight(patcher.model, key)
@@ -271,7 +272,13 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
 
 
 def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
-    """Bake leftover QT LoRA (INT8 protect etc.) that INT8 Dynamic bake missed."""
+    """Bake leftover QT LoRA (ConvRot INT8 protect etc.) that NVFP4 pass skipped.
+
+    Hybrid packs: NVFP4 ConvRot is baked first; INT8 protect ConvRot Linears
+    (``_hswq_int8_convrot``, Params.convrot cleared) are baked here via
+    ``Linear.convert_weight`` / ``set_weight`` which must unrotate/re-rotate
+    (see ``nodes/nvfp4/nvfp4_forward.py`` ``_NVFP4_LORA_BAKE_VER`` >= 2).
+    """
     stats = {
         "baked_int8": 0,
         "baked_other_qt": 0,
