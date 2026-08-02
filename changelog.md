@@ -9,8 +9,8 @@
 
 ## Version 3.3.4
 
-- **Fixed**: Z Image / ZIT **ConvRot NVFP4** (and INT8 protect online rotate) — after a **Distorch** VRAM purge, module-local Hadamard `H` (`_hswq_nvfp4_parity_H`) was reused with only an `nbytes==0` check while the global Hadamard cache already rejected poisoned tensors via `_tensor_storage_ok`. Empty/garbage shells that still reported device/dtype could keep rotating acts on **2nd+ generations** (quality decay). Parity forward now uses the same `_tensor_storage_ok` gate before reuse.
-- See [Release Notes v3.3.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.4) for details.
+- **Fixed**: Z Image / ZIT **ConvRot NVFP4** / INT8 protect — after **Distorch** purge, module-local `_hswq_nvfp4_parity_H` reused under a weaker gate than global `_tensor_storage_ok` → **2nd+ gen** quality decay. Parity now shares `_tensor_storage_ok`.
+- Release notes (① problem / ② files / ③ full code / ④ meaning): [v3.3.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.4) · [`zhmd/v3.3.4.md`](zhmd/v3.3.4.md)
 
 ## Version 3.3.3
 

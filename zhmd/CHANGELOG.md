@@ -9,8 +9,8 @@
 
 ## Version 3.3.4
 
-- **修复**：Z Image / ZIT **ConvRot NVFP4**（及 INT8 protect 在线 rotate）—— **Distorch** VRAM purge 之后，模块本地 Hadamard `H`（`_hswq_nvfp4_parity_H`）仅用 `nbytes==0` 判断是否复用，而全局 Hadamard cache 已用 `_tensor_storage_ok` 拒绝毒化张量。device/dtype 仍看起来正常的空壳 / 垃圾 `H` 会在 **第 2 次及之后的生成**继续旋转激活并导致画质劣化。parity forward 现与全局相同，复用前走 `_tensor_storage_ok`。
-- 详情见 [Release Notes v3.3.4](v3.3.4.md)。
+- **修复**：Z Image / ZIT **ConvRot NVFP4** / INT8 protect —— **Distorch** purge 后，模块本地 `_hswq_nvfp4_parity_H` 的复用判定弱于全局 `_tensor_storage_ok` → **第 2 次及之后**画质劣化。parity 现共用 `_tensor_storage_ok`。
+- 发布说明（①问题 / ②文件名 / ③代码全文 / ④含义）：[v3.3.4](v3.3.4.md) · [EN Release](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.4)
 
 ## Version 3.3.3
 
