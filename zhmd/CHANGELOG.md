@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.6
+
+- **新增 / 修复**：**HSWQ Torch Compile** 节点（`HSWQTorchCompileModel`）—— 使用 ComfyUI `set_torch_compile_wrapper`，不依赖 KJNodes；强制 `compile_threads=1` 与 `worker_start_method=subprocess`，避免 SeedVR2 / `utils.install_util` 的 spawn 崩溃；默认 inductor + `max-autotune-no-cudagraphs`。**ZI INT8 peel**：`peel_non_product_nvfp4_ops` 在 PRODUCT NVFP4 load 下层为外来 INT8 / ZI protect 时继续剥离，使 Z Image 之后 SDXL INT8 仍可存活。文档：中英 README 节点说明、技术指南、去掉 BETA 标记。
+- 详情见 [Release Notes v3.3.6](v3.3.6.md)。
+
 ## Version 3.3.5
 
 - **修复 / 更改**：v3.3.4 之后的 Z Image ConvRot NVFP4 大规模加固 —— 将 Z Image 剥离到专用 `nodes/zimage_nvfp4`（不再与 SDXL `nodes/nvfp4` Tensor Core 产品路径共有实现）；下拉项分离为 **`Z Image ConvRot NVFP4`** 与 SDXL **`ConvRot NVFP4`**，并据此分支 Dynamic VRAM LoRA bake；回到 SDXL INT8 / SDXL ConvRot NVFP4 时清除 Z Image 留下的 **comfy_parity** load overlay、就地 Linear bake（**VER=8**）以及 INT8-protect 武装残留，避免 SDXL → Z Image → SDXL 后的椒盐噪声、LoRA 失效与全噪声粘连。

@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.6
+
+- **Added / Fixed**: **HSWQ Torch Compile** node (`HSWQTorchCompileModel`) — ComfyUI `set_torch_compile_wrapper` path without KJNodes; forces `compile_threads=1` and `worker_start_method=subprocess` so SeedVR2 / `utils.install_util` spawn crashes stay off; defaults inductor + `max-autotune-no-cudagraphs`. **ZI INT8 peel**: `peel_non_product_nvfp4_ops` dives under PRODUCT NVFP4 load when the under layer is foreign INT8 / ZI protect, so SDXL INT8 survives after Z Image. Docs: EN/ZH README node sections, technical guide, BETA badge removed.
+- See [Release Notes v3.3.6](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.6) for details.
+
 ## Version 3.3.5
 
 - **Fixed / Changed**: Large Z Image ConvRot NVFP4 hardening after v3.3.4 — peel Z Image into dedicated `nodes/zimage_nvfp4` (no shared ownership with SDXL `nodes/nvfp4` Tensor Core product); separate dropdown **`Z Image ConvRot NVFP4`** vs SDXL **`ConvRot NVFP4`** and branch Dynamic VRAM LoRA bake accordingly; clear Z Image **comfy_parity** load overlay + in-place Linear bake (**VER=8**) + INT8-protect arm residue when returning to SDXL INT8 / SDXL ConvRot NVFP4 so salt-pepper, LoRA fall-off, and full noise after SDXL → Z Image → SDXL no longer stick.
