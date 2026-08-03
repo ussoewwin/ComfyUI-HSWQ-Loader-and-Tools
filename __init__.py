@@ -632,6 +632,13 @@ try:
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Sampler not registered: %s", e)
 
+try:
+    from .nodes.hswq_torch_compile import HSWQTorchCompileModel
+    NODE_CLASS_MAPPINGS["HSWQTorchCompileModel"] = HSWQTorchCompileModel
+    logger.info("Registered HSWQ Torch Compile")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ Torch Compile not registered: %s", e)
+
 NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_MAPPINGS.items()}
 # Explicit override — TITLE alone is not enough for ComfyUI graph node headers.
 NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader (SDXL)"
