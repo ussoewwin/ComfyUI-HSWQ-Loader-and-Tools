@@ -212,6 +212,36 @@ ComfyUI 输出节点，将图像以 **PNG** 或 **JPG** 保存到 ComfyUI 的 **
 - **可扩展性**：作为轻量 UI 包装设计，以便将来可以在 `sample()` 中拦截 HSWQ / Z-Image 量化推理参数，而无需改动 ComfyUI 核心
 - **详情**：见 `md/hswq_sampler_technical_reference.md`
 
+### HSWQ Torch Compile
+
+<img src="../png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
+
+ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面向 HSWQ 扩散路径（SDXL ConvRot INT8 / ConvRot NVFP4、Z Image / ZIT ConvRot NVFP4，以及相关的 USDU / Distorch 工作流）。使用 ComfyUI 核心 `comfy_api.torch_helpers.set_torch_compile_wrapper` —— **不依赖 KJNodes**。
+
+默认值针对 HSWQ + Ultimate SD Upscale 选定：**inductor** + **`max-autotune-no-cudagraphs`**、关闭 `fullgraph`，并将 Distorch 权重 cast 辅助函数标为 eager，避免多 tile USDU 导致重编译爆炸，或触发 CUDA graph / `cudaMallocAsync` 池错误。
+
+在 Windows 上，其他扩展（例如 SeedVR2）可能提高 inductor 的 `compile_threads` 并强制 ProcessPool **spawn**。spawn 子进程会在 `nodes.py` 已将 `comfy/` 插入 `sys.path` 之后重新导入 ComfyUI 的 `main.py`，从而遮蔽 `utils` 包并以 `ModuleNotFoundError: No module named 'utils.install_util'` 崩溃。本节点强制 **串行** inductor 编译（`compile_threads=1`、`worker_start_method=subprocess`），并在应用 wrapper 之前关闭其他节点留下的已预热 spawn 编译池。
+
+#### 特性
+
+- **MODEL → MODEL**：克隆输入模型，并通过 ComfyUI 的 compile wrapper 应用 `torch.compile`
+- **安全的 HSWQ 默认值**：`backend=inductor`、`mode=max-autotune-no-cudagraphs`、`fullgraph=False`、`dynamic=false`
+- **仅编译 block**：启用时，将已知的 transformer / block 容器（`layers`、`double_blocks`、`single_blocks`、`transformer_blocks`、`blocks` 等）编译为 `diffusion_model.<name>.<i>`；若未找到则回退为整个 `diffusion_model`
+- **Distorch / dynamic VRAM**：可选补丁将 `comfy.ops` 的 cast 辅助函数（以及存在时的 `comfy_aimdo` raw-ptr 辅助）标为 eager graph break
+- **静态参数形状**：可选 `force_parameter_static_shapes`，减少在 cast 路径的嵌套 inductor 追踪下出现符号化 `torch.Size` 错误
+- **面向 ComfyUI 的 inductor 加固**：强制 `compile_threads=1` 与 `worker_start_method=subprocess`；清理其他节点留下的 spawn ProcessPool
+- **可选 `disable_dynamic_vram`**：当 ComfyUI 构建支持时，以 `disable_dynamic=True` 克隆模型
+
+#### 使用说明
+
+- **输入**：`model`（MODEL）、`backend`、`fullgraph`、`mode`、`dynamic`、`compile_transformer_blocks_only`、`dynamo_cache_size_limit`、`force_parameter_static_shapes`、`patch_distorch_weight_cast`、`debug_compile_keys`；可选 `disable_dynamic_vram`
+- **输出**：MODEL（已编译的克隆）
+- **分类**：`HSWQ/torchcompile`
+- **放置位置**：放在 **HSWQ Checkpoint Loader (SDXL)** 或 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
+- **多 tile USDU 时避免 `cudagraphs`**：优先 inductor；CUDA graphs 在 tiled / 池分配路径上经常失败
+- **KJNodes**：不需要；这是独立的 HSWQ 菜单节点
+- **详情**：见 `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
+
 ## 更新日志
 
 见 [zhmd/CHANGELOG.md](CHANGELOG.md)。
