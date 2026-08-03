@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.5
+
+- **Fixed / Changed**: Large Z Image ConvRot NVFP4 hardening after v3.3.4 — peel Z Image into dedicated `nodes/zimage_nvfp4` (no shared ownership with SDXL `nodes/nvfp4` Tensor Core product); separate dropdown **`Z Image ConvRot NVFP4`** vs SDXL **`ConvRot NVFP4`** and branch Dynamic VRAM LoRA bake accordingly; clear Z Image **comfy_parity** load overlay + in-place Linear bake (**VER=8**) + INT8-protect arm residue when returning to SDXL INT8 / SDXL ConvRot NVFP4 so salt-pepper, LoRA fall-off, and full noise after SDXL → Z Image → SDXL no longer stick.
+- See [Release Notes v3.3.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.5) for details.
+
 ## Version 3.3.4
 
 - **Fixed**: Z Image / ZIT **ConvRot NVFP4** / INT8 protect — after **Distorch** purge, module-local `_hswq_nvfp4_parity_H` reused under a weaker gate than global `_tensor_storage_ok` → **2nd+ gen** quality decay. Parity now shares `_tensor_storage_ok`.

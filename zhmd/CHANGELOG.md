@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.5
+
+- **修复 / 更改**：v3.3.4 之后的 Z Image ConvRot NVFP4 大规模加固 —— 将 Z Image 剥离到专用 `nodes/zimage_nvfp4`（不再与 SDXL `nodes/nvfp4` Tensor Core 产品路径共有实现）；下拉项分离为 **`Z Image ConvRot NVFP4`** 与 SDXL **`ConvRot NVFP4`**，并据此分支 Dynamic VRAM LoRA bake；回到 SDXL INT8 / SDXL ConvRot NVFP4 时清除 Z Image 留下的 **comfy_parity** load overlay、就地 Linear bake（**VER=8**）以及 INT8-protect 武装残留，避免 SDXL → Z Image → SDXL 后的椒盐噪声、LoRA 失效与全噪声粘连。
+- 详情见 [Release Notes v3.3.5](v3.3.5.md)。
+
 ## Version 3.3.4
 
 - **修复**：Z Image / ZIT **ConvRot NVFP4** / INT8 protect —— **Distorch** purge 后，模块本地 `_hswq_nvfp4_parity_H` 的复用判定弱于全局 `_tensor_storage_ok` → **第 2 次及之后**画质劣化。parity 现共用 `_tensor_storage_ok`。
