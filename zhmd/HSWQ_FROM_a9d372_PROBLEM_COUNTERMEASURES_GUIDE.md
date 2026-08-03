@@ -1,259 +1,259 @@
-# HSWQ Problem Countermeasures Guide (from `a9d372` / after v3.3.0)
+# HSWQ 问题对策完全解说（自 `a9d372` / v3.3.0 之后）
 
 <table align="center">
   <tr>
-    <td align="center" bgcolor="#3478ca" width="88" height="36"><font color="#ffffff"><b>EN</b></font></td>
-    <td align="center" bgcolor="#e5e7eb" width="88" height="36"><a href="../zhmd/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md"><font color="#4b5563"><b>中文</b></font></a></td>
+    <td align="center" bgcolor="#e5e7eb" width="88" height="36"><a href="../md/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md"><font color="#4b5563"><b>EN</b></font></a></td>
+    <td align="center" bgcolor="#d4465e" width="88" height="36"><font color="#ffffff"><b>中文</b></font></td>
   </tr>
 </table>
 
-**Baseline (exclusive start of problem-countermeasure work in this document):**  
-`a9d372089c2314bcfa9a1d314a3bf81f0dfde9fb` — `docs:point-zhmd-changelog-v3.3.0-link-to-zh` (v3.3.0 already tagged; this commit is the documented origin the owner ordered).
+**基线（本文档所记录的问题对策工作的排他起点）：**  
+`a9d372089c2314bcfa9a1d314a3bf81f0dfde9fb` — `docs:point-zhmd-changelog-v3.3.0-link-to-zh`（v3.3.0 已打标签；此提交为开发者指定的文档起点）。
 
-**Documented HEAD:** `f030d71afb116ff0b53c2186ebc133a6a6d4ed3a` — peel Z Image NVFP4 contamination so SDXL INT8 LoRA survives after Z Image.
+**记载时点 HEAD：** `f030d71afb116ff0b53c2186ebc133a6a6d4ed3a` — peel Z Image NVFP4 contamination so SDXL INT8 LoRA survives after Z Image。
 
-**Scope:** Runtime / load / LoRA / DistOrch / package-split **problem countermeasures** for Z Image ConvRot NVFP4 and the SDXL interaction after that path existed. Pure docs/CI/version-bump commits are listed only when they carry a release surface for a fix.
+**范围：** Z Image ConvRot NVFP4 出现之后，针对该路径与 SDXL 交互的运行时 / 加载 / LoRA / DistOrch / 包拆分 **问题对策**。纯文档 / CI / 版本号 bump 的提交仅在其承载修复的发布面时列出。
 
-**Quantizer:** Only [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).
+**量化器：** 仅 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)。
 
-**Absolute branch (do not mix):**
+**绝对分支（禁止混用）：**
 
-| Surface | Loader / path |
+| 表面 | 加载器 / 路径 |
 |---------|----------------|
-| SDXL ConvRot NVFP4 | Checkpoint Loader → `nodes/nvfp4` Tensor Core product (`_hswq_nvfp4_product_tc`) |
-| Z Image / ZIT ConvRot NVFP4 | **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** → `nodes/zimage_nvfp4` Comfy parity (`_hswq_nvfp4_comfy_only`) |
-| Dropdown label | SDXL: `ConvRot NVFP4` · Z Image: `Z Image ConvRot NVFP4` |
+| SDXL ConvRot NVFP4 | Checkpoint Loader → `nodes/nvfp4` Tensor Core 产品路径（`_hswq_nvfp4_product_tc`） |
+| Z Image / ZIT ConvRot NVFP4 | **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** → `nodes/zimage_nvfp4` Comfy parity（`_hswq_nvfp4_comfy_only`） |
+| 下拉标签 | SDXL：`ConvRot NVFP4` · Z Image：`Z Image ConvRot NVFP4` |
 
-**Related prior guides (same era, deeper single-topic):**
+**同期相关专题文档（单主题更深）：**
 
 - `md/HSWQ_ZIMAGE_CONVROT_NVFP4_TECHNICAL_GUIDE.md`
 - `md/HSWQ_ZI_HYBRID_NVFP4_INT8_LORA_BAKE_FROM_v3.3.2.md`
 - `release/_release_v3.3.2_body_en.md` / `_release_v3.3.3_body_en.md` / `_release_v3.3.4_body_en.md`
 
-This document is the **single map** of problems + files + **full current source** of the countermeasure code tree at HEAD.
+本文档是问题 + 文件 + HEAD 对策代码树 **完整当前源码** 的 **单一地图**。
 
 ---
 
-## Problem index (① at a glance)
+## 问题索引（① 一览）
 
-| # | Era / tip | Symptom | Root |
+| # | 时代 / tip | 症状 | 根因 |
 |---|-----------|---------|------|
-| **P1** | Feat → v3.3.1 | Z Image needed ConvRot NVFP4 without breaking SDXL TC | Shared `nodes/nvfp4` TC stack ≠ Z Image parity (stock GEMM + online act rotate) |
-| **P2** | v3.3.1→v3.3.2 | 2nd gen after DistOrch purge = salt-pepper / noise | INT8 decode wrap dropped NVFP4 markers → TC re-wrapped over parity → purge peeled TC only → **double online act rotate** |
-| **P3** | v3.3.1→v3.3.4 | Multi-gen quality decay after DistOrch | Module-local `_hswq_nvfp4_parity_H` reused under a weaker gate than global `_tensor_storage_ok` |
-| **P4** | v3.3.2→v3.3.3 | Hybrid pack LoRA dead / noise (~60 INT8 protect leftovers) | INT8 protect ConvRot not armed/baked like Conv2d; kitchen `Params.convrot` double-unrotate / double act-rotate traps |
-| **P5** | `6b52de2` | Z Image still entangled with SDXL product modules | Shared `nodes/nvfp4` ownership; need dedicated `nodes/zimage_nvfp4` package |
-| **P6** | `916bb89` | Same dtype string / same bake path for SDXL and Z Image | Dropdown + Dynamic bake must branch on **Z Image ConvRot NVFP4** vs **ConvRot NVFP4** |
-| **P7** | → `f030d71` | SDXL → Z Image → SDXL: salt-pepper, LoRA falls off on 3rd prompt, then full noise | Z Image leaves `comfy_parity` load overlay + **VER=8 in-place Linear bake** + INT8 protect arm flags; SDXL INT8 / TC load did not peel them |
+| **P1** | Feat → v3.3.1 | Z Image 需要 ConvRot NVFP4 且不能破坏 SDXL TC | 共享 `nodes/nvfp4` TC 栈 ≠ Z Image parity（stock GEMM + 在线 act rotate） |
+| **P2** | v3.3.1→v3.3.2 | DistOrch purge 后第 2 次生成 = 椒盐 / 噪声 | INT8 decode wrap 丢掉 NVFP4 标记 → TC 叠在 parity 上 → purge 只剥 TC → **双重在线 act rotate** |
+| **P3** | v3.3.1→v3.3.4 | DistOrch 后多代画质衰减 | 模块本地 `_hswq_nvfp4_parity_H` 的复用门弱于全局 `_tensor_storage_ok` |
+| **P4** | v3.3.2→v3.3.3 | 混合包 LoRA 失效 / 噪声（约 60 层 INT8 protect 残留） | INT8 protect ConvRot 未按 Conv2d 同型武装/bake；kitchen `Params.convrot` 双重 unrotate / 双重 act-rotate 陷阱 |
+| **P5** | `6b52de2` | Z Image 仍与 SDXL 产品模块纠缠 | 共享 `nodes/nvfp4` 所有权；需要专用 `nodes/zimage_nvfp4` 包 |
+| **P6** | `916bb89` | SDXL 与 Z Image 共用同一 dtype 字符串 / 同一 bake 路径 | 下拉 + Dynamic bake 必须按 **Z Image ConvRot NVFP4** vs **ConvRot NVFP4** 分支 |
+| **P7** | → `f030d71` | SDXL → Z Image → SDXL：椒盐、第 3 次提示词 LoRA 脱落、随后全噪声 | Z Image 留下 `comfy_parity` load overlay + **VER=8 就地 Linear bake** + INT8 protect 武装标志；SDXL INT8 / TC 加载未 peel |
 
 ---
 
-## P1 — Z Image ConvRot NVFP4 product path (introduction)
+## P1 — Z Image ConvRot NVFP4 产品路径（引入）
 
-### ① What was wrong
+### ① 问题是什么
 
-SDXL ConvRot NVFP4 uses a **Tensor Core** full stack (`load_nvfp4_linear_module` + scaled_mm + act ConvRot in TC forward). Z Image / ZIT ConvRot NVFP4 was validated on a **Comfy parity** path: stock MixedPrecision GEMM + **online** act rotate (`_hswq_nvfp4_parity_H`), mixed NVFP4 + INT8 protect packs, Dynamic VRAM LoRA bake. Forcing Z Image through the SDXL TC stack (or leaving kitchen `Params.convrot=True` so kitchen and HSWQ both rotate) produced wrong acts / noise. AIMDO DynamicVRAM also conflicted with the parity bake wrap.
+SDXL ConvRot NVFP4 使用 **Tensor Core** 全栈（`load_nvfp4_linear_module` + scaled_mm + TC forward 内的 act ConvRot）。Z Image / ZIT ConvRot NVFP4 在 **Comfy parity** 路径上验证：stock MixedPrecision GEMM + **在线** act rotate（`_hswq_nvfp4_parity_H`）、NVFP4 + INT8 protect 混合包、Dynamic VRAM LoRA bake。把 Z Image 强行走 SDXL TC 栈（或留下 kitchen `Params.convrot=True` 导致 kitchen 与 HSWQ 双重旋转）会产生错误激活 / 噪声。AIMDO DynamicVRAM 也与 parity bake wrap 冲突。
 
-### ② Files added / modified (problem code)
+### ② 新增 / 修改的文件（问题相关代码）
 
-**Added (package `nodes/zimage_nvfp4/`):**
+**新增（包 `nodes/zimage_nvfp4/`）：**
 
-| Path | Role |
+| 路径 | 作用 |
 |------|------|
-| `__init__.py` | Package export |
-| `load_unet.py` | UNet load entry for Z Image ConvRot NVFP4 |
-| `zi_comfy_quant_nvfp4.py` | Z Image patch install / stack stamps |
-| `zi_nvfp4_conf.py` | Conf helpers |
-| `zi_nvfp4_forward.py` | Z Image forward helpers |
-| `zi_nvfp4_hadamard.py` | Z Image Hadamard helpers |
-| `nvfp4_comfy_parity.py` | Comfy parity install, Hadamard clear, peel/restore PRODUCT |
-| `nvfp4_lora_bake.py` | Dynamic.load bake wrap (VER=8), uninstall |
-| `nvfp4_addmm_patch.py` | addmm / kitchen interaction |
-| `nvfp4_tc_gate.py` | Gate TC vs parity |
-| `require_parity.py` | Require parity active |
-| `prestartup_script.py` | Early hooks (sys.path discipline) |
+| `__init__.py` | 包导出 |
+| `load_unet.py` | Z Image ConvRot NVFP4 的 UNet 加载入口 |
+| `zi_comfy_quant_nvfp4.py` | Z Image 补丁安装 / 栈戳记 |
+| `zi_nvfp4_conf.py` | Conf 辅助 |
+| `zi_nvfp4_forward.py` | Z Image forward 辅助 |
+| `zi_nvfp4_hadamard.py` | Z Image Hadamard 辅助 |
+| `nvfp4_comfy_parity.py` | Comfy parity 安装、Hadamard 清理、peel/restore PRODUCT |
+| `nvfp4_lora_bake.py` | Dynamic.load bake wrap（VER=8）、卸载 |
+| `nvfp4_addmm_patch.py` | addmm / kitchen 交互 |
+| `nvfp4_tc_gate.py` | TC vs parity 门控 |
+| `require_parity.py` | 要求 parity 处于活动状态 |
+| `prestartup_script.py` | 早期钩子（sys.path 纪律） |
 
-**Modified:** `nodes/nvfp4/*` (product kept for SDXL), `patches/comfy_quant_int8.py`, `nodes/models/zimage_fp8_e4m3_unet.py`, `hswq/zimage_fp8_e4m3_unet.py`, loader UI / README.
+**修改：** `nodes/nvfp4/*`（SDXL 产品路径保留）、`patches/comfy_quant_int8.py`、`nodes/models/zimage_fp8_e4m3_unet.py`、`hswq/zimage_fp8_e4m3_unet.py`、加载器 UI / README。
 
-### ③ Full text of added / modified code
+### ③ 新增 / 修改代码全文
 
-See **Appendix A** (entire files at HEAD `f030d71`).
+见 **附录 A**（HEAD `f030d71` 上的完整文件）。
 
-### ④ Meaning
+### ④ 含义
 
-| Piece | Meaning |
+| 片段 | 含义 |
 |-------|---------|
-| `_hswq_nvfp4_comfy_only` | Ops are on Z Image parity — must not be treated as SDXL product TC |
-| `_hswq_nvfp4_product_tc` | Stamp only from SDXL product installer in `nodes/nvfp4` |
-| Online act rotate | Weights offline-rotated; acts rotated in parity forward with Hadamard `H` |
-| `Params.convrot` clear on Linear | Kitchen must not also rotate; HSWQ owns rotate via `_hswq_nvfp4_convrot` / `_hswq_int8_convrot` |
+| `_hswq_nvfp4_comfy_only` | ops 处于 Z Image parity — 不得当作 SDXL 产品 TC |
+| `_hswq_nvfp4_product_tc` | 仅由 `nodes/nvfp4` 的 SDXL 产品安装器打戳 |
+| 在线 act rotate | 权重离线旋转；激活在 parity forward 中用 Hadamard `H` 旋转 |
+| Linear 上清除 `Params.convrot` | kitchen 不得再旋转；HSWQ 通过 `_hswq_nvfp4_convrot` / `_hswq_int8_convrot` 拥有旋转 |
 
 ---
 
-## P2 — DistOrch purge → double online act rotate (v3.3.2)
+## P2 — DistOrch purge → 双重在线 act rotate（v3.3.2）
 
-### ① What was wrong
+### ① 问题是什么
 
-After DistOrch VRAM purge, INT8 decode wrap could drop NVFP4 stack markers. A later “upgrade” re-wrapped the **TC product** path over an already-parity Linear. DistOrch refresh then peeled **only** the TC layer and left **two** online act-rotate wraps → salt-and-pepper / noise on the **2nd generation**.
+DistOrch VRAM purge 之后，INT8 decode wrap 可能丢掉 NVFP4 栈标记。随后的“upgrade”会把 **TC 产品**路径叠到已经是 parity 的 Linear 上。DistOrch refresh 只剥掉 **TC** 层，留下 **两层** 在线 act-rotate wrap → **第 2 次生成**出现椒盐 / 噪声。
 
-### ② Files
+### ② 文件
 
-| Path | Change |
+| 路径 | 变更 |
 |------|--------|
-| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | `_unwrap_stock_forward` peels TC **and** parity; single parity re-wrap |
-| `patches/comfy_quant_int8.py` | Preserve NVFP4 markers through INT8 wrap |
-| Release / changelog | v3.3.2 surfaces |
+| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | `_unwrap_stock_forward` 同时剥 TC **与** parity；单一 parity 再包 |
+| `patches/comfy_quant_int8.py` | 经 INT8 wrap 保留 NVFP4 标记 |
+| Release / changelog | v3.3.2 发布面 |
 
-### ③ Full text
+### ③ 全文
 
-See Appendix A — especially `_unwrap_stock_forward` / `_ensure_single_parity_linear_forward` in `nvfp4_comfy_parity.py`, and INT8 wrap marker preservation in `patches/comfy_quant_int8.py`.
+见附录 A — 尤其 `nvfp4_comfy_parity.py` 中的 `_unwrap_stock_forward` / `_ensure_single_parity_linear_forward`，以及 `patches/comfy_quant_int8.py` 中的 INT8 wrap 标记保留。
 
-### ④ Meaning
+### ④ 含义
 
-| Piece | Meaning |
+| 片段 | 含义 |
 |-------|---------|
-| Flatten both wrappers | Never stack parity on parity or TC-on-parity leftovers |
-| Marker preservation | DistOrch / INT8 decode must not forget “this Linear is parity” |
+| 展平两种 wrapper | 永不把 parity 叠在 parity 上，或留下 TC-on-parity 残渣 |
+| 标记保留 | DistOrch / INT8 decode 不得忘记“此 Linear 是 parity” |
 
 ---
 
-## P3 — DistOrch purge → poisoned module-local Hadamard (v3.3.4)
+## P3 — DistOrch purge → 中毒的模块本地 Hadamard（v3.3.4）
 
-### ① What was wrong
+### ① 问题是什么
 
-Parity keeps `module._hswq_nvfp4_parity_H`. DistOrch Method 3 can empty/poison tensor storage while Python still holds the attribute. Global cache already used `_tensor_storage_ok`; module-local reuse only checked device/dtype/`numel`/`nbytes==0` and could reuse a dead shell → quality decay on **2nd+ gens**.
+Parity 保存 `module._hswq_nvfp4_parity_H`。DistOrch Method 3 可清空/毒化张量存储，而 Python 仍持有该属性。全局缓存已使用 `_tensor_storage_ok`；模块本地复用仅检查 device/dtype/`numel`/`nbytes==0`，可能复用死亡壳 → **第 2 次及之后**画质衰减。
 
-### ② Files
+### ② 文件
 
-| Path | Change |
+| 路径 | 变更 |
 |------|--------|
-| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | `need_rebuild` uses `_tensor_storage_ok` |
-| `nodes/nvfp4/nvfp4_hadamard.py` | `_tensor_storage_ok` (shared gate) |
+| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | `need_rebuild` 使用 `_tensor_storage_ok` |
+| `nodes/nvfp4/nvfp4_hadamard.py` | `_tensor_storage_ok`（共享门） |
 
-### ③ Full text
+### ③ 全文
 
-See Appendix A — `_tensor_storage_ok` and `_make_convrot_parity_forward`.
+见附录 A — `_tensor_storage_ok` 与 `_make_convrot_parity_forward`。
 
-### ④ Meaning
+### ④ 含义
 
-Same liveness rule for global cache and module-local `H`. If storage is poisoned, rebuild via `build_hadamard`.
+全局缓存与模块本地 `H` 使用同一存活规则。若存储已中毒，则经 `build_hadamard` 重建。
 
 ---
 
-## P4 — Hybrid NVFP4 + INT8 protect LoRA bake (v3.3.3)
+## P4 — 混合 NVFP4 + INT8 protect LoRA bake（v3.3.3）
 
-### ① What was wrong
+### ① 问题是什么
 
-Hybrid packs (~120 NVFP4 + ~60 INT8 protect ConvRot) baked NVFP4 keys but left **INT8 protect LowVramPatch** leftovers. Wrong `Params.convrot` handling caused **double unrotate** (dead LoRA) or **double act rotate** (noise). Evidence logs hid INT8 success under NVFP4 sample quota.
+混合包（约 120 层 NVFP4 + 约 60 层 INT8 protect ConvRot）bake 了 NVFP4 键，却留下 **INT8 protect LowVramPatch** 残留。错误的 `Params.convrot` 处理导致 **双重 unrotate**（LoRA 死）或 **双重 act rotate**（噪声）。证据日志把 INT8 成功埋在 NVFP4 采样配额之下。
 
-### ② Files
+### ② 文件
 
-| Path | Role |
+| 路径 | 作用 |
 |------|------|
 | `nodes/nvfp4/nvfp4_conf.py` | `int8_convrot_flags_from_conf` |
-| `nodes/nvfp4/nvfp4_forward.py` | Dual unrotate / re-rotate, counters, EVIDENCE |
-| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | Arm INT8 protect like Conv2d |
-| `nodes/zimage_nvfp4/nvfp4_lora_bake.py` | Dual bake + pass-delta EVIDENCE |
+| `nodes/nvfp4/nvfp4_forward.py` | 双重 unrotate / re-rotate、计数器、EVIDENCE |
+| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | 按 Conv2d 同型武装 INT8 protect |
+| `nodes/zimage_nvfp4/nvfp4_lora_bake.py` | 双通道 bake + pass-delta EVIDENCE |
 
-### ③ Full text
+### ③ 全文
 
-See Appendix A. Narrative detail also in `md/HSWQ_ZI_HYBRID_NVFP4_INT8_LORA_BAKE_FROM_v3.3.2.md`.
+见附录 A。叙事细节另见 `md/HSWQ_ZI_HYBRID_NVFP4_INT8_LORA_BAKE_FROM_v3.3.2.md`。
 
-### ④ Meaning
+### ④ 含义
 
-Arm like Conv2d: clear kitchen `Params.convrot`, set `_hswq_int8_convrot`, bake unrotate once, keep `Params.convrot=False` after requant. Pass-delta EVIDENCE must not print OK on empty `patches=0` passes.
-
----
-
-## P5 — Peel Z Image out of shared `nodes/nvfp4` (`6b52de2`)
-
-### ① What was wrong
-
-Z Image parity / bake lived entangled with SDXL product modules. Shared ownership made contamination and “upgrade” races inevitable.
-
-### ② Files
-
-Refactor: Z Image runtime under `nodes/zimage_nvfp4/`; SDXL product remains `nodes/nvfp4/`.
-
-### ③ Full text
-
-Appendix A is the post-peel tree at HEAD.
-
-### ④ Meaning
-
-Import boundaries: SDXL clear may **call** Z Image peel/uninstall; Z Image must not permanently own SDXL `ops` after unload.
+按 Conv2d 同型武装：清除 kitchen `Params.convrot`，设置 `_hswq_int8_convrot`，bake 时 unrotate 一次，requant 后保持 `Params.convrot=False`。Pass-delta EVIDENCE 不得在空的 `patches=0` pass 上打印 OK。
 
 ---
 
-## P6 — Separate dropdown + Dynamic bake branch (`916bb89`)
+## P5 — 将 Z Image 从共享 `nodes/nvfp4` 剥离（`6b52de2`）
 
-### ① What was wrong
+### ① 问题是什么
 
-One dtype / one bake path invited SDXL and Z Image to share wrappers. Owner absolute rule: separate **ConvRot NVFP4** vs **Z Image ConvRot NVFP4**.
+Z Image 的 parity / bake 与 SDXL 产品模块纠缠。共享所有权使污染与“upgrade”竞态不可避免。
 
-### ② Files
+### ② 文件
 
-Loader UI / weight_dtype strings; Dynamic bake install gated on Z Image dtype.
+重构：Z Image 运行时位于 `nodes/zimage_nvfp4/`；SDXL 产品仍在 `nodes/nvfp4/`。
 
-### ③ Full text
+### ③ 全文
 
-See loader / `nvfp4_lora_bake.py` install paths in Appendix A.
+附录 A 即为 peel 之后的 HEAD 树。
 
-### ④ Meaning
+### ④ 含义
 
-Branch on product identity, not on “looks like NVFP4 conf”.
+导入边界：SDXL 清理可以 **调用** Z Image 的 peel/uninstall；Z Image 卸载后不得永久占有 SDXL 的 `ops`。
 
 ---
 
-## P7 — SDXL after Z Image contamination (`f030d71` and precursors)
+## P6 — 分离下拉项 + Dynamic bake 分支（`916bb89`）
 
-### ① What was wrong
+### ① 问题是什么
 
-Measured sequence **SDXL → Z Image → SDXL**:
+单一 dtype / 单一 bake 路径诱使 SDXL 与 Z Image 共享 wrapper。开发者绝对规则：分离 **ConvRot NVFP4** 与 **Z Image ConvRot NVFP4**。
 
-1. Z Image installs `comfy_parity` on `ops._load_quantized_module` / `mixed_precision_ops`.
-2. Z Image **mutates `mp0.Linear` in place** with LoRA bake **VER=8** (`[HSWQ ConvRot LoRA] … int8_protect`).
-3. INT8 protect **arm overlay** stamps `_hswq_int8_protect_arm_v2` / `_hswq_int8_protect_in_load` on the load chain.
-4. Early peel only treated `_hswq_nvfp4_comfy_only` / non-product `_hswq_nvfp4_full_load` as foreign — **missed** INT8 protect overlay flags.
-5. Peeling `ops.mixed_precision_ops` alone **does not** undo in-place Linear class mutation → SDXL INT8 still hit ZI VER=8 bake → LoRA falls off on **3rd prompt**.
-6. Overlay armed SDXL INT8 ConvRot (`int8_tensorwise`+`convrot`) → `_hswq_int8_convrot` + wrong `Params` → **noise** (`arm INT8 protect ConvRot #80…#760` on 3rd SDXL).
+### ② 文件
 
-### ② Files added / modified (this countermeasure)
+加载器 UI / weight_dtype 字符串；Dynamic bake 安装以 Z Image dtype 为门控。
 
-| Path | Change |
+### ③ 全文
+
+见附录 A 中的加载器 / `nvfp4_lora_bake.py` 安装路径。
+
+### ④ 含义
+
+按产品身份分支，而不是按“看起来像 NVFP4 conf”分支。
+
+---
+
+## P7 — Z Image 之后的 SDXL 污染（`f030d71` 及前驱）
+
+### ① 问题是什么
+
+实测序列 **SDXL → Z Image → SDXL**：
+
+1. Z Image 在 `ops._load_quantized_module` / `mixed_precision_ops` 上安装 `comfy_parity`。
+2. Z Image 用 LoRA bake **VER=8**（`[HSWQ ConvRot LoRA] … int8_protect`）**就地突变 `mp0.Linear`**。
+3. INT8 protect **武装 overlay** 在加载链上打上 `_hswq_int8_protect_arm_v2` / `_hswq_int8_protect_in_load`。
+4. 早期 peel 只把 `_hswq_nvfp4_comfy_only` / 非产品 `_hswq_nvfp4_full_load` 当外来物 — **漏掉** INT8 protect overlay 标志。
+5. 仅 peel `ops.mixed_precision_ops` **不会**撤销就地 Linear 类突变 → SDXL INT8 仍命中 ZI VER=8 bake → **第 3 次提示词** LoRA 脱落。
+6. Overlay 武装了 SDXL INT8 ConvRot（`int8_tensorwise`+`convrot`）→ `_hswq_int8_convrot` + 错误 `Params` → **噪声**（第 3 次 SDXL 上大量 `arm INT8 protect ConvRot #80…#760`）。
+
+### ② 新增 / 修改的文件（本对策）
+
+| 路径 | 变更 |
 |------|--------|
-| `nodes/nvfp4/comfy_quant_nvfp4.py` | `_clear_zimage_parity_contamination_for_sdxl`; call before SDXL NVFP4 patches; refuse TC on leftover parity |
-| `nodes/nvfp4/nvfp4_forward.py` | `peel_all_nvfp4_linear_lora_bake`; product `attach_nvfp4_linear_lora_bake` peels foreign VER first |
-| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | `peel_non_product_nvfp4_ops` foreign load flags; `_discard_poisoned_product_refs`; PRODUCT remember requires `_hswq_nvfp4_product_tc` |
+| `nodes/nvfp4/comfy_quant_nvfp4.py` | `_clear_zimage_parity_contamination_for_sdxl`；在 SDXL NVFP4 补丁前调用；残留 parity 时拒绝 TC |
+| `nodes/nvfp4/nvfp4_forward.py` | `peel_all_nvfp4_linear_lora_bake`；产品 `attach_nvfp4_linear_lora_bake` 先剥外来 VER |
+| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | `peel_non_product_nvfp4_ops` 外来 load 标志；`_discard_poisoned_product_refs`；PRODUCT remember 要求 `_hswq_nvfp4_product_tc` |
 | `nodes/zimage_nvfp4/nvfp4_lora_bake.py` | `uninstall_zimage_nvfp4_lora_bake` + Linear peel |
-| `patches/comfy_quant_int8.py` | Clear contamination before SDXL INT8 load |
+| `patches/comfy_quant_int8.py` | SDXL INT8 加载前清除污染 |
 
-### ③ Full text
+### ③ 全文
 
-Appendix A — full files at HEAD. Critical symbols: `_clear_zimage_parity_contamination_for_sdxl`, `peel_all_nvfp4_linear_lora_bake`, `peel_non_product_nvfp4_ops`, `_discard_poisoned_product_refs`.
+附录 A — HEAD 完整文件。关键符号：`_clear_zimage_parity_contamination_for_sdxl`、`peel_all_nvfp4_linear_lora_bake`、`peel_non_product_nvfp4_ops`、`_discard_poisoned_product_refs`。
 
-### ④ Meaning
+### ④ 含义
 
-| Piece | Meaning |
+| 片段 | 含义 |
 |-------|---------|
-| `restore_nvfp4_tc_product_stack()` | Put remembered SDXL PRODUCT load/mp back when stamped `_hswq_nvfp4_product_tc` |
-| `peel_non_product_nvfp4_ops` | Walk wrapper chain; treat INT8 protect overlay / decode / non-product full_load as foreign |
-| `peel_all_nvfp4_linear_lora_bake(Lin)` | Strip VER=8 (any HSWQ bake) off **live** `Linear.convert_weight` / `set_weight` |
-| Re-`attach` VER=1 only if product_tc | SDXL NVFP4 gets product bake; SDXL INT8 stays stock after peel |
-| Clear on INT8 load | Same contamination before INT8 UNet path |
+| `restore_nvfp4_tc_product_stack()` | 当打有 `_hswq_nvfp4_product_tc` 时，把记住的 SDXL PRODUCT load/mp 放回 |
+| `peel_non_product_nvfp4_ops` | 遍历 wrapper 链；把 INT8 protect overlay / decode / 非产品 full_load 当外来 |
+| `peel_all_nvfp4_linear_lora_bake(Lin)` | 从 **活着的** `Linear.convert_weight` / `set_weight` 上剥掉 VER=8（任意 HSWQ bake） |
+| 仅当 product_tc 时再 `attach` VER=1 | SDXL NVFP4 得到产品 bake；SDXL INT8 在 peel 后保持 stock |
+| INT8 加载时也清除 | 进入 INT8 UNet 路径前同样清污染 |
 
-### Operator retest
+### 操作者复测
 
-1. Restart ComfyUI.
-2. SDXL INT8 (+LoRA) → Z Image ConvRot NVFP4 → SDXL INT8 (+LoRA) again.
-3. Must **not** see ZI `Dynamic.load ENTER` on SDXL, `[HSWQ ConvRot LoRA] int8_protect` on SDXL, or mass `arm INT8 protect ConvRot` on 3rd SDXL.
-4. Prefer peel / restore console lines on clear.
+1. 完全重启 ComfyUI。
+2. SDXL INT8（+LoRA）→ Z Image ConvRot NVFP4 → 再次 SDXL INT8（+LoRA）。
+3. SDXL 上 **不得** 出现 ZI `Dynamic.load ENTER`、`[HSWQ ConvRot LoRA] int8_protect`，或第 3 次 SDXL 上的大量 `arm INT8 protect ConvRot`。
+4. 清理时优先看到 peel / restore 控制台行。
 
 ---
 
-## ② Master file list (code countermeasures, `a9d372`..HEAD)
+## ② 主文件列表（代码对策，`a9d372`..HEAD）
 
-### Added (new modules)
+### 新增（新模块）
 
 - `nodes/zimage_nvfp4/__init__.py`
 - `nodes/zimage_nvfp4/load_unet.py`
@@ -268,35 +268,33 @@ Appendix A — full files at HEAD. Critical symbols: `_clear_zimage_parity_conta
 - `nodes/zimage_nvfp4/zi_nvfp4_hadamard.py`
 - `prestartup_script.py`
 
-### Modified (existing modules; full text in Appendix A)
+### 修改（既有模块；全文见附录 A）
 
-| Path | Notes |
+| 路径 | 说明 |
 |------|-------|
-| `nodes/nvfp4/comfy_quant_nvfp4.py` | SDXL product + contamination clear |
-| `nodes/nvfp4/nvfp4_forward.py` | Product bake VER=1 + peel_all |
-| `nodes/nvfp4/nvfp4_conf.py` | INT8 protect conf flags |
+| `nodes/nvfp4/comfy_quant_nvfp4.py` | SDXL 产品 + 污染清除 |
+| `nodes/nvfp4/nvfp4_forward.py` | 产品 bake VER=1 + peel_all |
+| `nodes/nvfp4/nvfp4_conf.py` | INT8 protect conf 标志 |
 | `nodes/nvfp4/nvfp4_hadamard.py` | `_tensor_storage_ok` |
-| `nodes/nvfp4/nvfp4_load.py` | Product load |
-| `patches/comfy_quant_int8.py` | Markers + SDXL clear |
-| Loader / README / changelog / zhmd / release bodies | Version surfaces (not duplicated in Appendix A) |
-
-
----
-
-## ④ Cross-cutting meaning (summary)
-
-1. **Two products, two stamps:** `_hswq_nvfp4_product_tc` (SDXL) vs `_hswq_nvfp4_comfy_only` (Z Image). Never upgrade TC on top of live parity.
-2. **DistOrch empties storage, not Python refs:** Hadamard and wrapper chains must re-validate; peel both TC and parity wrappers before a single re-wrap.
-3. **Hybrid INT8 protect = Conv2d twin:** clear `Params.convrot`, online rotate via flag, bake once, keep Params False after requant.
-4. **In-place Linear mutation survives ops peel:** always `peel_all_nvfp4_linear_lora_bake` when leaving Z Image or entering SDXL.
-5. **INT8 protect load overlay is foreign to SDXL:** peel `_hswq_int8_protect_*` / `_hswq_int8_decode_patched` the same as parity.
+| `nodes/nvfp4/nvfp4_load.py` | 产品加载 |
+| `patches/comfy_quant_int8.py` | 标记 + SDXL 清除 |
+| 加载器 / README / changelog / zhmd / release 正文 | 版本发布面（附录 A 不重复） |
 
 ---
 
-## Appendix A — Full source at HEAD `f030d71`
+## ④ 横切含义（摘要）
 
-The following blocks are the **complete current file text** of every primary countermeasure module listed above (UTF-8, as on disk when this guide was generated).
+1. **两种产品，两种戳记：** `_hswq_nvfp4_product_tc`（SDXL）vs `_hswq_nvfp4_comfy_only`（Z Image）。永不在存活的 parity 之上 upgrade TC。
+2. **DistOrch 清空的是存储，不是 Python 引用：** Hadamard 与 wrapper 链必须重新校验；单一再包之前剥掉 TC 与 parity 两种 wrapper。
+3. **混合 INT8 protect = Conv2d 孪生：** 清除 `Params.convrot`，经标志在线旋转，bake 一次，requant 后保持 Params False。
+4. **就地 Linear 突变在 ops peel 之后仍存活：** 离开 Z Image 或进入 SDXL 时始终 `peel_all_nvfp4_linear_lora_bake`。
+5. **INT8 protect load overlay 对 SDXL 是外来物：** 与 parity 一样 peel `_hswq_int8_protect_*` / `_hswq_int8_decode_patched`。
 
+---
+
+## 附录 A — HEAD `f030d71` 完整源码
+
+以下代码块为上文所列主要对策模块的**当前完整文件正文**（UTF-8，生成本指南时磁盘上的内容）。**代码保持英文原文**，与英文版 Appendix A 一致。
 
 ### `nodes/zimage_nvfp4/__init__.py`
 
