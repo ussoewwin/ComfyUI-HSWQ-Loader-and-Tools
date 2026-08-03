@@ -183,7 +183,6 @@ class HSWQTorchCompileModel:
     CATEGORY = "HSWQ/torchcompile"
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "patch"
-    EXPERIMENTAL = True
     DESCRIPTION = (
         "torch.compile for HSWQ models. Defaults: inductor + "
         "max-autotune-no-cudagraphs (safe with USDU / Distorch). "
