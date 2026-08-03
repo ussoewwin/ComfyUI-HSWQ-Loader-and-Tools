@@ -5,8 +5,8 @@ Z Image ConvRot NVFP4 is **not** the SDXL TC Linear.forward path.
 TC wrap (``_hswq_nvfp4_full_forward``) destroys SSIM; need stock GEMM + online
 act rotate (``_hswq_nvfp4_convrot_parity``) via ``apply_nvfp4_comfy_parity``.
 
-  - Arm SDXL detect/load/LoRA bake with ``apply_comfy_quant_nvfp4_patches``, then
-    **replace** Linear.forward with comfy_parity (not stacked double-rotate).
+  - Arm detect/load/LoRA bake with ``zi_comfy_quant_nvfp4.apply_comfy_quant_nvfp4_patches``,
+    then **replace** Linear.forward with comfy_parity (not stacked double-rotate).
   - INT8 ConvRot: ComfyUI core / kitchen as-is. ``apply_comfy_quant_int8_patches``
     only for int8_tensorwise load.
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 def apply_nvfp4_patches() -> None:
     """Arm Z Image ConvRot NVFP4 (parity) + INT8 load (core ConvRot)."""
-    from ..nvfp4.comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
+    from .zi_comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
     from ...patches.comfy_quant_int8 import apply_comfy_quant_int8_patches
     from .nvfp4_comfy_parity import (
         apply_nvfp4_comfy_parity,
@@ -38,7 +38,7 @@ def apply_nvfp4_patches() -> None:
     if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image: apply_comfy_quant_nvfp4_patches failed "
-            "(detect/load/LoRA bake required; see nodes/nvfp4)"
+            "(detect/load/LoRA bake required; see nodes/zimage_nvfp4/zi_comfy_quant_nvfp4)"
         )
     # Replace TC Linear.forward with stock GEMM + act rotate (not double-rotate).
     if not apply_nvfp4_comfy_parity():
@@ -103,10 +103,8 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     import folder_paths
     import comfy.sd
 
-    from ..nvfp4.comfy_quant_nvfp4 import (
-        apply_comfy_quant_nvfp4_patches,
-        reset_nvfp4_lora_log_counters,
-    )
+    from .zi_comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
+    from .zi_nvfp4_forward import reset_nvfp4_lora_log_counters
     from ...patches.comfy_quant_int8 import (
         _int8_quant_conv_scope,
         apply_comfy_quant_int8_patches,
@@ -126,7 +124,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image UNet requires NVFP4 detect/load/LoRA bake "
-            "(apply_comfy_quant_nvfp4_patches)"
+            "(zi_comfy_quant_nvfp4.apply_comfy_quant_nvfp4_patches)"
         )
     if not apply_nvfp4_comfy_parity():
         raise RuntimeError(

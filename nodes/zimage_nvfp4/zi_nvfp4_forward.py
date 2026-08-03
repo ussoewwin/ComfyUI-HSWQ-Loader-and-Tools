@@ -1,32 +1,24 @@
 """
-HSWQ-owned NVFP4 Linear Tensor Core forward path.
+Z Image hybrid ConvRot LoRA bake + NVFP4 Linear forward helpers (branch-only).
 
-Stock MixedPrecision Linear inference does:
-  reshape → QuantizedTensor.from_float(act) → F.linear → often aten.addmm
-  → unregistered → full dequant (slow), or wrong reshape via weight.shape[0]
-  (QT storage dim).
+Owns the ZI delta that must not live in ``nodes/nvfp4`` (SDXL TC product):
+  - per-kind LoRA bake counters / EVIDENCE (NVFP4 + INT8 protect)
+  - ``_hswq_int8_convrot`` bake arm / Params.convrot clear
+  - ``attach_nvfp4_linear_lora_bake`` ver >= 8 (hybrid)
 
-This module owns the full inference path for HSWQ NVFP4 (+ optional ConvRot):
-  1) reshape act to 2D
-  2) FULL ConvRot via dense Hadamard GEMM (butterfly is slower for gs=256)
-  3) cast weight/bias when off-device
-  4) pooled CUDA quantize_nvfp4 (no per-call alloc)
-  5) pooled cuBLAS scaled_mm_nvfp4
-  6) reshape with module.out_features (never QT storage shape[0])
-
-Never edits ComfyUI-master; installed via monkey-patch on MixedPrecision Linear.
+Hadamard lives in ``zi_nvfp4_hadamard`` (Distorch-safe cache). Runtime stays under ``nodes/nvfp4``.
 """
 from __future__ import annotations
 
 import logging
 import os
 
-from .nvfp4_hadamard import (
+from .zi_nvfp4_hadamard import (
     build_hadamard,
     rotate_weight_linear,
     unrotate_weight_linear,
 )
-from .nvfp4_runtime import (
+from ..nvfp4.nvfp4_runtime import (
     ensure_act_scale,
     clear_nvfp4_cudagraphs,
     nvfp4_quant_mm_cudagraph,
@@ -41,23 +33,216 @@ logger = logging.getLogger(__name__)
 # Counters for bench / diagnostics (reset per run if needed)
 _TC_HITS = 0
 _DEQUANT_FALLBACKS = 0
-_LORA_CONVERT_LOGS = 0
-_LORA_SET_LOGS = 0
-_LORA_LOG_MAX = 8
+# Per-kind totals (always incremented) + per-kind sample log caps.
+# Shared max of 8 hid all int8_protect samples (nvfp4 filled the quota first).
+_LORA_CONVERT_TOTAL = {"nvfp4": 0, "int8_protect": 0}
+_LORA_SET_TOTAL = {"nvfp4": 0, "int8_protect": 0}
+_LORA_CONVERT_LOGGED = {"nvfp4": 0, "int8_protect": 0}
+_LORA_SET_LOGGED = {"nvfp4": 0, "int8_protect": 0}
+_LORA_KIND_LOG_MAX = 4
 # Bump when convert_weight / set_weight ConvRot LoRA bake changes.
-_NVFP4_LORA_BAKE_VER = 1
+# v2: also unrotate/re-rotate INT8 protect ConvRot (``_hswq_int8_convrot``).
+# Hybrid ZI packs = ConvRot NVFP4 + ConvRot INT8 protect — both need bake basis.
+# v3: bake-time fallback if load arm missed and Params.convrot still True on INT8 QT.
+# v4: (reverted) bake-only with Params.convrot — WRONG: kitchen dequant already
+#     unrotates when Params.convrot=True → double unrotate → LoRA dead.
+# v5: Conv2d twin — arm flag + clear Params; after set_weight keep Params=False
+#     (noise was requant restoring Params while parity still rotated).
+# v6: per-kind LoRA bake counters + EVIDENCE log (int8_protect must be visible).
+# v7: pass-delta EVIDENCE only (no stale OK spam on empty re-bake / VAE load).
+# v8: peer NVFP4_LORA_BAKE_* verdict + sample_nvfp4_keys (same weight as INT8).
+_NVFP4_LORA_BAKE_VER = 8
 
 
 def reset_nvfp4_lora_log_counters() -> None:
-    global _LORA_CONVERT_LOGS, _LORA_SET_LOGS
-    _LORA_CONVERT_LOGS = 0
-    _LORA_SET_LOGS = 0
+    for d in (
+        _LORA_CONVERT_TOTAL,
+        _LORA_SET_TOTAL,
+        _LORA_CONVERT_LOGGED,
+        _LORA_SET_LOGGED,
+    ):
+        for k in d:
+            d[k] = 0
 
 
 def reset_nvfp4_forward_stats() -> None:
     global _TC_HITS, _DEQUANT_FALLBACKS
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
+
+
+def _lora_bake_kind(module) -> str:
+    if getattr(module, "_hswq_nvfp4_convrot", False):
+        return "nvfp4"
+    return "int8_protect"
+
+
+def nvfp4_lora_bake_counters() -> dict:
+    """Totals for convert unrotate / set re-rotate by ConvRot kind."""
+    return {
+        "convert_unrotate_nvfp4": int(_LORA_CONVERT_TOTAL.get("nvfp4", 0)),
+        "convert_unrotate_int8_protect": int(_LORA_CONVERT_TOTAL.get("int8_protect", 0)),
+        "set_rerotate_nvfp4": int(_LORA_SET_TOTAL.get("nvfp4", 0)),
+        "set_rerotate_int8_protect": int(_LORA_SET_TOTAL.get("int8_protect", 0)),
+    }
+
+
+def snapshot_nvfp4_lora_bake_counters() -> dict:
+    """Copy of totals for pass-delta EVIDENCE (before bake → after bake)."""
+    return dict(nvfp4_lora_bake_counters())
+
+
+def _counter_delta(before: dict | None, after: dict | None) -> dict:
+    b = before or {}
+    a = after or nvfp4_lora_bake_counters()
+    keys = (
+        "convert_unrotate_nvfp4",
+        "convert_unrotate_int8_protect",
+        "set_rerotate_nvfp4",
+        "set_rerotate_int8_protect",
+    )
+    return {k: int(a.get(k, 0)) - int(b.get(k, 0)) for k in keys}
+
+
+def _lora_bake_side_verdict(prefix: str, baked: int, convert_n: int, set_n: int) -> str:
+    """Peer verdict for one ConvRot kind (NVFP4 or INT8 protect)."""
+    match = convert_n == set_n == int(baked)
+    if int(baked) > 0 and match and convert_n > 0:
+        return f"{prefix}_OK"
+    if int(baked) > 0 and not match:
+        return f"{prefix}_MISMATCH"
+    if int(baked) == 0 and convert_n == 0:
+        return f"{prefix}_N/A"
+    return f"{prefix}_MISSING"
+
+
+def _fmt_sample_keys(label: str, keys: list | None) -> str:
+    if not keys:
+        return ""
+    shown = ", ".join(str(k) for k in keys[:3])
+    return f" {label}=[{shown}]"
+
+
+def log_nvfp4_lora_bake_evidence(
+    tag: str = "",
+    *,
+    before: dict | None = None,
+    nvfp4_baked: int = 0,
+    int8_baked: int = 0,
+    sample_nvfp4_keys: list | None = None,
+    sample_int8_keys: list | None = None,
+    force: bool = False,
+) -> str | None:
+    """Emit pass-scoped EVIDENCE only when this bake pass actually ran hooks.
+
+    NVFP4 and INT8 protect are peer sides (same verdict shape + key samples).
+    Returns the message if emitted, else None (silent skip for empty re-bake).
+    """
+    after = nvfp4_lora_bake_counters()
+    d = _counter_delta(before, after)
+    i8c = d["convert_unrotate_int8_protect"]
+    i8s = d["set_rerotate_int8_protect"]
+    nvc = d["convert_unrotate_nvfp4"]
+    nvs = d["set_rerotate_nvfp4"]
+    this_pass_hooks = (i8c + i8s + nvc + nvs) > 0
+    this_pass_layer = (int(nvfp4_baked) + int(int8_baked)) > 0
+    if not force and not this_pass_hooks and not this_pass_layer:
+        return None
+
+    nv_verdict = _lora_bake_side_verdict(
+        "NVFP4_LORA_BAKE", int(nvfp4_baked), nvc, nvs
+    )
+    i8_verdict = _lora_bake_side_verdict(
+        "INT8_PROTECT_LORA_BAKE", int(int8_baked), i8c, i8s
+    )
+
+    suffix = f" ({tag})" if tag else ""
+    nv_samples = _fmt_sample_keys("sample_nvfp4_keys", sample_nvfp4_keys)
+    i8_samples = _fmt_sample_keys("sample_int8_keys", sample_int8_keys)
+    msg = (
+        f"[HSWQ ConvRot LoRA] EVIDENCE{suffix}: {nv_verdict} {i8_verdict} "
+        f"this_pass | "
+        f"nvfp4 convert_unrotate={nvc} set_rerotate={nvs} "
+        f"nvfp4_baked={int(nvfp4_baked)}{nv_samples} | "
+        f"int8_protect convert_unrotate={i8c} set_rerotate={i8s} "
+        f"int8_baked={int(int8_baked)}{i8_samples} | "
+        f"session_total nv_c/s="
+        f"{after['convert_unrotate_nvfp4']}/"
+        f"{after['set_rerotate_nvfp4']} "
+        f"int8_c/s="
+        f"{after['convert_unrotate_int8_protect']}/"
+        f"{after['set_rerotate_int8_protect']}"
+    )
+    # Single emit path (caller may also _console — prefer logger+print once here).
+    logger.info(msg)
+    print(msg, flush=True)
+    return msg
+
+
+def _clear_int8_qt_params_convrot(module) -> bool:
+    """Force Params.convrot=False on INT8 QT (must stay False after requant)."""
+    import dataclasses
+
+    try:
+        from comfy.quant_ops import QuantizedTensor
+    except ImportError:
+        return False
+    w = getattr(module, "weight", None)
+    qt = w if isinstance(w, QuantizedTensor) else getattr(w, "data", None)
+    if qt is None or not isinstance(qt, QuantizedTensor):
+        return False
+    params = getattr(qt, "_params", None)
+    if params is None or not bool(getattr(params, "convrot", False)):
+        return False
+    new_params = dataclasses.replace(params, convrot=False)
+    try:
+        object.__setattr__(qt, "_params", new_params)
+        return True
+    except Exception:
+        pass
+    try:
+        qt._params = new_params
+        return True
+    except Exception:
+        return False
+
+
+def _linear_convrot_lora_groupsize(module) -> int | None:
+    """Groupsize for offline ConvRot Linear LoRA bake, or None if not ConvRot.
+
+    Hybrid Z Image packs:
+      - NVFP4: ``_hswq_nvfp4_convrot`` (Params cleared; parity rotates).
+      - INT8 protect: ``_hswq_int8_convrot`` (Params cleared; parity rotates).
+        Kitchen dequant with Params.convrot=True already unrotates — bake must
+        see Params=False so convert unrotates rotated-basis float once.
+    """
+    if getattr(module, "_hswq_nvfp4_convrot", False):
+        return int(getattr(module, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+    if getattr(module, "_hswq_int8_convrot", False):
+        return int(getattr(module, "_hswq_int8_convrot_groupsize", 256) or 256)
+    # Late arm if load missed: Params.convrot still True on INT8 QT.
+    try:
+        from comfy.quant_ops import QuantizedTensor
+
+        w = getattr(module, "weight", None)
+        qt = w if isinstance(w, QuantizedTensor) else getattr(w, "data", None)
+        if qt is None or not isinstance(qt, QuantizedTensor):
+            return None
+        layout_cls = getattr(qt, "_layout_cls", None) or ""
+        if isinstance(layout_cls, type):
+            layout_cls = getattr(layout_cls, "__name__", "") or ""
+        if str(layout_cls) != "TensorWiseINT8Layout":
+            return None
+        params = getattr(qt, "_params", None)
+        if params is None or not bool(getattr(params, "convrot", False)):
+            return None
+        gs = int(getattr(params, "convrot_groupsize", 256) or 256)
+        module._hswq_int8_convrot = True
+        module._hswq_int8_convrot_groupsize = gs
+        _clear_int8_qt_params_convrot(module)
+        return gs
+    except Exception:
+        return None
 
 
 def nvfp4_forward_stats() -> dict:
@@ -360,47 +545,58 @@ def make_nvfp4_linear_forward(stock_forward):
 
 
 def make_nvfp4_linear_convert_weight(stock_convert_weight):
-    """Wrap Linear.convert_weight: dequant then unrotate ConvRot weights for LoRA bake."""
+    """Wrap Linear.convert_weight: dequant then unrotate ConvRot weights for LoRA bake.
+
+    Handles ConvRot NVFP4 **and** ConvRot INT8 protect (hybrid Z Image packs).
+    Clear INT8 Params.convrot **before** stock dequant — kitchen already
+    unrotates when Params.convrot=True (would double-unrotate with bake).
+    """
     import torch
     from comfy.quant_ops import QuantizedTensor
 
     def convert_weight(self, weight, inplace=False, **kwargs):
-        global _LORA_CONVERT_LOGS
+        # Arm / clear Params before dequant (Conv2d twin).
+        gs = _linear_convrot_lora_groupsize(self)
         if callable(stock_convert_weight):
             out = stock_convert_weight(self, weight, inplace=inplace, **kwargs)
         elif isinstance(weight, QuantizedTensor):
             out = weight.dequantize()
         else:
             out = weight
-        if (
-            getattr(self, "_hswq_nvfp4_convrot", False)
-            and out is not None
-            and getattr(out, "ndim", 0) == 2
-        ):
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+        if gs is None:
+            gs = _linear_convrot_lora_groupsize(self)
+        if gs is not None and out is not None and getattr(out, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             out = unrotate_weight_linear(out, h, gs)
-        if _LORA_CONVERT_LOGS < _LORA_LOG_MAX and getattr(
-            self, "_hswq_nvfp4_convrot", False
-        ):
-            _LORA_CONVERT_LOGS += 1
-            logger.info(
-                "[HSWQ NVFP4 LoRA] Linear.convert_weight #%s: unrotate ConvRot "
-                "in=%s/%s -> out=%s/%s",
-                _LORA_CONVERT_LOGS,
-                type(weight).__name__,
-                getattr(weight, "dtype", None),
-                type(out).__name__,
-                getattr(out, "dtype", None),
-            )
+            kind = _lora_bake_kind(self)
+            _LORA_CONVERT_TOTAL[kind] = int(_LORA_CONVERT_TOTAL.get(kind, 0)) + 1
+            if int(_LORA_CONVERT_LOGGED.get(kind, 0)) < _LORA_KIND_LOG_MAX:
+                _LORA_CONVERT_LOGGED[kind] = int(_LORA_CONVERT_LOGGED.get(kind, 0)) + 1
+                logger.info(
+                    "[HSWQ ConvRot LoRA] Linear.convert_weight #%s (%s): unrotate "
+                    "gs=%s in=%s/%s -> out=%s/%s",
+                    _LORA_CONVERT_TOTAL[kind],
+                    kind,
+                    gs,
+                    type(weight).__name__,
+                    getattr(weight, "dtype", None),
+                    type(out).__name__,
+                    getattr(out, "dtype", None),
+                )
         return out
 
     convert_weight._hswq_nvfp4_lora_bake_ver = _NVFP4_LORA_BAKE_VER  # type: ignore[attr-defined]
+    convert_weight._hswq_nvfp4_lora_bake_stock = stock_convert_weight  # type: ignore[attr-defined]
     return convert_weight
 
 
 def make_nvfp4_linear_set_weight(stock_set_weight):
-    """Wrap Linear.set_weight: re-rotate ConvRot float weights before requant."""
+    """Wrap Linear.set_weight: re-rotate ConvRot float weights before requant.
+
+    Handles ConvRot NVFP4 **and** ConvRot INT8 protect (hybrid Z Image packs).
+    After INT8 requant, force Params.convrot=False (parity rotates acts;
+    kitchen must not also rotate).
+    """
     import torch
 
     def set_weight(
@@ -411,24 +607,24 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
         return_weight=False,
         **kwargs,
     ):
-        global _LORA_SET_LOGS
-        if (
-            getattr(self, "_hswq_nvfp4_convrot", False)
-            and getattr(weight, "ndim", 0) == 2
-        ):
-            gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
+        gs = _linear_convrot_lora_groupsize(self)
+        if gs is not None and getattr(weight, "ndim", 0) == 2:
             h = build_hadamard(gs, device="cpu", dtype=torch.float32)
             weight = rotate_weight_linear(weight, h, gs)
-            if _LORA_SET_LOGS < _LORA_LOG_MAX:
-                _LORA_SET_LOGS += 1
+            kind = _lora_bake_kind(self)
+            _LORA_SET_TOTAL[kind] = int(_LORA_SET_TOTAL.get(kind, 0)) + 1
+            if int(_LORA_SET_LOGGED.get(kind, 0)) < _LORA_KIND_LOG_MAX:
+                _LORA_SET_LOGGED[kind] = int(_LORA_SET_LOGGED.get(kind, 0)) + 1
                 logger.info(
-                    "[HSWQ NVFP4 LoRA] Linear.set_weight #%s: re-rotate ConvRot "
-                    "shape=%s layout=%s",
-                    _LORA_SET_LOGS,
+                    "[HSWQ ConvRot LoRA] Linear.set_weight #%s (%s): re-rotate "
+                    "gs=%s shape=%s layout=%s",
+                    _LORA_SET_TOTAL[kind],
+                    kind,
+                    gs,
                     tuple(weight.shape) if hasattr(weight, "shape") else "?",
                     getattr(self, "layout_type", None),
                 )
-        return stock_set_weight(
+        out = stock_set_weight(
             self,
             weight,
             inplace_update=inplace_update,
@@ -436,20 +632,68 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
             return_weight=return_weight,
             **kwargs,
         )
+        # Requant may restore Params.convrot — keep cleared for INT8 protect.
+        if getattr(self, "_hswq_int8_convrot", False):
+            _clear_int8_qt_params_convrot(self)
+        return out
 
     set_weight._hswq_nvfp4_lora_bake_ver = _NVFP4_LORA_BAKE_VER  # type: ignore[attr-defined]
+    set_weight._hswq_nvfp4_lora_bake_stock = stock_set_weight  # type: ignore[attr-defined]
     return set_weight
 
 
+def _peel_lora_bake_wrap(fn):
+    """Unwrap nested HSWQ convert/set wraps to true stock.
+
+    After #2 split, ``nodes/nvfp4`` (3.3.0) may attach VER=1 first; ZI must not
+    wrap that as stock (double unrotate / re-rotate → dead LoRA). Same as
+    3.3.4 single-module attach: one hybrid wrap over stock only.
+    """
+    cur = fn
+    for _ in range(8):
+        if not callable(cur):
+            return cur
+        if int(getattr(cur, "_hswq_nvfp4_lora_bake_ver", 0) or 0) <= 0:
+            return cur
+        stock = getattr(cur, "_hswq_nvfp4_lora_bake_stock", None)
+        if stock is not None and stock is not cur:
+            cur = stock
+            continue
+        closure = getattr(cur, "__closure__", None)
+        code = getattr(cur, "__code__", None)
+        if closure is None or code is None:
+            return cur
+        names = code.co_freevars
+        nxt = None
+        for i, name in enumerate(names):
+            if name in ("stock_convert_weight", "stock_set_weight"):
+                nxt = closure[i].cell_contents
+                break
+        if nxt is None or nxt is cur:
+            return cur
+        cur = nxt
+    return cur
+
+
 def attach_nvfp4_linear_lora_bake(Lin) -> bool:
-    """Ensure MixedPrecision Linear has ConvRot LoRA convert/set wraps. Returns True if applied/upgraded."""
+    """Ensure MixedPrecision Linear has hybrid ConvRot LoRA wraps (one layer).
+
+    Peels any prior HSWQ bake wrap (e.g. SDXL ``nodes/nvfp4`` VER=1) so ZI
+    hybrid VER never nests — nesting double-unrotates NVFP4 and kills LoRA.
+    """
     applied = False
     cvt = getattr(Lin, "convert_weight", None)
-    if callable(cvt) and getattr(cvt, "_hswq_nvfp4_lora_bake_ver", 0) < _NVFP4_LORA_BAKE_VER:
-        Lin.convert_weight = make_nvfp4_linear_convert_weight(cvt)
-        applied = True
+    if callable(cvt):
+        ver = int(getattr(cvt, "_hswq_nvfp4_lora_bake_ver", 0) or 0)
+        if ver != _NVFP4_LORA_BAKE_VER:
+            stock = _peel_lora_bake_wrap(cvt) if ver > 0 else cvt
+            Lin.convert_weight = make_nvfp4_linear_convert_weight(stock)
+            applied = True
     sw = getattr(Lin, "set_weight", None)
-    if callable(sw) and getattr(sw, "_hswq_nvfp4_lora_bake_ver", 0) < _NVFP4_LORA_BAKE_VER:
-        Lin.set_weight = make_nvfp4_linear_set_weight(sw)
-        applied = True
+    if callable(sw):
+        ver = int(getattr(sw, "_hswq_nvfp4_lora_bake_ver", 0) or 0)
+        if ver != _NVFP4_LORA_BAKE_VER:
+            stock = _peel_lora_bake_wrap(sw) if ver > 0 else sw
+            Lin.set_weight = make_nvfp4_linear_set_weight(stock)
+            applied = True
     return applied

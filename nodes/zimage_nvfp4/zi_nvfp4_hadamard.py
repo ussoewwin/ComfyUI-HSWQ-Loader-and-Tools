@@ -1,10 +1,50 @@
-"""Hadamard helpers for FULL offline ConvRot + online act rotation (HSWQ)."""
+"""Z Image Hadamard helpers (Distorch-safe cache) for ConvRot + act rotation.
+
+Owns the ZI delta that must not live in ``nodes/nvfp4`` (SDXL TC product):
+  - ``_tensor_storage_ok`` / poisoned-storage rejection
+  - ``clear_hadamard_global_caches`` (Method 2c / parity clear)
+  - storage-ok gating inside ``build_hadamard`` / ``_h4``
+
+SDXL TC uses the 3.3.0 stock module ``nodes/nvfp4/nvfp4_hadamard.py``.
+"""
 from __future__ import annotations
 
 import math
 
 _HADAMARD_CACHE: dict = {}
 _H4_CACHE: dict = {}
+
+
+def _tensor_storage_ok(t) -> bool:
+    """False after Distorch nuclear kill / empty-storage reuse (UAF risk)."""
+    if t is None:
+        return False
+    try:
+        if int(getattr(t, "numel", lambda: 0)()) <= 0:
+            return False
+        st = t.untyped_storage() if hasattr(t, "untyped_storage") else t.storage()
+        if int(st.nbytes()) <= 0:
+            return False
+        # Shape must match a square Hadamard (or 4x4 h4); reject emptied shells.
+        if getattr(t, "ndim", 0) == 2:
+            if int(t.shape[0]) != int(t.shape[1]) or int(t.shape[0]) < 4:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def clear_hadamard_global_caches() -> int:
+    """Drop module-level Hadamard caches (Distorch Method 2c / parity clear).
+
+    Method 3 may ``t.data = empty`` on tensors still referenced by these dicts.
+    Returning them on the next gen rotates with dead/garbage ``H`` and quality
+    decays as CUDA reallocates the freed region (2nd→3rd→4th gen worse).
+    """
+    n = len(_HADAMARD_CACHE) + len(_H4_CACHE)
+    _HADAMARD_CACHE.clear()
+    _H4_CACHE.clear()
+    return n
 
 
 def build_hadamard(size: int, device="cpu", dtype=None):
@@ -20,13 +60,19 @@ def build_hadamard(size: int, device="cpu", dtype=None):
         dtype = torch.float32
     device = torch.device(device) if not isinstance(device, torch.device) else device
     cache_key = (size, str(device), dtype)
-    if cache_key in _HADAMARD_CACHE:
-        return _HADAMARD_CACHE[cache_key]
+    cached = _HADAMARD_CACHE.get(cache_key)
+    if cached is not None and _tensor_storage_ok(cached):
+        return cached
+    if cached is not None:
+        _HADAMARD_CACHE.pop(cache_key, None)
     if size < 4 or (size & (size - 1)) != 0 or math.log(size, 4) % 1 != 0:
         raise ValueError(f"Regular Hadamard size must be a power of 4, got {size}")
 
     master_key = (size, str(device), torch.float32)
-    if master_key not in _HADAMARD_CACHE:
+    h_matrix = _HADAMARD_CACHE.get(master_key)
+    if h_matrix is None or not _tensor_storage_ok(h_matrix):
+        if h_matrix is not None:
+            _HADAMARD_CACHE.pop(master_key, None)
         h4 = torch.tensor(
             [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
             dtype=torch.float32,
@@ -39,7 +85,6 @@ def build_hadamard(size: int, device="cpu", dtype=None):
             current_size *= 4
         h_matrix = h_matrix / (size**0.5)
         _HADAMARD_CACHE[master_key] = h_matrix
-    h_matrix = _HADAMARD_CACHE[master_key]
     if dtype != torch.float32:
         h_matrix = h_matrix.to(dtype=dtype)
     _HADAMARD_CACHE[cache_key] = h_matrix
@@ -51,7 +96,9 @@ def _h4(device, dtype):
 
     key = (str(device), dtype)
     h = _H4_CACHE.get(key)
-    if h is None:
+    if h is None or not _tensor_storage_ok(h):
+        if h is not None:
+            _H4_CACHE.pop(key, None)
         h = torch.tensor(
             [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
             dtype=dtype,

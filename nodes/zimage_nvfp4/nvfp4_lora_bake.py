@@ -405,7 +405,7 @@ def _dump_bake_status(
         f"patches_left={left} patches_uuid={uuid_s}"
     )
     try:
-        from ..nvfp4.nvfp4_forward import log_nvfp4_lora_bake_evidence
+        from .zi_nvfp4_forward import log_nvfp4_lora_bake_evidence
 
         log_nvfp4_lora_bake_evidence(
             tag=f"bake#{_STATUS_LOGS}/{reason}",
@@ -463,7 +463,7 @@ def run_zimage_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str =
     if device_to is None:
         device_to = getattr(patcher, "load_device", None)
     try:
-        from ..nvfp4.nvfp4_forward import snapshot_nvfp4_lora_bake_counters
+        from .zi_nvfp4_forward import snapshot_nvfp4_lora_bake_counters
 
         counters_before = snapshot_nvfp4_lora_bake_counters()
     except Exception:

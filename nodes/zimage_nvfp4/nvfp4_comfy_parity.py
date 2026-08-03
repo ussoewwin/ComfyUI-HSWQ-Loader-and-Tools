@@ -46,7 +46,7 @@ def clear_nvfp4_parity_hadamard_caches(root=None) -> int:
     """Drop parity ``H`` attrs + global Hadamard dicts after Distorch purge.
 
     Method 3 may ``t.data = empty`` on module ``_hswq_nvfp4_parity_H`` while the
-    same tensor remains in ``nvfp4_hadamard._HADAMARD_CACHE``. The next gen then
+    same tensor remains in ``zi_nvfp4_hadamard._HADAMARD_CACHE``. The next gen then
     gets a dead/garbage ``H`` from the global cache (nbytes==0 rebuild still
     returns the poisoned entry) and quality decays as CUDA reuses the region
     (2nd→3rd→4th gen gradually worse). Distorch Method 2c calls this via
@@ -56,7 +56,7 @@ def clear_nvfp4_parity_hadamard_caches(root=None) -> int:
 
     import torch
 
-    from ..nvfp4.nvfp4_hadamard import clear_hadamard_global_caches
+    from .zi_nvfp4_hadamard import clear_hadamard_global_caches
 
     cleared = 0
     cleared += int(clear_hadamard_global_caches() or 0)
@@ -412,7 +412,7 @@ def _ensure_single_parity_linear_forward(Lin) -> None:
 
 def _is_int8_tensorwise_convrot_conf(conf) -> bool:
     """True for INT8 protect Linear layers stamped with ConvRot offline rotate."""
-    from ..nvfp4.nvfp4_conf import int8_convrot_flags_from_conf
+    from .zi_nvfp4_conf import int8_convrot_flags_from_conf
 
     enabled, _gs = int8_convrot_flags_from_conf(conf)
     return bool(enabled)
@@ -426,7 +426,7 @@ def _make_convrot_parity_forward(stock_forward):
     same as Conv2d). Kitchen must **not** see Params.convrot=True or
     int8_linear double-rotates with this path.
     """
-    from ..nvfp4.nvfp4_hadamard import build_hadamard, rotate_last_dim
+    from .zi_nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
         nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
@@ -440,7 +440,7 @@ def _make_convrot_parity_forward(stock_forward):
             need_rebuild = True
             if h is not None:
                 try:
-                    from ..nvfp4.nvfp4_hadamard import _tensor_storage_ok
+                    from .zi_nvfp4_hadamard import _tensor_storage_ok
 
                     # Global cache already rejects poisoned H via
                     # _tensor_storage_ok; module-local H must use the same
@@ -545,10 +545,10 @@ def _arm_int8_protect_convrot_after_stock_load(module, conf) -> None:
     Params.convrot=True — LoRA bake must see Params=False so convert gets
     rotated-basis float and unrotates once. Online act rotate is parity
     (``_hswq_int8_convrot``). Requant must keep Params.convrot=False
-    (see ``nvfp4_forward`` set_weight).
+    (see ``zi_nvfp4_forward`` set_weight).
     """
     global _LOAD_INT8_CONVROT_ARMED
-    from ..nvfp4.nvfp4_conf import int8_convrot_flags_from_conf
+    from .zi_nvfp4_conf import int8_convrot_flags_from_conf
 
     enabled, gs = int8_convrot_flags_from_conf(conf)
     if not enabled:
@@ -638,7 +638,7 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
     from ..nvfp4.nvfp4_conf import decode_comfy_quant_conf, is_nvfp4_conf
-    from ..nvfp4.nvfp4_forward import attach_nvfp4_linear_lora_bake
+    from .zi_nvfp4_forward import attach_nvfp4_linear_lora_bake
     # Product Z Image: keep ConvRot Linear LoRA bake (same as SDXL). Do not peel.
 
     register_nvfp4_addmm_handler()
