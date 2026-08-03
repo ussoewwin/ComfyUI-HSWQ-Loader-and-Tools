@@ -291,35 +291,50 @@ def peel_non_product_nvfp4_ops(ops) -> bool:
         changed = True
         cur = nxt
 
+    def _is_foreign_int8_protect_load(fn) -> bool:
+        """ZI / INT8-protect / parity load wraps that must not survive onto SDXL."""
+        return bool(
+            getattr(fn, "_hswq_nvfp4_comfy_only", False)
+            or getattr(fn, "_hswq_int8_protect_in_load", False)
+            or getattr(fn, "_hswq_int8_protect_arm_v2", False)
+            or getattr(fn, "_hswq_int8_decode_patched", False)
+            or (
+                getattr(fn, "_hswq_nvfp4_full_load", False)
+                and not getattr(fn, "_hswq_nvfp4_product_tc", False)
+            )
+        )
+
+    def _next_load_under(fn):
+        # arm overlay closes over ``cur``; comfy_only / INT8 use orig*/_orig_load.
+        for name in ("cur", "orig_load", "original_load", "_orig_load"):
+            nxt = _closure_named(fn, name)
+            if nxt is not None:
+                return nxt
+        return getattr(fn, "_hswq_nvfp4_orig_load", None)
+
     cur_l = getattr(ops, "_load_quantized_module", None)
     seen_l: set[int] = set()
     while cur_l is not None and id(cur_l) not in seen_l:
         seen_l.add(id(cur_l))
         if getattr(cur_l, "_hswq_nvfp4_product_tc", False):
+            under = _next_load_under(cur_l)
+            # PRODUCT restored on top of ZI protect arm still calls that arm for
+            # int8_tensorwise+convrot (same conf shape as SDXL INT8 ConvRot).
+            if under is not None and _is_foreign_int8_protect_load(under):
+                ops._load_quantized_module = under
+                changed = True
+                cur_l = under
+                continue
             if ops._load_quantized_module is not cur_l:
                 ops._load_quantized_module = cur_l
                 changed = True
             break
-        is_foreign_l = bool(
-            getattr(cur_l, "_hswq_nvfp4_comfy_only", False)
-            or getattr(cur_l, "_hswq_int8_protect_in_load", False)
-            or getattr(cur_l, "_hswq_int8_protect_arm_v2", False)
-            or getattr(cur_l, "_hswq_int8_decode_patched", False)
-            or (
-                getattr(cur_l, "_hswq_nvfp4_full_load", False)
-                and not getattr(cur_l, "_hswq_nvfp4_product_tc", False)
-            )
-        )
-        if not is_foreign_l:
+        if not _is_foreign_int8_protect_load(cur_l):
             if ops._load_quantized_module is not cur_l:
                 ops._load_quantized_module = cur_l
                 changed = True
             break
-        nxt_l = _closure_named(cur_l, "orig_load") or _closure_named(
-            cur_l, "original_load"
-        )
-        if nxt_l is None:
-            nxt_l = getattr(cur_l, "_hswq_nvfp4_orig_load", None)
+        nxt_l = _next_load_under(cur_l)
         if nxt_l is None:
             break
         ops._load_quantized_module = nxt_l
