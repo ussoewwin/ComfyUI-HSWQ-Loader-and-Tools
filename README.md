@@ -212,6 +212,36 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 - **Extensibility**: Designed as a thin UI wrapper so future HSWQ / Z-Image quantized-inference arguments can be intercepted in `sample()` without patching the ComfyUI core
 - **Details**: See `md/hswq_sampler_technical_reference.md`
 
+### HSWQ Torch Compile
+
+<img src="png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
+
+ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows). Uses ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper` — **no KJNodes dependency**.
+
+Defaults are chosen for HSWQ + Ultimate SD Upscale: **inductor** + **`max-autotune-no-cudagraphs`**, `fullgraph` off, and Distorch weight-cast helpers marked eager so multi-tile USDU does not explode recompiles or hit CUDA-graph / `cudaMallocAsync` pool errors.
+
+On Windows, other extensions (for example SeedVR2) may raise inductor `compile_threads` and force ProcessPool **spawn**. Spawn children can re-import ComfyUI `main.py` after `nodes.py` has inserted `comfy/` on `sys.path`, which shadows the `utils` package and crashes with `ModuleNotFoundError: No module named 'utils.install_util'`. This node forces **serial** inductor compile (`compile_threads=1`, `worker_start_method=subprocess`) and shuts down any already-warmed spawn compile pools before applying the wrapper.
+
+#### Features
+
+- **MODEL → MODEL**: Clones the input model and applies `torch.compile` via ComfyUI’s compile wrapper
+- **Safe HSWQ defaults**: `backend=inductor`, `mode=max-autotune-no-cudagraphs`, `fullgraph=False`, `dynamic=false`
+- **Block-only compile**: When enabled, compiles known transformer / block containers (`layers`, `double_blocks`, `single_blocks`, `transformer_blocks`, `blocks`, …) as `diffusion_model.<name>.<i>`; falls back to the whole `diffusion_model` if none are found
+- **Distorch / dynamic VRAM**: Optional patch marks `comfy.ops` cast helpers (and `comfy_aimdo` raw-ptr helper when present) as eager graph breaks
+- **Static parameter shapes**: Optional `force_parameter_static_shapes` to reduce symbolic `torch.Size` errors under nested inductor tracing of cast paths
+- **Inductor hardening for ComfyUI**: Forces `compile_threads=1` and `worker_start_method=subprocess`; clears spawn ProcessPools left by other nodes
+- **Optional `disable_dynamic_vram`**: Clones with `disable_dynamic=True` when the ComfyUI build supports it
+
+#### Usage Notes
+
+- **Inputs**: `model` (MODEL), `backend`, `fullgraph`, `mode`, `dynamic`, `compile_transformer_blocks_only`, `dynamo_cache_size_limit`, `force_parameter_static_shapes`, `patch_distorch_weight_cast`, `debug_compile_keys`; optional `disable_dynamic_vram`
+- **Outputs**: MODEL (compiled clone)
+- **Category**: `HSWQ/torchcompile`
+- **Placement**: After **HSWQ Checkpoint Loader (SDXL)** or **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (and any LoRA), before the sampler / **HSWQ Ultimate SD Upscale**
+- **Avoid `cudagraphs` with multi-tile USDU**: Prefer inductor; CUDA graphs often fail on tiled / pool allocation paths
+- **KJNodes**: Not required; this is a standalone HSWQ menu node
+- **Details**: See `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
+
 ## Changelog
 
 See [changelog.md](changelog.md).
