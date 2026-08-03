@@ -79,14 +79,33 @@ SDXL ConvRot NVFP4 uses a **Tensor Core** full stack (`load_nvfp4_linear_module`
 
 See **Appendix A** (entire files at HEAD `f030d71`).
 
-### ④ Meaning
+### ④ Meaning (files and code)
 
-| Piece | Meaning |
-|-------|---------|
-| `_hswq_nvfp4_comfy_only` | Ops are on Z Image parity — must not be treated as SDXL product TC |
-| `_hswq_nvfp4_product_tc` | Stamp only from SDXL product installer in `nodes/nvfp4` |
-| Online act rotate | Weights offline-rotated; acts rotated in parity forward with Hadamard `H` |
-| `Params.convrot` clear on Linear | Kitchen must not also rotate; HSWQ owns rotate via `_hswq_nvfp4_convrot` / `_hswq_int8_convrot` |
+**What the added package means**
+
+| File | Meaning of the file | Important symbols / code meaning |
+|------|---------------------|----------------------------------|
+| `nodes/zimage_nvfp4/__init__.py` | Public surface of the Z Image ConvRot NVFP4 package. Exists so loaders import one package name instead of reaching into SDXL `nodes/nvfp4`. | Re-exports `load_unet` entry points only — no runtime logic. |
+| `load_unet.py` | Z Image UNet load entry for dtype **Z Image ConvRot NVFP4**. Chooses parity install, not SDXL TC install. | Calls into `zi_comfy_quant_nvfp4` / parity apply; must not call SDXL `apply_comfy_quant_nvfp4_patches` as the primary path. |
+| `zi_comfy_quant_nvfp4.py` | Installs / tears down the Z Image patch stack and stamps product identity on `ops`. | Stamps `_hswq_nvfp4_comfy_only` on the live load path. Must never stamp `_hswq_nvfp4_product_tc`. |
+| `zi_nvfp4_conf.py` | Z Image–side conf decode helpers (keep ZI conf parsing out of SDXL modules). | Conf → flags used by parity arm; no GEMM. |
+| `zi_nvfp4_forward.py` | Z Image forward helpers used by the parity path (act path, evidence, dual-layout helpers). | Supports online act rotate; does not own SDXL scaled_mm TC forward. |
+| `zi_nvfp4_hadamard.py` | Z Image Hadamard builders / caches used with module-local `H`. | Builds `H` for parity; liveness still gated by `_tensor_storage_ok` in shared / parity code. |
+| `nvfp4_comfy_parity.py` | **Core Z Image product:** stock MixedPrecision GEMM + online act rotate; peel/restore of SDXL PRODUCT; foreign-load peel. | `apply_nvfp4_comfy_parity`, `_make_convrot_parity_forward`, `peel_non_product_nvfp4_ops`, `restore_nvfp4_tc_product_stack`, `_discard_poisoned_product_refs`. |
+| `nvfp4_lora_bake.py` | DynamicVRAM LoRA bake wrap for Z Image (VER=8), including hybrid INT8 protect bake. | `install_zimage_nvfp4_lora_bake` / `uninstall_zimage_nvfp4_lora_bake` mutate live `Linear`; uninstall must peel VER=8 off Linear, not only unwrap Dynamic.load. |
+| `nvfp4_addmm_patch.py` | addmm / kitchen interaction for Z Image so kitchen and HSWQ do not double-rotate. | Patches addmm path; works with cleared `Params.convrot`. |
+| `nvfp4_tc_gate.py` | Hard gate: refuse TC full-load upgrade while parity is live. | Prevents “upgrade” that stacked TC on parity (root of P2). |
+| `require_parity.py` | Asserts parity forward is armed when Z Image ConvRot NVFP4 is selected. | Fail-fast if load finished without parity forward. |
+| `prestartup_script.py` | ComfyUI prestartup: import path / early hooks so custom node package resolves before late imports. | No model math; packaging discipline only. |
+
+**Stamp meanings**
+
+| Stamp / flag | Meaning |
+|--------------|---------|
+| `_hswq_nvfp4_comfy_only` | Live `ops` are Z Image **Comfy parity**. Treat as foreign on SDXL clear. Never “upgrade” to TC on top. |
+| `_hswq_nvfp4_product_tc` | Live `ops` are SDXL **product Tensor Core**. Only SDXL installer in `nodes/nvfp4` may set this. |
+| Online act rotate | Weights were offline-rotated at quantize time; acts rotate in parity forward with Hadamard `H` (`module._hswq_nvfp4_parity_H`). |
+| `Params.convrot` clear on Linear | Kitchen must not also rotate. HSWQ owns rotate via `_hswq_nvfp4_convrot` / `_hswq_int8_convrot`. |
 
 ---
 
@@ -108,12 +127,13 @@ After DistOrch VRAM purge, INT8 decode wrap could drop NVFP4 stack markers. A la
 
 See Appendix A — especially `_unwrap_stock_forward` / `_ensure_single_parity_linear_forward` in `nvfp4_comfy_parity.py`, and INT8 wrap marker preservation in `patches/comfy_quant_int8.py`.
 
-### ④ Meaning
+### ④ Meaning (files and code)
 
-| Piece | Meaning |
-|-------|---------|
-| Flatten both wrappers | Never stack parity on parity or TC-on-parity leftovers |
-| Marker preservation | DistOrch / INT8 decode must not forget “this Linear is parity” |
+| File / symbol | Meaning |
+|---------------|---------|
+| `_unwrap_stock_forward` in `nvfp4_comfy_parity.py` | Walks the live `Linear.forward` wrapper chain and peels **both** TC product forward and parity forward shells until stock (or a known base) remains. Meaning: DistOrch refresh must not leave a second online act-rotate layer. |
+| `_ensure_single_parity_linear_forward` | After unwrap, installs **exactly one** parity forward. Meaning: single online rotate, never TC-on-parity then peel-TC-only. |
+| INT8 wrap marker preservation in `patches/comfy_quant_int8.py` | When INT8 decode wraps a Linear, NVFP4 / parity stamps on the module or ops chain must survive. Meaning: DistOrch / INT8 decode must not forget “this Linear is parity”. |
 
 ---
 
@@ -134,9 +154,13 @@ Parity keeps `module._hswq_nvfp4_parity_H`. DistOrch Method 3 can empty/poison t
 
 See Appendix A — `_tensor_storage_ok` and `_make_convrot_parity_forward`.
 
-### ④ Meaning
+### ④ Meaning (files and code)
 
-Same liveness rule for global cache and module-local `H`. If storage is poisoned, rebuild via `build_hadamard`.
+| File / symbol | Meaning |
+|---------------|---------|
+| `_tensor_storage_ok` in `nodes/nvfp4/nvfp4_hadamard.py` | Shared gate: a Hadamard tensor is usable only if storage is alive (not DistOrch-poisoned empty shell). Meaning of the function: device/dtype/`numel` alone are **not** enough. |
+| `need_rebuild` path in `_make_convrot_parity_forward` (`nvfp4_comfy_parity.py`) | Module-local `module._hswq_nvfp4_parity_H` must pass the **same** `_tensor_storage_ok` check as the global cache. Meaning: 2nd+ gens after DistOrch purge rebuild `H` instead of reusing a dead attribute. |
+| `build_hadamard` (called on rebuild) | Reconstructs a live Hadamard; meaning: quality recovery after Method-3 storage wipe. |
 
 ---
 
@@ -159,9 +183,14 @@ Hybrid packs (~120 NVFP4 + ~60 INT8 protect ConvRot) baked NVFP4 keys but left *
 
 See Appendix A. Narrative detail also in `md/HSWQ_ZI_HYBRID_NVFP4_INT8_LORA_BAKE_FROM_v3.3.2.md`.
 
-### ④ Meaning
+### ④ Meaning (files and code)
 
-Arm like Conv2d: clear kitchen `Params.convrot`, set `_hswq_int8_convrot`, bake unrotate once, keep `Params.convrot=False` after requant. Pass-delta EVIDENCE must not print OK on empty `patches=0` passes.
+| File / symbol | Meaning |
+|---------------|---------|
+| `int8_convrot_flags_from_conf` (`nvfp4_conf.py`) | Reads hybrid INT8 protect ConvRot conf into HSWQ flags. Meaning: INT8 protect is a first-class twin of NVFP4 ConvRot, not an afterthought. |
+| Dual unrotate / re-rotate in `nvfp4_forward.py` | Bake path unrotates once with the correct layout; online path rotates acts via `_hswq_int8_convrot` without kitchen double-rotate. Meaning: wrong `Params.convrot` = dead LoRA or noise. |
+| `_arm_int8_protect_convrot_after_stock_load` (`nvfp4_comfy_parity.py`) | Arms INT8 protect **like Conv2d**: clear kitchen `Params.convrot`, set `_hswq_int8_convrot`. Meaning of the arm: HSWQ owns rotate. |
+| Dual bake + pass-delta EVIDENCE (`nvfp4_lora_bake.py`) | Bakes NVFP4 **and** INT8 protect keys; EVIDENCE must use pass-delta, not print OK on empty `patches=0`. Meaning: hybrid packs (~120+~60) must show both classes succeeding. |
 
 ---
 
@@ -179,9 +208,13 @@ Refactor: Z Image runtime under `nodes/zimage_nvfp4/`; SDXL product remains `nod
 
 Appendix A is the post-peel tree at HEAD.
 
-### ④ Meaning
+### ④ Meaning (files and code)
 
-Import boundaries: SDXL clear may **call** Z Image peel/uninstall; Z Image must not permanently own SDXL `ops` after unload.
+| Boundary | Meaning |
+|----------|---------|
+| Package `nodes/zimage_nvfp4/` | Owns Z Image ConvRot NVFP4 runtime after peel. Meaning of the split: SDXL product code in `nodes/nvfp4/` must not carry Z Image parity forever. |
+| Package `nodes/nvfp4/` | Owns SDXL ConvRot NVFP4 TC product only. Meaning: shared ownership was the contamination root. |
+| SDXL clear calling Z Image peel/uninstall | Allowed **call** direction: SDXL may invoke Z Image cleanup. Meaning: Z Image must not permanently own SDXL `ops` after unload. |
 
 ---
 
@@ -199,9 +232,12 @@ Loader UI / weight_dtype strings; Dynamic bake install gated on Z Image dtype.
 
 See loader / `nvfp4_lora_bake.py` install paths in Appendix A.
 
-### ④ Meaning
+### ④ Meaning (files and code)
 
-Branch on product identity, not on “looks like NVFP4 conf”.
+| Piece | Meaning |
+|-------|---------|
+| Dropdown string `Z Image ConvRot NVFP4` | Separate product identity from SDXL `ConvRot NVFP4`. Meaning: one string → one stack; never share. |
+| Dynamic bake install gated on Z Image dtype (`nvfp4_lora_bake.py`) | VER=8 bake wraps only when Z Image product is selected. Meaning: branch on product identity, not on “looks like NVFP4 conf”. |
 
 ---
 
@@ -283,7 +319,37 @@ Appendix A — full files at HEAD. Critical symbols: `_clear_zimage_parity_conta
 
 ---
 
-## ④ Cross-cutting meaning (summary)
+## ④ Master meaning catalog (every Appendix A file + critical code)
+
+### Added modules — file meaning and code meaning
+
+| Path | Meaning of the file | Critical code / symbol meaning |
+|------|---------------------|--------------------------------|
+| `nodes/zimage_nvfp4/__init__.py` | Package export surface for Z Image ConvRot NVFP4. | Re-exports load/bake installers only. |
+| `nodes/zimage_nvfp4/load_unet.py` | UNet load entry for dtype `Z Image ConvRot NVFP4`. | `apply_nvfp4_patches` → parity, not SDXL TC. `ZI_NVFP4_WEIGHT_DTYPE` is a separate being from SDXL `ConvRot NVFP4`. |
+| `nodes/zimage_nvfp4/nvfp4_addmm_patch.py` | Kitchen addmm interaction for Z Image. | Keeps kitchen from double-rotating with HSWQ. |
+| `nodes/zimage_nvfp4/nvfp4_comfy_parity.py` | Core Z Image product: stock GEMM + online act rotate; PRODUCT remember/restore; foreign peel. | `apply_nvfp4_comfy_parity`, `_make_convrot_parity_forward`, `_unwrap_stock_forward`, `_ensure_single_parity_linear_forward`, `peel_non_product_nvfp4_ops`, `restore_nvfp4_tc_product_stack`, `_discard_poisoned_product_refs`, `_arm_int8_protect_convrot_after_stock_load`. |
+| `nodes/zimage_nvfp4/nvfp4_lora_bake.py` | DynamicVRAM LoRA bake (VER=8) for Z Image + hybrid INT8 protect. | `install_zimage_nvfp4_lora_bake` / `uninstall_zimage_nvfp4_lora_bake` mutate live `Linear`; uninstall must peel VER=8, not only Dynamic.load. |
+| `nodes/zimage_nvfp4/nvfp4_tc_gate.py` | Gate: refuse TC upgrade while parity is live. | Blocks P2-class stacked wraps. |
+| `nodes/zimage_nvfp4/require_parity.py` | Fail-fast if parity forward missing after Z Image load. | Assert product identity on the live forward. |
+| `nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py` | Z Image patch install / stack stamps. | Stamps `_hswq_nvfp4_comfy_only` only. |
+| `nodes/zimage_nvfp4/zi_nvfp4_conf.py` | Z Image conf helpers. | Conf → arm flags; no GEMM. |
+| `nodes/zimage_nvfp4/zi_nvfp4_forward.py` | Z Image forward helpers for parity. | Online act path; not SDXL scaled_mm TC. |
+| `nodes/zimage_nvfp4/zi_nvfp4_hadamard.py` | Z Image Hadamard helpers. | Builds `H`; liveness via `_tensor_storage_ok`. |
+| `prestartup_script.py` | Early ComfyUI hooks / import path. | Packaging only; no model math. |
+
+### Modified modules — file meaning and code meaning
+
+| Path | Meaning of the file | Critical code / symbol meaning |
+|------|---------------------|--------------------------------|
+| `nodes/nvfp4/comfy_quant_nvfp4.py` | SDXL ConvRot NVFP4 **product** installer + SDXL clear of Z Image residue. | `_clear_zimage_parity_contamination_for_sdxl` runs before SDXL patches; refuses TC install on leftover parity; stamps `_hswq_nvfp4_product_tc`. |
+| `nodes/nvfp4/nvfp4_forward.py` | SDXL product TC forward + product LoRA bake VER=1 + peel of foreign bake. | `peel_all_nvfp4_linear_lora_bake` strips any HSWQ bake (incl. ZI VER=8) off live Linear; product `attach` peels foreign VER first. |
+| `nodes/nvfp4/nvfp4_conf.py` | Product conf decode including INT8 protect flags. | `int8_convrot_flags_from_conf` makes hybrid INT8 protect explicit. |
+| `nodes/nvfp4/nvfp4_hadamard.py` | Shared Hadamard utilities for product + parity liveness. | `_tensor_storage_ok` is the DistOrch-poison gate. |
+| `nodes/nvfp4/nvfp4_load.py` | SDXL product NVFP4 Linear load (TC stamps / shape checks). | Owns full-load for product; never the Z Image parity load. |
+| `patches/comfy_quant_int8.py` | INT8 product path + marker preservation + SDXL clear before INT8 load. | Clears Z Image contamination before SDXL INT8; preserves NVFP4 markers through INT8 wraps. |
+
+### Cross-cutting rules (same meaning as P1–P7)
 
 1. **Two products, two stamps:** `_hswq_nvfp4_product_tc` (SDXL) vs `_hswq_nvfp4_comfy_only` (Z Image). Never upgrade TC on top of live parity.
 2. **DistOrch empties storage, not Python refs:** Hadamard and wrapper chains must re-validate; peel both TC and parity wrappers before a single re-wrap.
@@ -296,6 +362,8 @@ Appendix A — full files at HEAD. Critical symbols: `_clear_zimage_parity_conta
 ## Appendix A — Full source at HEAD `f030d71`
 
 The following blocks are the **complete current file text** of every primary countermeasure module listed above (UTF-8, as on disk when this guide was generated).
+
+**Completeness rule:** each fence below must be character-identical to the on-disk file (newline-at-EOF differences only are allowed). Verified against the working tree when this note was written: **18/18 files match** (`nodes/zimage_nvfp4/*`, `prestartup_script.py`, `nodes/nvfp4/{comfy_quant_nvfp4,nvfp4_forward,nvfp4_conf,nvfp4_hadamard,nvfp4_load}.py`, `patches/comfy_quant_int8.py`).
 
 
 ### `nodes/zimage_nvfp4/__init__.py`
@@ -7879,3 +7947,14 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
 
     return True
 ```
+
+---
+
+## Closing
+
+This guide’s **③** obligation for countermeasure modules is satisfied by **Appendix A** (full file text, verified character-identical to disk for all 18 listed modules).
+
+**④** above states, for each added/modified file and for each critical symbol, **what the file means** and **what the code means** — not only stamp slogans.
+
+Operator retest for the contamination class remains under **P7**. Language twin: `zhmd/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md`.
+

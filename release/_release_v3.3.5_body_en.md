@@ -9,10 +9,7 @@
 
 **v3.3.5** is a large post-**v3.3.4** product release for **Z Image / ZIT ConvRot NVFP4** coexistence with **SDXL ConvRot NVFP4 / INT8**. It does **not** change the Distorch Hadamard storage gate from v3.3.4. It separates identities, peels shared package contamination, and clears Z Image hooks before every SDXL product load so LoRA bake and TC Linear.forward stay on the SDXL path after Z Image.
 
-Full walkthrough (problem → path → full source → meaning) from baseline `a9d372…`:
-
-- English: [`md/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md`](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/blob/main/md/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md)
-- 中文: [`zhmd/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md`](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/blob/main/zhmd/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md)
+Full walkthrough (problem → path → full source → meaning) from baseline `a9d372…`: [`md/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md`](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/blob/main/md/HSWQ_FROM_a9d372_PROBLEM_COUNTERMEASURES_GUIDE.md)
 
 Included commits (tag tip `fba715c` and docs on `main` after the tag): `6b52de2`, `916bb89`, `f030d71`, `a533656`, `fba715c`, plus Chinese guide / switcher follow-ups.
 
