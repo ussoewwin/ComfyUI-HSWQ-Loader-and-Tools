@@ -959,7 +959,8 @@ class HSWQFP8E4M3UNetLoader:
                                   "fp8_e4m3fn_fast",
                                   "fp8_e5m2",
                                   "int8_tensorwise",
-                                  "ConvRot NVFP4",
+                                  # Z Image / Krea only — never reuse SDXL "ConvRot NVFP4".
+                                  "Z Image ConvRot NVFP4",
                               ],),
                              }}
     RETURN_TYPES = ("MODEL",)

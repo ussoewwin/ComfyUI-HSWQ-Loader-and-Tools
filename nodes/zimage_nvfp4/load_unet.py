@@ -17,7 +17,9 @@ from __future__ import annotations
 import logging
 import sys
 
-NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"
+# ZI/Krea UNet dropdown ONLY — never share the SDXL Checkpoint Loader string.
+# SDXL uses nodes/nvfp4 NVFP4_WEIGHT_DTYPE == "ConvRot NVFP4" (separate being).
+ZI_NVFP4_WEIGHT_DTYPE = "Z Image ConvRot NVFP4"
 
 _DISPATCH_INSTALLED = False
 _INSTALL_HOOKED = False
@@ -207,7 +209,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
         _ensure_dynamic_load_bake_wrap()
         if weight_dtype in _fp8:
             return _prev(self, unet_name, weight_dtype)
-        if weight_dtype == NVFP4_WEIGHT_DTYPE:
+        if weight_dtype == ZI_NVFP4_WEIGHT_DTYPE:
             return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
         import folder_paths
 
@@ -217,6 +219,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
             )
             if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
                 return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+        # Never treat SDXL's "ConvRot NVFP4" string as ZI — different being.
         # int8_tensorwise / other: leave to INT8 dispatch / original (core ConvRot).
         return _prev(self, unet_name, weight_dtype)
 
@@ -224,8 +227,8 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
     unet_cls._hswq_zi_nvfp4_dispatch = True  # type: ignore[attr-defined]
     _DISPATCH_INSTALLED = True
     print(
-        "[HSWQ NVFP4] Z Image UNet dispatch: ConvRot NVFP4 -> nodes.zimage_nvfp4 "
-        "(comfy_parity; INT8 ConvRot = ComfyUI core)",
+        f"[HSWQ NVFP4] Z Image UNet dispatch: {ZI_NVFP4_WEIGHT_DTYPE!r} "
+        "-> nodes.zimage_nvfp4 (comfy_parity; not SDXL ConvRot NVFP4)",
         flush=True,
     )
     return True

@@ -541,6 +541,7 @@ try:
                         "fp8_e4m3fn_fast",
                         "fp8_e5m2",
                         "int8_tensorwise",
+                        # SDXL only — never reuse Z Image / Krea "Z Image ConvRot NVFP4".
                         "ConvRot NVFP4",
                     ],),
                 }

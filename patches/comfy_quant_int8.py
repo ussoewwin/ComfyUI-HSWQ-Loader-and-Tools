@@ -753,34 +753,36 @@ def _model_is_nunchaku_svdq(model) -> bool:
     return False
 
 
-def _qt_is_int8_tensorwise(weight, QuantizedTensor) -> bool:
-    """True only for comfy_quant ``int8_tensorwise`` QT (not NVFP4 / FP8 / W4A4).
+def _model_is_zimage_nvfp4_parity(model) -> bool:
+    """True for Z Image / Krea ConvRot NVFP4 parity packs (not SDXL TC).
 
-    Mixed kitchen packs (nvfp4 Linear + int8protect) expose both QT layouts.
-    Dynamic INT8 LoRA bake must never requant NVFP4 via this path.
+    Absolute branch: shared INT8 Dynamic bake must not own these models.
+    Z Image bake lives under ``nodes/zimage_nvfp4/nvfp4_lora_bake.py``.
     """
-    qt = _qt_payload(weight, QuantizedTensor) if weight is not None else None
-    if qt is None:
-        if isinstance(weight, QuantizedTensor):
-            qt = weight
-        else:
-            return False
-    layout = getattr(qt, "layout", None)
-    if layout is None:
-        layout = getattr(qt, "_layout", None)
-    name = type(layout).__name__ if layout is not None else ""
-    # Registered layout: TensorWiseINT8Layout / kitchen _CKTensorWiseINT8Layout
-    return "TensorWiseINT8" in name
+    if model is None:
+        return False
+    for _, module in model.named_modules():
+        if getattr(module, "_hswq_nvfp4_convrot_parity", False):
+            return True
+        fwd = getattr(module, "forward", None)
+        if fwd is not None and getattr(fwd, "_hswq_nvfp4_convrot_parity", False):
+            return True
+    return False
 
 
 def _model_has_int8_quantized_weights(model) -> bool:
-    """True only for native comfy_quant INT8 (int8_tensorwise QuantizedTensor).
+    """True for native comfy_quant QuantizedTensor (INT8 / NVFP4 / FP8 QT).
 
     Must NOT treat bare ``torch.int8`` weights as comfy_quant INT8.
-    Must NOT treat NVFP4 / FP8 QT as INT8 — that arms Dynamic LoRA bake on
-    ConvRot NVFP4 layers and destroys quality.
     Nunchaku SVDQ / Z-Image / Lumina2 modules often use int8 storage; a false
     positive here arms Dynamic.load INT8 LoRA bake and can Abort those paths.
+
+    SDXL ConvRot NVFP4 (Checkpoint Loader dropdown ``ConvRot NVFP4``):
+      bake must see NVFP4 Linear QT so ``patch_weight_to_device`` runs
+      nodes/nvfp4 ConvRot convert/set_weight (3.3.0 SDXL path).
+
+    Z Image ConvRot NVFP4 (UNet dropdown ``Z Image ConvRot NVFP4``):
+      do not treat as the SDXL bake path — see ``_model_is_zimage_nvfp4_parity``.
     """
     if _model_is_nunchaku_svdq(model):
         return False
@@ -795,7 +797,7 @@ def _model_has_int8_quantized_weights(model) -> bool:
         w = getattr(module, "weight", None)
         if w is None:
             continue
-        if _qt_is_int8_tensorwise(w, QuantizedTensor):
+        if isinstance(w, QuantizedTensor):
             return True
     return False
 
@@ -1369,6 +1371,10 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
     """
     if _model_is_nunchaku_svdq(getattr(patcher, "model", None)):
         return 0
+    # Absolute branch: Z Image / Krea parity packs use zimage_nvfp4 bake only.
+    # Never apply the SDXL (3.3.0 nodes/nvfp4) Dynamic bake to them.
+    if _model_is_zimage_nvfp4_parity(getattr(patcher, "model", None)):
+        return 0
     if not getattr(patcher, "patches", None):
         return 0
     try:
@@ -1399,8 +1405,10 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
             weight, set_func, convert_func = mp.get_key_weight(patcher.model, key)
             if weight is None:
                 continue
-            # Bake only int8_tensorwise QT — never bare int8 (Nunchaku), never NVFP4/FP8.
-            if not _qt_is_int8_tensorwise(weight, QuantizedTensor):
+            # SDXL path (3.3.0): bake all comfy_quant QuantizedTensor — never bare int8.
+            # NVFP4 Linear uses nodes/nvfp4 ConvRot convert/set_weight.
+            # Z Image path never reaches here (parity early-return above).
+            if not isinstance(weight, QuantizedTensor):
                 continue
             if set_func is None:
                 _console(
@@ -1453,7 +1461,7 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     original = getattr(Dynamic, "load", None)
     if original is None:
         return False
-    _DYN_VER = 6
+    _DYN_VER = 8
     if getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER:
         return True
     true_orig = getattr(original, "_hswq_orig_dynamic_load", original)
