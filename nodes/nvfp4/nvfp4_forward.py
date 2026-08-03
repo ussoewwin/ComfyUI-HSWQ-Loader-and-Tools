@@ -396,6 +396,7 @@ def make_nvfp4_linear_convert_weight(stock_convert_weight):
         return out
 
     convert_weight._hswq_nvfp4_lora_bake_ver = _NVFP4_LORA_BAKE_VER  # type: ignore[attr-defined]
+    convert_weight._hswq_nvfp4_lora_bake_stock = stock_convert_weight  # type: ignore[attr-defined]
     return convert_weight
 
 
@@ -438,18 +439,85 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
         )
 
     set_weight._hswq_nvfp4_lora_bake_ver = _NVFP4_LORA_BAKE_VER  # type: ignore[attr-defined]
+    set_weight._hswq_nvfp4_lora_bake_stock = stock_set_weight  # type: ignore[attr-defined]
     return set_weight
 
 
+def _peel_lora_bake_wrap(fn):
+    """Unwrap nested HSWQ convert/set wraps to true stock.
+
+    Z Image attaches VER=8 (``[HSWQ ConvRot LoRA] int8_protect``). SDXL product
+    is VER=1; ``ver < 1`` never replaced VER=8 → LoRA fell off on the 3rd prompt.
+    Peel any foreign bake wrap before attaching VER=1.
+    """
+    cur = fn
+    for _ in range(8):
+        if not callable(cur):
+            return cur
+        if int(getattr(cur, "_hswq_nvfp4_lora_bake_ver", 0) or 0) <= 0:
+            return cur
+        stock = getattr(cur, "_hswq_nvfp4_lora_bake_stock", None)
+        if stock is not None and stock is not cur:
+            cur = stock
+            continue
+        closure = getattr(cur, "__closure__", None)
+        code = getattr(cur, "__code__", None)
+        if closure is None or code is None:
+            return cur
+        names = code.co_freevars
+        nxt = None
+        for i, name in enumerate(names):
+            if name in ("stock_convert_weight", "stock_set_weight"):
+                nxt = closure[i].cell_contents
+                break
+        if nxt is None or nxt is cur:
+            return cur
+        cur = nxt
+    return cur
+
+
+def peel_all_nvfp4_linear_lora_bake(Lin) -> bool:
+    """Strip every HSWQ Linear bake wrap down to stock convert/set.
+
+    Z Image ``install_nvfp4_comfy_parity`` mutates ``mp0.Linear`` in place
+    (VER=8 ``[HSWQ ConvRot LoRA] int8_protect``). Peeling
+    ``ops.mixed_precision_ops`` alone does not undo that class mutation, so
+    SDXL INT8 after Z Image still bakes through ZI wraps and LoRA falls off
+    on the 3rd prompt. Call this from SDXL clear / ZI uninstall.
+    """
+    changed = False
+    for attr in ("convert_weight", "set_weight"):
+        fn = getattr(Lin, attr, None)
+        if not callable(fn):
+            continue
+        if int(getattr(fn, "_hswq_nvfp4_lora_bake_ver", 0) or 0) <= 0:
+            continue
+        stock = _peel_lora_bake_wrap(fn)
+        if stock is not fn:
+            setattr(Lin, attr, stock)
+            changed = True
+    return changed
+
+
 def attach_nvfp4_linear_lora_bake(Lin) -> bool:
-    """Ensure MixedPrecision Linear has ConvRot LoRA convert/set wraps. Returns True if applied/upgraded."""
+    """Ensure MixedPrecision Linear has SDXL product ConvRot LoRA wraps (VER=1).
+
+    Peels Z Image VER=8 (or any other HSWQ bake) so SDXL never nests / keeps
+    ``int8_protect`` convert/set on INT8 ConvRot Linears.
+    """
     applied = False
     cvt = getattr(Lin, "convert_weight", None)
-    if callable(cvt) and getattr(cvt, "_hswq_nvfp4_lora_bake_ver", 0) < _NVFP4_LORA_BAKE_VER:
-        Lin.convert_weight = make_nvfp4_linear_convert_weight(cvt)
-        applied = True
+    if callable(cvt):
+        ver = int(getattr(cvt, "_hswq_nvfp4_lora_bake_ver", 0) or 0)
+        if ver != _NVFP4_LORA_BAKE_VER:
+            stock = _peel_lora_bake_wrap(cvt) if ver > 0 else cvt
+            Lin.convert_weight = make_nvfp4_linear_convert_weight(stock)
+            applied = True
     sw = getattr(Lin, "set_weight", None)
-    if callable(sw) and getattr(sw, "_hswq_nvfp4_lora_bake_ver", 0) < _NVFP4_LORA_BAKE_VER:
-        Lin.set_weight = make_nvfp4_linear_set_weight(sw)
-        applied = True
+    if callable(sw):
+        ver = int(getattr(sw, "_hswq_nvfp4_lora_bake_ver", 0) or 0)
+        if ver != _NVFP4_LORA_BAKE_VER:
+            stock = _peel_lora_bake_wrap(sw) if ver > 0 else sw
+            Lin.set_weight = make_nvfp4_linear_set_weight(stock)
+            applied = True
     return applied

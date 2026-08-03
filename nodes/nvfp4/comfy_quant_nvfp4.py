@@ -26,6 +26,7 @@ from .nvfp4_forward import (
     attach_nvfp4_linear_lora_bake,
     make_nvfp4_linear_forward,
     nvfp4_forward_stats,
+    peel_all_nvfp4_linear_lora_bake,
     reset_nvfp4_forward_stats,
     reset_nvfp4_lora_log_counters,
 )
@@ -57,6 +58,60 @@ def _console(msg: str) -> None:
     logger.info(msg)
 
 
+def _clear_zimage_parity_contamination_for_sdxl() -> None:
+    """Peel Z Image comfy_parity + ZI bake hooks before SDXL TC / INT8 load.
+
+    Owner log (SDXL → Z Image → SDXL): after Z Image, ``comfy_parity`` stays on
+    ``ops._load_quantized_module`` / ``mixed_precision_ops`` and ZI Dynamic.load
+    bake hijacks SDXL → ``arm INT8 protect`` on SDXL NVFP4, ``nvfp4_baked=0``,
+    salt-pepper. Later: ZI VER=8 ``[HSWQ ConvRot LoRA] int8_protect`` on SDXL
+    INT8 → LoRA falls off on the 3rd prompt. Restore product TC (or peel to
+    stock) and uninstall ZI bake hooks.
+    """
+    try:
+        from ..zimage_nvfp4.nvfp4_comfy_parity import (
+            peel_non_product_nvfp4_ops,
+            restore_nvfp4_tc_product_stack,
+        )
+
+        restore_nvfp4_tc_product_stack()
+        try:
+            import comfy.ops as ops
+
+            peel_non_product_nvfp4_ops(ops)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("[HSWQ NVFP4] restore TC stack for SDXL failed: %s", e)
+    try:
+        from ..zimage_nvfp4.nvfp4_lora_bake import uninstall_zimage_nvfp4_lora_bake
+
+        uninstall_zimage_nvfp4_lora_bake()
+    except Exception as e:
+        logger.warning("[HSWQ NVFP4] uninstall ZI bake hooks for SDXL failed: %s", e)
+    # Z Image mutates mp0.Linear in place; peel ops wrappers alone leaves VER=8.
+    try:
+        import comfy.ops as ops
+
+        Lin = ops.mixed_precision_ops().Linear
+        peeled = peel_all_nvfp4_linear_lora_bake(Lin)
+        mp_fn = ops.mixed_precision_ops
+        if getattr(mp_fn, "_hswq_nvfp4_product_tc", False):
+            if attach_nvfp4_linear_lora_bake(Lin) or peeled:
+                _console(
+                    "[HSWQ NVFP4] SDXL product Linear LoRA bake VER=1 on live Linear"
+                )
+        elif peeled:
+            _console(
+                "[HSWQ NVFP4] peeled Z Image Linear LoRA bake (int8_protect) "
+                "off live Linear — SDXL INT8/stock safe"
+            )
+    except Exception as e:
+        logger.warning(
+            "[HSWQ NVFP4] peel live Linear LoRA bake for SDXL failed: %s", e
+        )
+
+
 def apply_comfy_quant_nvfp4_patches() -> bool:
     """Install NVFP4 detection + full load + TC Linear forward + ConvRot LoRA bake."""
     global _PATCHES_APPLIED
@@ -67,17 +122,42 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         logger.warning("[HSWQ NVFP4] comfy import failed: %s", e)
         return False
 
+    # Always peel Z Image parity before touching / early-returning the SDXL stack.
+    _clear_zimage_parity_contamination_for_sdxl()
+
     mp_fn = getattr(ops, "mixed_precision_ops", None)
+    load_fn = getattr(ops, "_load_quantized_module", None)
     stack_ver = int(getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0) or 0) if mp_fn else 0
+    parity_still = bool(
+        getattr(mp_fn, "_hswq_nvfp4_comfy_only", False)
+        or getattr(load_fn, "_hswq_nvfp4_comfy_only", False)
+    )
+    # Early return only when the live ops are SDXL product TC (stamped), not Z Image.
     if (
         _PATCHES_APPLIED
+        and not parity_still
         and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
         and stack_ver >= _NVFP4_STACK_VER
+        and getattr(mp_fn, "_hswq_nvfp4_full_forward", False)
+        and getattr(mp_fn, "_hswq_nvfp4_product_tc", False)
+        and getattr(load_fn, "_hswq_nvfp4_full_load", False)
+        and getattr(load_fn, "_hswq_nvfp4_product_tc", False)
     ):
+        try:
+            from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+            remember_nvfp4_tc_product_stack(load_fn, mp_fn)
+        except Exception:
+            pass
         return True
 
     # Already patched detect/load but LoRA bake missing: re-wrap mixed_precision_ops only.
-    if getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False) and stack_ver < _NVFP4_STACK_VER:
+    # Never upgrade while comfy_parity is still live (parity copies stack_ver from TC base).
+    if (
+        not parity_still
+        and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
+        and stack_ver < _NVFP4_STACK_VER
+    ):
         _orig_mp = getattr(mp_fn, "_hswq_nvfp4_orig_mp", mp_fn)
 
         def mixed_precision_ops_upgraded(*args, **kwargs):
@@ -91,14 +171,66 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         mixed_precision_ops_upgraded._hswq_nvfp4_full_forward = True  # type: ignore[attr-defined]
         mixed_precision_ops_upgraded._hswq_nvfp4_stack_ver = _NVFP4_STACK_VER  # type: ignore[attr-defined]
         mixed_precision_ops_upgraded._hswq_nvfp4_orig_mp = _orig_mp  # type: ignore[attr-defined]
+        mixed_precision_ops_upgraded._hswq_nvfp4_product_tc = True  # type: ignore[attr-defined]
+        # Stamp load if it is already SDXL product TC (may lack stamp from older session).
+        cur_load = ops._load_quantized_module
+        if getattr(cur_load, "_hswq_nvfp4_full_load", False) and not getattr(
+            cur_load, "_hswq_nvfp4_comfy_only", False
+        ):
+            try:
+                cur_load._hswq_nvfp4_product_tc = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
         ops.mixed_precision_ops = mixed_precision_ops_upgraded
         _PATCHES_APPLIED = True
+        try:
+            from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+            remember_nvfp4_tc_product_stack(
+                ops._load_quantized_module, mixed_precision_ops_upgraded
+            )
+        except Exception:
+            pass
         _console(
             "[HSWQ NVFP4] upgraded stack ver=%s "
             "(ConvRot Linear LoRA bake: convert_weight unrotate + set_weight re-rotate)"
             % _NVFP4_STACK_VER
         )
         return True
+
+    # Refuse wrapping TC on top of leftover comfy_parity (would bake SDXL as INT8 protect).
+    if parity_still:
+        _clear_zimage_parity_contamination_for_sdxl()
+        mp_fn = getattr(ops, "mixed_precision_ops", None)
+        load_fn = getattr(ops, "_load_quantized_module", None)
+        parity_still = bool(
+            getattr(mp_fn, "_hswq_nvfp4_comfy_only", False)
+            or getattr(load_fn, "_hswq_nvfp4_comfy_only", False)
+        )
+        if parity_still:
+            logger.error(
+                "[HSWQ NVFP4] comfy_parity still on ops after restore — "
+                "refusing full TC reinstall on top of parity (would corrupt SDXL)"
+            )
+            return False
+        # Restored product TC: early-return path if already at current stack ver.
+        stack_ver = int(getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0) or 0) if mp_fn else 0
+        if (
+            _PATCHES_APPLIED
+            and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
+            and stack_ver >= _NVFP4_STACK_VER
+            and getattr(mp_fn, "_hswq_nvfp4_full_forward", False)
+            and getattr(mp_fn, "_hswq_nvfp4_product_tc", False)
+            and getattr(load_fn, "_hswq_nvfp4_full_load", False)
+            and getattr(load_fn, "_hswq_nvfp4_product_tc", False)
+        ):
+            try:
+                from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+                remember_nvfp4_tc_product_stack(load_fn, mp_fn)
+            except Exception:
+                pass
+            return True
 
     _orig_detect = model_detection.detect_unet_config
     _orig_calc = model_detection.calculate_transformer_depth
@@ -216,11 +348,21 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
     calculate_transformer_depth_patched._hswq_nvfp4_packed_dims = True  # type: ignore[attr-defined]
     model_config_from_unet_patched._hswq_nvfp4_packed_dims = True  # type: ignore[attr-defined]
     _load_quantized_module_patched._hswq_nvfp4_full_load = True  # type: ignore[attr-defined]
+    _load_quantized_module_patched._hswq_nvfp4_product_tc = True  # type: ignore[attr-defined]
     mixed_precision_ops_patched._hswq_nvfp4_full_forward = True  # type: ignore[attr-defined]
     mixed_precision_ops_patched._hswq_nvfp4_stack_ver = _NVFP4_STACK_VER  # type: ignore[attr-defined]
     mixed_precision_ops_patched._hswq_nvfp4_orig_mp = _orig_mp  # type: ignore[attr-defined]
+    mixed_precision_ops_patched._hswq_nvfp4_product_tc = True  # type: ignore[attr-defined]
 
     _PATCHES_APPLIED = True
+    try:
+        from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+
+        remember_nvfp4_tc_product_stack(
+            _load_quantized_module_patched, mixed_precision_ops_patched
+        )
+    except Exception:
+        pass
     _console(
         "[HSWQ NVFP4] full stack applied "
         "(detect packed K + nvfp4_load + TC forward + ConvRot act + "

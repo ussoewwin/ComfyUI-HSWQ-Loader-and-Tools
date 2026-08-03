@@ -1462,6 +1462,11 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     if original is None:
         return False
     _DYN_VER = 8
+    # Never wrap over live Z Image bake. Capturing ZI as true_orig leaves
+    # ``Dynamic.load ENTER … model=SDXL`` after ZI uninstall (closure), and SDXL
+    # LoRA bake strength breaks even when Status shows APPLIED.
+    if getattr(original, "_hswq_zi_nvfp4_lora_bake", False):
+        return True
     if getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER:
         return True
     true_orig = getattr(original, "_hswq_orig_dynamic_load", original)
@@ -2382,6 +2387,17 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
 
         model_options = {}
         if is_int8:
+            # Z Image comfy_parity + ZI Dynamic bake must not wrap SDXL INT8.
+            try:
+                from ..nodes.nvfp4.comfy_quant_nvfp4 import (
+                    _clear_zimage_parity_contamination_for_sdxl,
+                )
+
+                _clear_zimage_parity_contamination_for_sdxl()
+            except Exception as e:
+                sdxl_logger.warning(
+                    "[SDXL INT8] clear Z Image NVFP4 contamination failed: %s", e
+                )
             apply_comfy_quant_int8_patches()
             reset_int8_lora_log_counters()
             sdxl_logger.info(

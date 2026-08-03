@@ -217,14 +217,115 @@ def remember_nvfp4_tc_product_stack(load_fn, mp_fn) -> None:
     """Store SDXL product TC refs (call from apply_comfy_quant_nvfp4_patches only).
 
     Never overwrite with parity wrappers — SDXL must always be able to restore.
+
+    Z Image ``zi_comfy_quant_nvfp4`` also stamps ``_hswq_nvfp4_stack_ver`` /
+    ``_hswq_nvfp4_full_forward`` without ``_hswq_nvfp4_comfy_only``. Treating that
+    as PRODUCT poisoned SDXL INT8 after Z Image (ZI VER=8 ``int8_protect`` bake
+    on ConvRot INT8 → LoRA falls off on the 3rd prompt). Require
+    ``_hswq_nvfp4_product_tc`` stamped only by ``nodes/nvfp4`` SDXL product.
     """
     global _PRODUCT_LOAD, _PRODUCT_MP
-    if load_fn is not None and getattr(load_fn, "_hswq_nvfp4_full_load", False):
+    if load_fn is not None and getattr(load_fn, "_hswq_nvfp4_product_tc", False):
         if not getattr(load_fn, "_hswq_nvfp4_comfy_only", False):
             _PRODUCT_LOAD = load_fn
-    if mp_fn is not None and getattr(mp_fn, "_hswq_nvfp4_stack_ver", 0):
+    if mp_fn is not None and getattr(mp_fn, "_hswq_nvfp4_product_tc", False):
         if not getattr(mp_fn, "_hswq_nvfp4_comfy_only", False):
             _PRODUCT_MP = mp_fn
+
+
+def _discard_poisoned_product_refs() -> None:
+    """Drop PRODUCT refs that are Z Image stack / parity mistaken for SDXL TC."""
+    global _PRODUCT_LOAD, _PRODUCT_MP
+    if _PRODUCT_MP is not None and not getattr(
+        _PRODUCT_MP, "_hswq_nvfp4_product_tc", False
+    ):
+        logger.warning(
+            "[HSWQ NVFP4] discarding poisoned PRODUCT_MP "
+            "(not SDXL product_tc — likely Z Image stack)"
+        )
+        _PRODUCT_MP = None
+    if _PRODUCT_LOAD is not None and not getattr(
+        _PRODUCT_LOAD, "_hswq_nvfp4_product_tc", False
+    ):
+        logger.warning(
+            "[HSWQ NVFP4] discarding poisoned PRODUCT_LOAD "
+            "(not SDXL product_tc — likely Z Image stack)"
+        )
+        _PRODUCT_LOAD = None
+
+
+def peel_non_product_nvfp4_ops(ops) -> bool:
+    """Peel Z Image / comfy_parity mp+load wrappers down to stock or SDXL product_tc.
+
+    Used when PRODUCT was never saved (INT8-only → Z Image → SDXL) so restore
+    cannot reinstate TC, but ZI mp must not keep attaching VER=8 Linear bake.
+    """
+    changed = False
+    cur = getattr(ops, "mixed_precision_ops", None)
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, "_hswq_nvfp4_product_tc", False):
+            if ops.mixed_precision_ops is not cur:
+                ops.mixed_precision_ops = cur
+                changed = True
+            break
+        is_foreign = bool(
+            getattr(cur, "_hswq_nvfp4_comfy_only", False)
+            or (
+                getattr(cur, "_hswq_nvfp4_stack_ver", 0)
+                and not getattr(cur, "_hswq_nvfp4_product_tc", False)
+            )
+        )
+        if not is_foreign:
+            if ops.mixed_precision_ops is not cur:
+                ops.mixed_precision_ops = cur
+                changed = True
+            break
+        nxt = getattr(cur, "_hswq_nvfp4_orig_mp", None) or getattr(
+            cur, "_hswq_orig_mixed_precision_ops", None
+        )
+        if nxt is None:
+            break
+        ops.mixed_precision_ops = nxt
+        changed = True
+        cur = nxt
+
+    cur_l = getattr(ops, "_load_quantized_module", None)
+    seen_l: set[int] = set()
+    while cur_l is not None and id(cur_l) not in seen_l:
+        seen_l.add(id(cur_l))
+        if getattr(cur_l, "_hswq_nvfp4_product_tc", False):
+            if ops._load_quantized_module is not cur_l:
+                ops._load_quantized_module = cur_l
+                changed = True
+            break
+        is_foreign_l = bool(
+            getattr(cur_l, "_hswq_nvfp4_comfy_only", False)
+            or getattr(cur_l, "_hswq_int8_protect_in_load", False)
+            or getattr(cur_l, "_hswq_int8_protect_arm_v2", False)
+            or getattr(cur_l, "_hswq_int8_decode_patched", False)
+            or (
+                getattr(cur_l, "_hswq_nvfp4_full_load", False)
+                and not getattr(cur_l, "_hswq_nvfp4_product_tc", False)
+            )
+        )
+        if not is_foreign_l:
+            if ops._load_quantized_module is not cur_l:
+                ops._load_quantized_module = cur_l
+                changed = True
+            break
+        nxt_l = _closure_named(cur_l, "orig_load") or _closure_named(
+            cur_l, "original_load"
+        )
+        if nxt_l is None:
+            nxt_l = getattr(cur_l, "_hswq_nvfp4_orig_load", None)
+        if nxt_l is None:
+            break
+        ops._load_quantized_module = nxt_l
+        changed = True
+        cur_l = nxt_l
+    return changed
 
 
 def is_nvfp4_comfy_parity_active() -> bool:
@@ -243,9 +344,14 @@ def _closure_named(fn, name: str):
 
 
 def _is_tc_full_load(fn) -> bool:
-    """True for product TC load (load_nvfp4_linear_module), not parity stock load."""
+    """True for SDXL product TC load only (not Z Image / parity).
+
+    Z Image also stamps ``_hswq_nvfp4_full_load`` without ``_hswq_nvfp4_product_tc``.
+    Treating that as product TC left ZI VER=8 Linear bake on SDXL INT8 (3rd prompt).
+    """
     return bool(
         getattr(fn, "_hswq_nvfp4_full_load", False)
+        and getattr(fn, "_hswq_nvfp4_product_tc", False)
         and not getattr(fn, "_hswq_nvfp4_comfy_only", False)
     )
 
@@ -584,10 +690,12 @@ def require_convrot_parity_forward() -> None:
 
 
 def restore_nvfp4_tc_product_stack() -> bool:
-    """Put SDXL product TC load + forward back. No-op if already on TC.
+    """Put SDXL product TC load + forward back; peel Z Image if PRODUCT missing.
 
-    Z Image parity must never leak into SDXL. Call this from the SDXL loader
-    only — do not change SDXL's TC / LoRA bake behavior.
+    Z Image stamps ``_hswq_nvfp4_stack_ver`` / ``_hswq_nvfp4_full_forward`` without
+    ``_hswq_nvfp4_product_tc``. Treating that as ``already_tc`` left ZI VER=8
+    ``int8_protect`` Linear bake on SDXL INT8 after Z Image (LoRA falls off on
+    the 3rd prompt). Only ``product_tc`` counts as product TC.
     """
     global _PARITY_APPLIED
     try:
@@ -596,30 +704,54 @@ def restore_nvfp4_tc_product_stack() -> bool:
         logger.warning("[HSWQ NVFP4] restore TC stack skipped: %s", e)
         return False
 
+    _discard_poisoned_product_refs()
+
     mp = ops.mixed_precision_ops
-    already_tc = (
-        getattr(mp, "_hswq_nvfp4_stack_ver", 0)
+    load_fn = ops._load_quantized_module
+    already_product = bool(
+        getattr(mp, "_hswq_nvfp4_product_tc", False)
+        and getattr(load_fn, "_hswq_nvfp4_product_tc", False)
         and not getattr(mp, "_hswq_nvfp4_comfy_only", False)
-        and not getattr(ops._load_quantized_module, "_hswq_nvfp4_comfy_only", False)
+        and not getattr(load_fn, "_hswq_nvfp4_comfy_only", False)
     )
-    if already_tc and not _PARITY_APPLIED:
+    if already_product and not _PARITY_APPLIED:
         return True
 
-    if _PRODUCT_LOAD is None or _PRODUCT_MP is None:
-        if already_tc:
-            _PARITY_APPLIED = False
-            return True
-        logger.warning(
-            "[HSWQ NVFP4] restore TC stack: no saved product refs "
-            "(SDXL needs apply_comfy_quant_nvfp4_patches first)"
-        )
-        return False
+    if _PRODUCT_LOAD is not None and _PRODUCT_MP is not None:
+        ops._load_quantized_module = _PRODUCT_LOAD
+        ops.mixed_precision_ops = _PRODUCT_MP
+        _PARITY_APPLIED = False
+        _console("[HSWQ NVFP4] restored product TC stack (SDXL path; parity off)")
+        return True
 
-    ops._load_quantized_module = _PRODUCT_LOAD
-    ops.mixed_precision_ops = _PRODUCT_MP
+    # INT8-only → Z Image → SDXL: PRODUCT was never saved. Peel ZI / parity so
+    # SDXL INT8 does not keep attaching VER=8 ``[HSWQ ConvRot LoRA] int8_protect``.
+    peeled = peel_non_product_nvfp4_ops(ops)
     _PARITY_APPLIED = False
-    _console("[HSWQ NVFP4] restored product TC stack (SDXL path; parity off)")
-    return True
+    if peeled:
+        if (
+            getattr(ops.mixed_precision_ops, "_hswq_nvfp4_product_tc", False)
+            and getattr(ops._load_quantized_module, "_hswq_nvfp4_product_tc", False)
+        ):
+            remember_nvfp4_tc_product_stack(
+                ops._load_quantized_module, ops.mixed_precision_ops
+            )
+            _console(
+                "[HSWQ NVFP4] restored product TC stack via peel "
+                "(SDXL path; parity off)"
+            )
+        else:
+            _console(
+                "[HSWQ NVFP4] peeled non-product NVFP4 ops "
+                "(stock/INT8 base; no product_tc PRODUCT — SDXL INT8 LoRA safe)"
+            )
+        return True
+
+    logger.warning(
+        "[HSWQ NVFP4] restore TC stack: no saved product refs "
+        "(SDXL needs apply_comfy_quant_nvfp4_patches first)"
+    )
+    return False
 
 
 def apply_nvfp4_comfy_parity() -> bool:

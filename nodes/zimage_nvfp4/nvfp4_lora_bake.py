@@ -495,6 +495,144 @@ def _unwrap_to_non_zi_load(load_fn):
     return cur
 
 
+def _chain_has_zi_dynamic_load(load_fn) -> bool:
+    """True if any ZI wrap remains in prev / ``_hswq_orig_dynamic_load`` chain."""
+    cur = load_fn
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, "_hswq_zi_nvfp4_lora_bake", False):
+            return True
+        nxt = getattr(cur, "_hswq_zi_nvfp4_prev_dynamic_load", None)
+        if nxt is None:
+            nxt = getattr(cur, "_hswq_orig_dynamic_load", None)
+        if nxt is None or nxt is cur:
+            break
+        cur = nxt
+    return False
+
+
+def _deep_clean_dynamic_load(load_fn):
+    """Peel ZI wraps and discard INT8 wraps that closed over a ZI ``true_orig``.
+
+    Owner log after peel-only uninstall: ``Dynamic.load bake hook OFF`` then still
+    ``[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER … model=SDXL``. Cause: while ZI was
+    outermost, INT8 re-patched with ``true_orig = ZI_wrap`` (closure). Peeling the
+    outer ZI left INT8→ZI→… so ENTER still fires and SDXL LoRA strength is wrong.
+
+    Returns ``(cleaned_load, discarded_contaminated_int8)``.
+    """
+    cur = load_fn
+    discarded_int8 = False
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, "_hswq_zi_nvfp4_lora_bake", False):
+            nxt = getattr(cur, "_hswq_zi_nvfp4_prev_dynamic_load", None)
+            if nxt is None or nxt is cur:
+                break
+            cur = nxt
+            continue
+        if getattr(cur, "_hswq_int8_lora_bake", False):
+            captured = getattr(cur, "_hswq_orig_dynamic_load", None)
+            if _chain_has_zi_dynamic_load(captured):
+                # Closure already bound to ZI — attribute rewrite cannot fix it.
+                discarded_int8 = True
+                cur = _unwrap_to_non_zi_load(captured)
+                continue
+            break
+        break
+    return cur, discarded_int8
+
+
+def uninstall_zimage_nvfp4_lora_bake() -> bool:
+    """Remove Z Image Dynamic / load_models_gpu bake hooks (SDXL must not inherit them).
+
+    After Z Image ConvRot NVFP4, these hooks stay on ``ModelPatcherDynamic.load``
+    and bake SDXL LoRA with the ZI path (INT8 protect / other_qt) → noise.
+    Also discards INT8 Dynamic.load wraps that captured ZI as ``true_orig``
+    (logs still show ENTER on SDXL after OFF; LoRA keys apply but strength is weak).
+    Call from SDXL loaders before applying the SDXL TC / INT8 stacks.
+    """
+    global _GPU_BAKE_INSTALLED
+    removed = False
+    need_int8_repatch = False
+    try:
+        import comfy.model_patcher as mp
+    except ImportError:
+        mp = None
+    if mp is not None:
+        Dynamic = getattr(mp, "ModelPatcherDynamic", None)
+        if Dynamic is not None:
+            cur = getattr(Dynamic, "load", None)
+            cleaned, discarded_int8 = _deep_clean_dynamic_load(cur)
+            if (
+                cleaned is not cur
+                or discarded_int8
+                or getattr(cur, "_hswq_zi_nvfp4_lora_bake", False)
+            ):
+                if cleaned is not None:
+                    Dynamic.load = cleaned
+                removed = True
+                need_int8_repatch = bool(discarded_int8)
+                _console(
+                    "[HSWQ ZI NVFP4 LoRA] Dynamic.load bake hook OFF "
+                    "(restored for SDXL; Z Image path no longer wraps bake)"
+                    + (
+                        "; discarded INT8 wrap that captured ZI true_orig"
+                        if discarded_int8
+                        else ""
+                    )
+                )
+    try:
+        import comfy.model_management as mm
+    except ImportError:
+        mm = None
+    if mm is not None:
+        cur_gpu = getattr(mm, "load_models_gpu", None)
+        if getattr(cur_gpu, "_hswq_zi_nvfp4_gpu_bake", False):
+            mm.load_models_gpu = _unwrap_to_non_zi_load_models_gpu(cur_gpu)
+            _GPU_BAKE_INSTALLED = False
+            removed = True
+            _console(
+                "[HSWQ ZI NVFP4 LoRA] load_models_gpu bake hook OFF "
+                "(restored for SDXL)"
+            )
+    if need_int8_repatch:
+        try:
+            from ...patches.comfy_quant_int8 import (
+                _patch_model_patcher_dynamic_int8_lora_bake,
+            )
+
+            _patch_model_patcher_dynamic_int8_lora_bake()
+            _console(
+                "[HSWQ ZI NVFP4 LoRA] Reinstalled clean INT8 Dynamic.load bake "
+                "(after discarding ZI-contaminated wrap)"
+            )
+        except Exception as e:
+            logger.warning(
+                "[HSWQ ZI NVFP4 LoRA] INT8 Dynamic.load re-patch after ZI clean "
+                "failed: %s",
+                e,
+            )
+    # Also strip VER=8 convert/set left on mp0.Linear by comfy_parity install.
+    try:
+        import comfy.ops as ops
+        from ..nvfp4.nvfp4_forward import peel_all_nvfp4_linear_lora_bake
+
+        if peel_all_nvfp4_linear_lora_bake(ops.mixed_precision_ops().Linear):
+            removed = True
+            _console(
+                "[HSWQ ZI NVFP4 LoRA] peeled Linear convert/set bake wraps "
+                "(int8_protect) for SDXL"
+            )
+    except Exception as e:
+        logger.warning(
+            "[HSWQ ZI NVFP4 LoRA] peel Linear bake wraps failed: %s", e
+        )
+    return removed
+
+
 def install_zimage_nvfp4_lora_bake(force: bool = False) -> bool:
     """Wrap ModelPatcherDynamic.load: NVFP4 ConvRot bake + leftover INT8 QT bake."""
     try:
