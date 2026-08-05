@@ -137,21 +137,21 @@ def _offload_requested(value) -> bool:
 
 def _offload_loaded_clips() -> int:
     """
-    Free text-encoder VRAM only — same shape as krea2_int8_bench TE offload.
+    Free text-encoder VRAM only — Krea2 TE offload, fully Krea2-scoped.
 
-    Bench sequence (before DiT sample):
+    Sequence (only when MODEL is Krea2 AND a Krea2 TE is in current_loaded_models):
       cond_stage_model.cpu()
-      unload_model_and_clones(clip.patcher)
-      soft path via free_memory(..., keep_loaded=non-TE)
+      unload_model_and_clones(clip.patcher, unload_additional_models=False)
 
-    Leaving TE weights only via model_unload+pop keeps ~3 GiB in the CUDA
-    caching allocator (reserved). unload_model_and_clones keeps DiT / VAE /
-    ControlNet in keep_loaded and soft_empty_caches after the TE drop — that
-    is the ~3 GiB gap vs the bench peak. Hard empty_cache / unload_all_models
-    are NOT used (they rebuild DiT cudaMalloc and were measured slower).
+    ``unload_additional_models=False`` keeps DiT / VAE / ControlNet / every
+    non-Krea2 model in ``keep_loaded``. No ``soft_empty_cache`` /
+    ``empty_cache`` / ``unload_all_models`` is ever called here: those are
+    global allocator ops and would reach into unrelated workflows sharing the
+    CUDA caching allocator. TE tensors are released by popping the patcher
+    from ``current_loaded_models`` (Python refcount), not by a global sweep.
 
-    Only a Krea2 text encoder is a candidate. The caller must already have
-    confirmed the MODEL input is a Krea2 diffusion model.
+    Only a Krea2 text encoder (``comfy.text_encoders.krea2`` module identity)
+    is ever a candidate. Z Image / Flux / SDXL / WAN TEs never match.
     """
     try:
         loaded_models = _mm.current_loaded_models
@@ -171,12 +171,11 @@ def _offload_loaded_clips() -> int:
         te_patchers.append(patcher)
 
     if not te_patchers:
-        # Encode may have left reserved blocks with TE already absent from the
-        # loaded list (MultiGPU CPU TE). Reclaim for DiT without touching models.
-        try:
-            _mm.soft_empty_cache()
-        except Exception:
-            pass
+        # No Krea2 TE in the loaded list. Do NOT touch global CUDA cache here:
+        # soft_empty_cache() is a global op and would reach into non-Krea2
+        # workflows (Z Image / Flux / SDXL) that share the allocator. Krea2-only
+        # branch means: nothing to unload -> nothing to do.
+        logger.debug("[HSWQSampler] No Krea2 text encoder found in loaded models; offload is a no-op")
         return 0
 
     unloaded = 0
@@ -201,7 +200,10 @@ def _offload_loaded_clips() -> int:
                 "[HSWQSampler] unload_model_and_clones TE failed; fallback unload"
             )
 
-        # Fallback: TE-only model_unload + pop, then soft_empty_cache (no hard empty_cache).
+        # Fallback: TE-only model_unload + pop. No soft_empty_cache here either:
+        # once the TE patcher is popped from current_loaded_models its tensors
+        # are freed by Python's refcount, and a global cache sweep would again
+        # touch unrelated workflows sharing the CUDA allocator.
         for i in range(len(loaded_models) - 1, -1, -1):
             try:
                 loaded = loaded_models[i]
@@ -212,10 +214,6 @@ def _offload_loaded_clips() -> int:
                     unloaded += 1
             except Exception:
                 logger.exception("[HSWQSampler] TE fallback unload skipped")
-        try:
-            _mm.soft_empty_cache()
-        except Exception:
-            pass
 
     if unloaded:
         logger.info(
