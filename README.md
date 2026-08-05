@@ -15,6 +15,8 @@
 
 This custom node pack loads and runs **[Hybrid-Sensitivity-Weighted-Quantization (HSWQ)](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)** packs and related ComfyUI-compatible quantized SDXL / Z Image weights.
 
+**HSWQ** (the quantization method, scripts, and upstream docs) is an **original work by ussoewwin**, published separately under the **GNU Affero General Public License v3 (AGPL-3.0)** at [ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization). This ComfyUI loader pack is a related but distinct repository (see License below).
+
 HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HSWQ work focuses on **ConvRot INT8** and **ConvRot NVFP4** for **SDXL**, plus **ConvRot NVFP4** for **Z Image / ZIT** UNets (sensitivity / importance analysis, DualMonitor + weighted-histogram FP16 protection, then FULL ConvRot on the remainder). It is **not** a keep-ratio percentage scheme: keep ratio is fixed at **0 (r0)**; FP16 layers are chosen by automatic analysis under a fixed MiB budget.
 
 | Path | Role in this repo |
@@ -216,7 +218,9 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 
 <img src="png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
 
-ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows). Uses ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper`.
+ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows).
+
+**Provenance:** This node is based on **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** `TorchCompileModelAdvanced` (kijai). The HSWQ tree **copied and modified** that work for HSWQ / USDU / Distorch / Windows inductor hardening. At runtime it calls ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper` and does **not** import the KJNodes package; that does **not** remove the copyright / GPL obligation to the KJNodes original.
 
 Defaults are chosen for HSWQ + Ultimate SD Upscale: **inductor** + **`max-autotune-no-cudagraphs`**, `fullgraph` off, and Distorch weight-cast helpers marked eager so multi-tile USDU does not explode recompiles or hit CUDA-graph / `cudaMallocAsync` pool errors.
 
@@ -239,6 +243,7 @@ On Windows, other extensions (for example SeedVR2) may raise inductor `compile_t
 - **Category**: `HSWQ/torchcompile`
 - **Placement**: After **HSWQ Checkpoint Loader (SDXL)** or **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (and any LoRA), before the sampler / **HSWQ Ultimate SD Upscale**
 - **Avoid `cudagraphs` with multi-tile USDU**: Prefer inductor; CUDA graphs often fail on tiled / pool allocation paths
+- **KJNodes**: Source of the torch.compile UI / wrapper design (GPL-3.0). Installing KJNodes is **not** required to run this node; attribution and copyleft still apply
 - **Details**: See `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
 ## Changelog
@@ -266,11 +271,14 @@ This project is licensed under the **GNU General Public License, Version 3**.
 ### Key Points
 
 * Copyright © 2024–2026 ussoewwin
+* **Upstream HSWQ** ([Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)) is **fully developed by ussoewwin** and is licensed under **AGPL-3.0**. That repo’s AGPL terms apply to the quantization code and docs there; they are **not** the same as this loader’s license file
+* **This repository** (ComfyUI loaders / tools) is licensed under **GPL-3.0** as stated above
+* **HSWQ Torch Compile** (`nodes/hswq_torch_compile.py`) alone is a **derivative** of ComfyUI-KJNodes torch.compile nodes ([ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes), GPL-3.0). Copyright in the KJNodes original is retained; modifications in this repository are © ussoewwin. That KJ provenance does **not** apply to the HSWQ quantization method itself
 * You are free to **use, modify, and distribute** this software under GPL-3.0 terms.
 * When you distribute this software or a modified version, you **must**:
-  * Keep the copyright and license notices
+  * Keep the copyright and license notices (including third-party / derived-work notices such as KJNodes)
   * Provide the corresponding source code
   * License the distributed work under **GPL-3.0** (copyleft)
 * This software is provided **"AS IS"**, without warranties or conditions of any kind.
 
-See the full license text in [`LICENSE`](./LICENSE).
+See the full license text in [`LICENSE`](./LICENSE). Upstream HSWQ AGPL text lives in that project’s own `LICENSE`.

@@ -15,6 +15,8 @@
 
 本自定义节点包用于加载和运行 **[Hybrid-Sensitivity-Weighted-Quantization (HSWQ)](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)** 量化包以及相关的 ComfyUI 兼容 SDXL / Z Image 量化权重。
 
+**HSWQ**（量化方法、脚本与上游文档）是 **ussoewwin 的原创作品**，另以 **GNU Affero General Public License v3（AGPL-3.0）** 发布于 [ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)。本 ComfyUI 加载器包为相关但**独立**的仓库（许可见下文）。
+
 HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作聚焦于 **SDXL** 的 **ConvRot INT8** 与 **ConvRot NVFP4**，以及 **Z Image / ZIT** UNet 的 **ConvRot NVFP4**（敏感度 / 重要性分析、DualMonitor + 加权直方图 FP16 保护，对其余部分执行全量 ConvRot）。它**不是**按 keep ratio 百分比保留的方案：keep ratio 固定为 **0 (r0)**；在固定的 MiB 预算下，由自动分析选择 FP16 层。
 
 | 路径 | 在本仓库中的定位 |
@@ -216,7 +218,9 @@ ComfyUI 输出节点，将图像以 **PNG** 或 **JPG** 保存到 ComfyUI 的 **
 
 <img src="../png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
 
-ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面向 HSWQ 扩散路径（SDXL ConvRot INT8 / ConvRot NVFP4、Z Image / ZIT ConvRot NVFP4，以及相关的 USDU / Distorch 工作流）。使用 ComfyUI 核心 `comfy_api.torch_helpers.set_torch_compile_wrapper` —— **不依赖 KJNodes**。
+ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面向 HSWQ 扩散路径（SDXL ConvRot INT8 / ConvRot NVFP4、Z Image / ZIT ConvRot NVFP4，以及相关的 USDU / Distorch 工作流）。
+
+**来源说明：** 本节点基于 **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** 的 `TorchCompileModelAdvanced`（kijai），由 HSWQ 侧**复制并改写**，以适配 HSWQ / USDU / Distorch / Windows inductor 加固。运行时调用 ComfyUI 核心 `comfy_api.torch_helpers.set_torch_compile_wrapper`，**不 import KJNodes 包**；这**不**免除对 KJNodes 原作的版权与 GPL 义务。
 
 默认值针对 HSWQ + Ultimate SD Upscale 选定：**inductor** + **`max-autotune-no-cudagraphs`**、关闭 `fullgraph`，并将 Distorch 权重 cast 辅助函数标为 eager，避免多 tile USDU 导致重编译爆炸，或触发 CUDA graph / `cudaMallocAsync` 池错误。
 
@@ -239,7 +243,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 - **分类**：`HSWQ/torchcompile`
 - **放置位置**：放在 **HSWQ Checkpoint Loader (SDXL)** 或 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
 - **多 tile USDU 时避免 `cudagraphs`**：优先 inductor；CUDA graphs 在 tiled / 池分配路径上经常失败
-- **KJNodes**：不需要；这是独立的 HSWQ 菜单节点
+- **KJNodes**：torch.compile UI / wrapper 设计的来源（GPL-3.0）。运行本节点**不必**安装 KJNodes；归属与 copyleft 义务仍然适用
 - **详情**：见 `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
 ## 更新日志
@@ -267,11 +271,14 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 ### 要点
 
 * Copyright © 2024–2026 ussoewwin
+* **上游 HSWQ**（[Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)）由 **ussoewwin 完整开发**，许可为 **AGPL-3.0**。该仓库的 AGPL 条款适用于其中的量化代码与文档；**不等于**本加载器仓库的 `LICENSE`
+* **本仓库**（ComfyUI 加载器 / 工具）如上所述，许可为 **GPL-3.0**
+* **仅 HSWQ Torch Compile**（`nodes/hswq_torch_compile.py`）是 ComfyUI-KJNodes torch.compile 节点（[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)，GPL-3.0）的**衍生作品**。KJNodes 原作版权保留；本仓库内的改写 © ussoewwin。该 KJ 来源**不**适用于 HSWQ 量化方法本身
 * 您可在 GPL-3.0 条款下自由**使用、修改和分发**本软件。
 * 当您分发本软件或其修改版时，您**必须**：
-  * 保留版权与许可声明
+  * 保留版权与许可声明（含第三方 / 衍生作品声明，例如 KJNodes）
   * 提供对应的源代码
   * 以 **GPL-3.0** 许可分发作品（copyleft）
 * 本软件按 **“AS IS”** 提供，不附带任何形式的保证或条件。
 
-完整许可文本见 [`LICENSE`](../LICENSE)。
+完整许可文本见 [`LICENSE`](../LICENSE)。上游 HSWQ 的 AGPL 全文见该项目自身的 `LICENSE`。
