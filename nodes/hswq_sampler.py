@@ -13,11 +13,114 @@ This node supplements that missing difference.
 import sys
 import logging
 
+import comfy.model_management as _mm
 import comfy.samplers
 import comfy.k_diffusion.sampling as _k_diff
 import nodes as _nodes
 
 logger = logging.getLogger(__name__)
+
+
+# ────────────────────────────────────────────────
+# CLIP / Text Encoder offload
+# ────────────────────────────────────────────────
+
+def _is_text_encoder(patcher) -> bool:
+    """
+    True only for text-encoder (CLIP) patchers.
+
+    is_clip is set by ComfyUI's CLIP wrapper and by nothing else. Diffusion
+    models, ControlNets, VAEs and upscalers never carry it, so they are never
+    offload candidates here.
+    """
+    return getattr(patcher, "is_clip", False) is True
+
+
+def _offload_loaded_clips() -> int:
+    """
+    Free text-encoder VRAM only — same shape as krea2_int8_bench TE offload.
+
+    Bench sequence (before DiT sample):
+      cond_stage_model.cpu()
+      unload_model_and_clones(clip.patcher)
+      soft path via free_memory(..., keep_loaded=non-TE)
+
+    Leaving TE weights only via model_unload+pop keeps ~3 GiB in the CUDA
+    caching allocator (reserved). unload_model_and_clones keeps DiT / VAE /
+    ControlNet in keep_loaded and soft_empty_caches after the TE drop — that
+    is the ~3 GiB gap vs the bench peak. Hard empty_cache / unload_all_models
+    are NOT used (they rebuild DiT cudaMalloc and were measured slower).
+
+    Nothing other than a text encoder is a candidate.
+    """
+    try:
+        loaded_models = _mm.current_loaded_models
+    except Exception:
+        return 0
+
+    te_patchers = []
+    seen = set()
+    for loaded in list(loaded_models):
+        patcher = getattr(loaded, "model", None)
+        if patcher is None or not _is_text_encoder(patcher):
+            continue
+        pid = id(patcher)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        te_patchers.append(patcher)
+
+    if not te_patchers:
+        # Encode may have left reserved blocks with TE already absent from the
+        # loaded list (MultiGPU CPU TE). Reclaim for DiT without touching models.
+        try:
+            _mm.soft_empty_cache()
+        except Exception:
+            pass
+        return 0
+
+    unloaded = 0
+    for patcher in te_patchers:
+        # Bench: clip.cond_stage_model.cpu()
+        real = getattr(patcher, "model", None)
+        if real is not None:
+            try:
+                real.cpu()
+            except Exception:
+                logger.exception("[HSWQSampler] TE .cpu() failed")
+
+        try:
+            # Keeps every non-TE LoadedModel; only TE (+ clones / nested TE) leave.
+            _mm.unload_model_and_clones(patcher)
+            unloaded += 1
+            continue
+        except Exception:
+            logger.exception(
+                "[HSWQSampler] unload_model_and_clones TE failed; fallback unload"
+            )
+
+        # Fallback: TE-only model_unload + pop, then soft_empty_cache (no hard empty_cache).
+        for i in range(len(loaded_models) - 1, -1, -1):
+            try:
+                loaded = loaded_models[i]
+                if loaded.model is not patcher:
+                    continue
+                if loaded.model_unload(unpatch_weights=True):
+                    loaded_models.pop(i)
+                    unloaded += 1
+            except Exception:
+                logger.exception("[HSWQSampler] TE fallback unload skipped")
+        try:
+            _mm.soft_empty_cache()
+        except Exception:
+            pass
+
+    if unloaded:
+        logger.info(
+            "[HSWQSampler] Offloaded %d text encoder(s) (bench-parity TE free)",
+            unloaded,
+        )
+    return unloaded
 
 
 # ────────────────────────────────────────────────
@@ -213,6 +316,7 @@ class HSWQSampler:
                 "negative":     ("CONDITIONING",),
                 "latent_image": ("LATENT",),
                 "denoise":      ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "clip_perfect_offload": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -222,10 +326,28 @@ class HSWQSampler:
     TITLE = "HSWQ Sampler"
 
     def sample(self, model, seed, steps, cfg, sampler_name, scheduler,
-               positive, negative, latent_image, denoise=1.0):
-        return _nodes.common_ksampler(
+               positive, negative, latent_image, denoise=1.0,
+               clip_perfect_offload=False):
+        if clip_perfect_offload:
+            try:
+                _offload_loaded_clips()
+            except Exception:
+                logger.exception("[HSWQSampler] CLIP offload failed; continuing")
+
+        out = _nodes.common_ksampler(
             model, seed, steps, cfg,
             sampler_name, scheduler,
             positive, negative, latent_image,
             denoise=denoise,
         )
+
+        # common_ksampler must always hand back (latent_dict,). Anything else means
+        # an upstream patch swallowed the result, and letting it through only
+        # surfaces as an opaque NoneType error inside VAEDecode.
+        if not out or out[0] is None or "samples" not in out[0]:
+            raise RuntimeError(
+                "[HSWQSampler] sampling returned no latent "
+                f"(got {type(out[0]).__name__ if out else 'None'}). "
+                "A model patch or custom sampler dropped the result."
+            )
+        return out
