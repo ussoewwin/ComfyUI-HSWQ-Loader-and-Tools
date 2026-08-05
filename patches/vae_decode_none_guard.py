@@ -5,20 +5,24 @@ directly, so a dropped LATENT (``samples`` is ``None``, or the dict holds
 ``None``) raises ``TypeError: 'NoneType' object is not subscriptable`` and the
 whole prompt dies after sampling already finished.
 
-The guard works on three layers so nothing slips through:
+Four layers, so nothing slips through:
 
-1. every registered node that takes a ``LATENT`` named ``samples`` and returns
-   an ``IMAGE`` gets its entry point wrapped (stock and third-party alike),
-2. ``comfy.sd.VAE.decode`` / ``decode_tiled`` reject empty tensors underneath,
-3. the wrap is re-applied at the start of each prompt, so a pack that replaces
-   the node class later still runs behind this guard.
+1. every node that produces a LATENT keeps a CPU copy of its last valid output,
+   so a dropped link can be rebuilt with the real latent instead of zeros,
+2. every node that takes a ``LATENT`` named ``samples`` and returns an ``IMAGE``
+   gets its entry point wrapped (stock and third-party alike),
+3. ``comfy.sd.VAE.decode`` / ``decode_tiled`` reject empty tensors underneath,
+4. the wrap is re-applied at the start of each prompt, so a pack that replaces
+   a node class later still runs behind this guard.
 
-Nothing is re-raised: a blank IMAGE is returned and the graph completes.
+Nothing is re-raised from a decode node: the prompt always completes.
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
+import types
 from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
@@ -26,10 +30,16 @@ logger = logging.getLogger(__name__)
 _GUARD_MARK = "_hswq_none_guard"
 _STOCK_NODES = ("VAEDecode", "VAEDecodeTiled")
 
-# Full NODE_CLASS_MAPPINGS sweeps call INPUT_TYPES() on every node, which makes
-# loaders scan disk. Sweep once, then only re-check the nodes we already wrapped.
-_SWEPT = False
+# Sweeping NODE_CLASS_MAPPINGS calls INPUT_TYPES() on every node, which makes
+# loaders scan disk, so each name is inspected only once. Names registered later
+# (packs that load after us, or a class swapped in mid-session) are still picked
+# up because the seen-set is keyed by name, not by a one-shot flag.
+_SEEN_NAMES: set[str] = set()
 _PATCHED_NAMES: set[str] = set()
+
+# Last LATENT that actually carried data, kept on CPU so a dropped link can be
+# decoded into the real image instead of a blank one.
+_LAST_GOOD_LATENT = None
 
 
 def _latent_channels(vae) -> int:
@@ -104,58 +114,144 @@ def _extract_latent(samples):
     return None
 
 
+def _remember_latent(candidate) -> None:
+    """Keep a CPU copy of the newest valid LATENT for later recovery."""
+    global _LAST_GOOD_LATENT
+
+    latent = _extract_latent(candidate)
+    if latent is None or getattr(latent, "is_nested", False):
+        return
+    try:
+        _LAST_GOOD_LATENT = {"samples": latent.detach().to("cpu").clone()}
+    except Exception:
+        logger.debug("[HSWQ None-guard] could not cache latent", exc_info=True)
+
+
+def _remember_result(result) -> None:
+    if isinstance(result, Mapping):
+        _remember_latent(result)
+        return
+    if isinstance(result, (tuple, list)):
+        for item in result:
+            if isinstance(item, Mapping) and "samples" in item:
+                _remember_latent(item)
+
+
+def _recovered_latent():
+    """The cached latent, cloned so callers cannot mutate the cache."""
+    if not isinstance(_LAST_GOOD_LATENT, Mapping):
+        return None
+    latent = _LAST_GOOD_LATENT.get("samples")
+    if not _usable_tensor(latent):
+        return None
+    try:
+        return {"samples": latent.clone()}
+    except Exception:
+        return None
+
+
 def _sanitize(samples, vae, where: str):
     """Always return a LATENT dict whose ``samples`` is a real tensor."""
     latent = _extract_latent(samples)
     if latent is not None:
         if isinstance(samples, Mapping) and _usable_tensor(samples.get("samples")):
+            _remember_latent(samples)
             return samples
         if isinstance(samples, Mapping):
             fixed = dict(samples)
             fixed["samples"] = latent
+            _remember_latent(fixed)
             return fixed
-        return {"samples": latent}
+        fixed = {"samples": latent}
+        _remember_latent(fixed)
+        return fixed
+
+    recovered = _recovered_latent()
+    if recovered is not None:
+        logger.warning(
+            "[HSWQ None-guard] %s received an empty LATENT (%s); decoding the "
+            "last valid latent %s instead.",
+            where,
+            type(samples).__name__,
+            tuple(recovered["samples"].shape),
+        )
+        return recovered
 
     logger.warning(
-        "[HSWQ None-guard] %s received an empty LATENT (%s); substituting a "
-        "zero latent so the prompt finishes (image will be blank).",
+        "[HSWQ None-guard] %s received an empty LATENT (%s) and no latent was "
+        "cached; substituting zeros so the prompt finishes (image is blank).",
         where,
         type(samples).__name__,
     )
     return {"samples": _blank_latent(vae)}
 
 
-def _wrap_decode(original, where: str, absorb_errors: bool):
-    def guarded(self, *args, **kwargs):
-        vae = kwargs.get("vae")
-        if "samples" in kwargs:
-            kwargs["samples"] = _sanitize(kwargs["samples"], vae, where)
-            fixed_latent = kwargs["samples"].get("samples")
-        elif args:
-            # Positional fallback: stock order is (vae, samples, ...).
-            args = list(args)
-            index = 1 if len(args) > 1 else 0
-            if index == 0:
-                vae = None
-            else:
-                vae = args[0]
-            args[index] = _sanitize(args[index], vae, where)
-            fixed_latent = args[index].get("samples")
-            args = tuple(args)
-        else:
-            fixed_latent = None
+def _prepare(args, kwargs, where: str):
+    """Sanitize the ``samples`` input in place. Returns (args, kwargs, vae, latent)."""
+    vae = kwargs.get("vae")
+    if "samples" in kwargs:
+        kwargs["samples"] = _sanitize(kwargs["samples"], vae, where)
+        return args, kwargs, vae, kwargs["samples"].get("samples")
+    if args:
+        # Positional fallback: stock order is (vae, samples, ...).
+        args = list(args)
+        index = 1 if len(args) > 1 else 0
+        vae = args[0] if index else None
+        args[index] = _sanitize(args[index], vae, where)
+        return tuple(args), kwargs, vae, args[index].get("samples")
+    return args, kwargs, vae, None
 
-        try:
-            return original(self, *args, **kwargs)
-        except Exception:
-            if not absorb_errors:
-                raise
-            logger.exception(
-                "[HSWQ None-guard] %s failed; returning blank IMAGE instead of "
-                "aborting the prompt",
-                where,
-            )
-            return (_blank_image(vae, fixed_latent),)
+
+def _wrap(original, where: str, sanitize: bool, absorb: bool, remember: bool):
+    is_async = inspect.iscoroutinefunction(original)
+
+    if is_async:
+
+        async def guarded(self, *args, **kwargs):
+            vae = latent = None
+            if sanitize:
+                args, kwargs, vae, latent = _prepare(args, kwargs, where)
+            try:
+                result = await original(self, *args, **kwargs)
+            except Exception:
+                if not absorb:
+                    raise
+                logger.exception(
+                    "[HSWQ None-guard] %s failed; returning a blank IMAGE "
+                    "instead of aborting the prompt",
+                    where,
+                )
+                return (_blank_image(vae, latent),)
+            if remember:
+                try:
+                    _remember_result(result)
+                except Exception:
+                    logger.debug("[HSWQ None-guard] cache skipped", exc_info=True)
+            return result
+
+    else:
+
+        def guarded(self, *args, **kwargs):
+            vae = latent = None
+            if sanitize:
+                args, kwargs, vae, latent = _prepare(args, kwargs, where)
+            try:
+                result = original(self, *args, **kwargs)
+            except Exception:
+                if not absorb:
+                    raise
+                logger.exception(
+                    "[HSWQ None-guard] %s failed; returning a blank IMAGE "
+                    "instead of aborting the prompt",
+                    where,
+                )
+                return (_blank_image(vae, latent),)
+            if remember:
+                try:
+                    _remember_result(result)
+                except Exception:
+                    logger.debug("[HSWQ None-guard] cache skipped", exc_info=True)
+            return result
 
     setattr(guarded, _GUARD_MARK, True)
     return guarded
@@ -179,25 +275,36 @@ def _takes_latent_samples(node_cls) -> bool:
     return False
 
 
-def _returns_single_image(node_cls) -> bool:
-    return tuple(getattr(node_cls, "RETURN_TYPES", ()) or ()) == ("IMAGE",)
+def _return_types(node_cls) -> tuple:
+    return tuple(getattr(node_cls, "RETURN_TYPES", ()) or ())
 
 
-def _patch_node(node_cls, name: str) -> bool:
+def _patch_node(node_cls, name: str, sanitize: bool = True) -> bool:
     if node_cls is None or not isinstance(node_cls, type):
         return False
     func_name = getattr(node_cls, "FUNCTION", None)
     if not isinstance(func_name, str):
         return False
-    original = node_cls.__dict__.get(func_name) or getattr(node_cls, func_name, None)
-    if original is None or not callable(original):
+    original = node_cls.__dict__.get(func_name)
+    if original is None:
+        original = getattr(node_cls, func_name, None)
+    # classmethod / staticmethod entry points would lose their binding.
+    if not isinstance(original, types.FunctionType):
         return False
     if getattr(original, _GUARD_MARK, False):
         return False
+
+    returns = _return_types(node_cls)
     setattr(
         node_cls,
         func_name,
-        _wrap_decode(original, name, absorb_errors=_returns_single_image(node_cls)),
+        _wrap(
+            original,
+            name,
+            sanitize=sanitize,
+            absorb=returns == ("IMAGE",),
+            remember="LATENT" in returns,
+        ),
     )
     return True
 
@@ -225,12 +332,21 @@ def _patch_vae_class() -> bool:
                 if not _usable_tensor(samples_in):
                     extracted = _extract_latent(samples_in)
                     if extracted is None:
-                        logger.warning(
-                            "[HSWQ None-guard] VAE.%s got an empty latent; "
-                            "substituting zeros.",
-                            method_name,
-                        )
-                        extracted = _blank_latent(self)
+                        recovered = _recovered_latent()
+                        if recovered is not None:
+                            logger.warning(
+                                "[HSWQ None-guard] VAE.%s got an empty latent; "
+                                "using the last valid latent instead.",
+                                method_name,
+                            )
+                            extracted = recovered["samples"]
+                        else:
+                            logger.warning(
+                                "[HSWQ None-guard] VAE.%s got an empty latent; "
+                                "substituting zeros.",
+                                method_name,
+                            )
+                            extracted = _blank_latent(self)
                     samples_in = extracted
                 return original(self, samples_in, *args, **kwargs)
 
@@ -254,30 +370,38 @@ def _install_prompt_hook() -> bool:
     executor = getattr(execution, "PromptExecutor", None)
     if executor is None:
         return False
-    original = getattr(executor, "execute", None)
-    if original is None or getattr(original, _GUARD_MARK, False):
-        return False
 
-    def execute(self, *args, **kwargs):
-        try:
-            apply_vae_decode_none_guard(deep=True)
-        except Exception:
-            logger.debug("[HSWQ None-guard] re-apply skipped", exc_info=True)
-        return original(self, *args, **kwargs)
+    installed = False
+    for method_name in ("execute", "execute_async"):
+        original = executor.__dict__.get(method_name)
+        if not isinstance(original, types.FunctionType):
+            continue
+        if getattr(original, _GUARD_MARK, False):
+            continue
 
-    setattr(execute, _GUARD_MARK, True)
-    executor.execute = execute
-    return True
+        def make(original=original):
+            def execute(self, *args, **kwargs):
+                try:
+                    apply_vae_decode_none_guard(deep=True)
+                except Exception:
+                    logger.debug("[HSWQ None-guard] re-apply skipped", exc_info=True)
+                return original(self, *args, **kwargs)
+
+            setattr(execute, _GUARD_MARK, True)
+            return execute
+
+        setattr(executor, method_name, make())
+        installed = True
+
+    return installed
 
 
 def apply_vae_decode_none_guard(deep: bool = False) -> bool:
-    """Patch every LATENT->IMAGE decode path. Safe to call repeatedly.
+    """Patch every LATENT path. Safe to call repeatedly.
 
-    ``deep`` walks the whole node registry once; it is used from the prompt hook
-    because at import time other packs may not be registered yet.
+    ``deep`` inspects every node name not seen yet; it is used from the prompt
+    hook because at import time other packs may not be registered yet.
     """
-    global _SWEPT
-
     try:
         import nodes as comfy_nodes
     except Exception as e:
@@ -294,28 +418,33 @@ def apply_vae_decode_none_guard(deep: bool = False) -> bool:
             patched.append(name)
             _PATCHED_NAMES.add(name)
 
-    full_sweep = deep and not _SWEPT
-    if full_sweep:
-        candidates = list(mappings.items())
+    if deep:
+        # New names only, plus the ones already wrapped (their class may have
+        # been replaced by another pack since the last prompt).
+        fresh = [n for n in mappings if n not in _SEEN_NAMES]
+        candidates = [(n, mappings.get(n), True) for n in fresh]
+        candidates += [(n, mappings.get(n), False) for n in sorted(_PATCHED_NAMES)]
     else:
-        candidates = [(n, mappings.get(n)) for n in sorted(_PATCHED_NAMES)]
+        candidates = [(n, mappings.get(n), False) for n in sorted(_PATCHED_NAMES)]
 
-    for name, node_cls in candidates:
+    for name, node_cls, is_fresh in candidates:
         try:
+            if is_fresh:
+                _SEEN_NAMES.add(name)
             if node_cls is None:
                 continue
-            if "IMAGE" not in tuple(getattr(node_cls, "RETURN_TYPES", ()) or ()):
+            returns = _return_types(node_cls)
+            produces_latent = "LATENT" in returns
+            decodes_latent = "IMAGE" in returns and (
+                not is_fresh or _takes_latent_samples(node_cls)
+            )
+            if not (produces_latent or decodes_latent):
                 continue
-            if full_sweep and not _takes_latent_samples(node_cls):
-                continue
-            if _patch_node(node_cls, str(name)):
+            if _patch_node(node_cls, str(name), sanitize=decodes_latent):
                 patched.append(str(name))
                 _PATCHED_NAMES.add(str(name))
         except Exception:
             logger.debug("[HSWQ None-guard] skip %s", name, exc_info=True)
-
-    if full_sweep:
-        _SWEPT = True
 
     if _patch_vae_class():
         patched.append("comfy.sd.VAE")
@@ -323,5 +452,9 @@ def apply_vae_decode_none_guard(deep: bool = False) -> bool:
     _install_prompt_hook()
 
     if patched:
-        logger.info("[HSWQ] LATENT None-guard applied: %s", ", ".join(patched))
+        logger.info(
+            "[HSWQ] LATENT None-guard armed on %d entry point(s): %s",
+            len(patched),
+            ", ".join(patched[:12]) + (" ..." if len(patched) > 12 else ""),
+        )
     return bool(patched)

@@ -123,9 +123,10 @@ from .utils import get_package_version, get_plugin_version
 # so a dropped LATENT kills the prompt after sampling already finished.
 try:
     from .patches.vae_decode_none_guard import apply_vae_decode_none_guard
-    apply_vae_decode_none_guard()
-except Exception as e:
-    logger.debug("LATENT None-guard not applied: %s", e)
+    if not apply_vae_decode_none_guard():
+        logger.warning("LATENT None-guard found no decode entry point to arm")
+except Exception:
+    logger.exception("LATENT None-guard not applied")
 
 # HSWQ Ultimate SD Upscale: apply copy_ / FP8 bias / embedder / Lumina compat patches in this extension
 try:
