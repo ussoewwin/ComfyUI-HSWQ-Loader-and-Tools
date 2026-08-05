@@ -25,47 +25,66 @@ logger = logging.getLogger(__name__)
 # CLIP / Text Encoder offload
 # ────────────────────────────────────────────────
 
+try:
+    from ..patches.comfy_quant_int8 import KREA2_MODEL_FLAG
+except Exception:  # loader patches unavailable — the config checks still work
+    KREA2_MODEL_FLAG = "_hswq_is_krea2"
+
+# comfy/text_encoders/krea2.py — the only module that defines a Krea2 text
+# encoder. Z Image lives in comfy.text_encoders.z_image, Flux in flux, and so on.
+_KREA2_TE_MODULE = "comfy.text_encoders.krea2"
+
+
 def _obj_tags(obj) -> str:
-    """Lower-cased 'module.ClassName' for an instance or a class."""
+    """'module.ClassName' for an instance or a class (logging only)."""
     if obj is None:
         return ""
     cls = obj if isinstance(obj, type) else type(obj)
-    return f"{getattr(cls, '__module__', '')}.{getattr(cls, '__qualname__', '')}".lower()
+    return f"{getattr(cls, '__module__', '')}.{getattr(cls, '__qualname__', '')}"
 
 
-def _looks_krea2(obj) -> bool:
-    return "krea2" in _obj_tags(obj)
+def _obj_module(obj) -> str:
+    if obj is None:
+        return ""
+    cls = obj if isinstance(obj, type) else type(obj)
+    return getattr(cls, "__module__", "") or ""
+
+
+def _class_name(obj) -> str:
+    if obj is None:
+        return ""
+    cls = obj if isinstance(obj, type) else type(obj)
+    return getattr(cls, "__name__", "") or ""
 
 
 def _is_krea2_diffusion_model(model) -> bool:
     """
     True only when the MODEL input is a Krea2 diffusion model.
 
+    The verdict comes from the tag the HSWQ loader stamps at load time, or from
+    ComfyUI's own architecture detection (``unet_config["image_model"]`` written
+    by ``model_detection``, and the ``supported_models.Krea2`` /
+    ``model_base.Krea2`` identities). No substring matching on class or file
+    names, so a rename or a lookalike name cannot flip the answer.
+
     Every other architecture (Z Image / Lumina2, Flux, SDXL, Qwen, WAN, ...)
-    must return False so the offload path is never entered for them.
+    returns False, so the offload path is never entered for them.
     """
     if model is None:
         return False
 
     inner = getattr(model, "model", None)          # BaseModel
-    if _looks_krea2(model) or _looks_krea2(inner):
+    if getattr(model, KREA2_MODEL_FLAG, False) is True:
+        return True
+    if getattr(inner, KREA2_MODEL_FLAG, False) is True:
         return True
 
-    model_config = getattr(inner, "model_config", None)
-    if _looks_krea2(model_config):
+    config = getattr(inner, "model_config", None)
+    unet_config = getattr(config, "unet_config", None)
+    if isinstance(unet_config, dict) and str(unet_config.get("image_model", "")).lower() == "krea2":
         return True
 
-    unet_config = getattr(model_config, "unet_config", None)
-    if isinstance(unet_config, dict):
-        for key in ("image_model", "model_type", "arch"):
-            value = unet_config.get(key)
-            if isinstance(value, str) and "krea2" in value.lower():
-                return True
-
-    if _looks_krea2(getattr(inner, "diffusion_model", None)):
-        return True
-
-    return False
+    return _class_name(config) == "Krea2" or _class_name(inner) == "Krea2"
 
 
 def _is_krea2_text_encoder(patcher) -> bool:
@@ -73,24 +92,23 @@ def _is_krea2_text_encoder(patcher) -> bool:
     True only for a Krea2 text encoder.
 
     is_clip alone is not enough: Z Image (ZImageTEModel_), Flux, SDXL and every
-    other CLIP wrapper also carry it. Unloading those breaks unrelated
-    workflows, so the Krea2 class/module tag is required on top of is_clip.
+    other CLIP wrapper also carry it, and unloading those breaks unrelated
+    workflows. The extra condition is that the encoder object is defined in
+    ComfyUI's Krea2 text-encoder module — an exact module identity, not a name
+    that happens to contain "krea2".
     """
     if getattr(patcher, "is_clip", False) is not True:
         return False
 
-    if _looks_krea2(patcher):
-        return True
-
     real = getattr(patcher, "model", None)         # cond_stage_model
-    if _looks_krea2(real):
-        return True
-
-    for attr in ("clip_model", "transformer", "text_model"):
-        if _looks_krea2(getattr(real, attr, None)):
-            return True
-
-    return False
+    candidates = (
+        patcher,
+        real,
+        getattr(real, "clip_model", None),
+        getattr(real, "transformer", None),
+        getattr(real, "text_model", None),
+    )
+    return any(_obj_module(obj) == _KREA2_TE_MODULE for obj in candidates)
 
 
 def _offload_requested(value) -> bool:
@@ -406,8 +424,6 @@ class HSWQSampler:
                 # own widget order instead of shifting a neighbouring value onto it.
                 "clip_perfect_offload": ("BOOLEAN", {
                     "default": False,
-                    "label_on": "enabled (Krea2 only)",
-                    "label_off": "disabled (Krea2 only)",
                     "tooltip": "Krea2 only. Frees the Krea2 text encoder before sampling. "
                                "Ignored for every other architecture.",
                 }),

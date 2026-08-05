@@ -2304,6 +2304,51 @@ def apply_comfy_quant_int8_patches() -> bool:
     return False
 
 
+KREA2_MODEL_FLAG = "_hswq_is_krea2"
+
+
+def model_is_krea2(model) -> bool:
+    """Krea2 check taken from ComfyUI's own architecture detection.
+
+    ``model_detection`` writes ``image_model = "krea2"`` into ``unet_config``
+    from the state dict, and picks ``supported_models.Krea2`` /
+    ``model_base.Krea2``. Those are exact identities, not name guesses, so a
+    file rename or a substring collision cannot flip the answer.
+    """
+    if model is None:
+        return False
+
+    inner = getattr(model, "model", None) or model
+    if getattr(model, KREA2_MODEL_FLAG, False) or getattr(inner, KREA2_MODEL_FLAG, False):
+        return True
+
+    config = getattr(inner, "model_config", None)
+    unet_config = getattr(config, "unet_config", None)
+    if isinstance(unet_config, dict) and str(unet_config.get("image_model", "")).lower() == "krea2":
+        return True
+
+    return type(config).__name__ == "Krea2" or type(inner).__name__ == "Krea2"
+
+
+def tag_krea2_model(model) -> bool:
+    """Stamp the Krea2 verdict onto the model so later nodes read, not guess.
+
+    The flag goes on the inner model too because ``ModelPatcher`` clones
+    re-wrap the same inner model and would otherwise drop it.
+    """
+    if not model_is_krea2(model):
+        return False
+
+    for obj in (model, getattr(model, "model", None)):
+        if obj is None:
+            continue
+        try:
+            setattr(obj, KREA2_MODEL_FLAG, True)
+        except Exception:
+            logger.debug("[HSWQ INT8] Could not tag %r as Krea2", type(obj).__name__)
+    return True
+
+
 def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
     import logging
     import torch
@@ -2361,6 +2406,9 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
         elif weight_dtype == "fp8_e5m2":
             model_options["dtype"] = torch.float8_e5m2
         model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
+
+    if tag_krea2_model(model):
+        logging.info("[HSWQ INT8] Tagged as Krea2: %s", unet_name)
 
     return (model,)
 
