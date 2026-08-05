@@ -170,6 +170,8 @@ ComfyUI 输出节点，将图像以 **PNG** 或 **JPG** 保存到 ComfyUI 的 **
 
 <img src="../png/detailersegs.png" alt="HSWQ Batched Detailer (SEGS)" width="400">
 
+**来源说明：** 本节点以 **[ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack)** 的 Detailer (SEGS) / DetailerForEach（ltdrdata，**GPL-3.0**）为基底开发，并加入了**独有改良与功能**——**尤其为维持与 HSWQ 量化 UNet 的兼容性**（INT8 / NVFP4 ConvRot、Dynamic VRAM、QuantizedTensor 路径等），同时保持 Impact Pack 的 SEGS 接口。运行时仍需安装 Impact Pack；这**不**免除对 Impact Pack 原作的版权与 GPL 义务。
+
 **Detailer (SEGS)** 风格节点，**分三阶段**处理人脸（或其他）分割，而不是按分割逐个进行 encode → sample → decode。这大幅减少了在使用 Dynamic VRAM Loading 时 VAE 与 UNet 反复加载/卸载的次数。
 
 #### 按分割逐个处理的问题
@@ -184,13 +186,14 @@ ComfyUI 输出节点，将图像以 **PNG** 或 **JPG** 保存到 ComfyUI 的 **
 
 #### HSWQ Batched Detailer 做了什么
 
+- **HSWQ 兼容性**：在保持 Impact Pack Detailer (SEGS) 行为的同时，使节点可与 HSWQ 量化模型一同使用（ConvRot INT8 / NVFP4、Dynamic VRAM、QuantizedTensor 相关路径）
 - **阶段 1 (VAE)**：编码所有分割 → VAE 仅加载一次。  
 - **阶段 2 (UNet)**：对所有已编码的 latent 运行 KSampler → UNet 仅加载一次。  
 - **阶段 3 (VAE)**：解码所有精修后的 latent 并贴回 → VAE 仅加载一次。
 
 模型切换次数从 **O(3n)** 降到 **O(2)**（每次运行只加载一次 VAE、一次 UNet）。输入/输出（INPUT_TYPES、RETURN_TYPES 等）与原版 Detailer (SEGS) 接口兼容；对单个分割的行为不变。
 
-**依赖**：需要 [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack)（或提供等价 DetailerForEach SEGS 行为的扩展）。
+**依赖**：需要 [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack)（或提供等价 DetailerForEach SEGS 行为的扩展）。GPL-3.0 基底与面向 HSWQ 兼容性的改良见上方来源说明（`nodes/hswq_batched_detailer.py`）。
 
 ### HSWQ Sampler
 
@@ -278,6 +281,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 * **本仓库**（ComfyUI 加载器 / 工具）如上所述，许可为 **GPL-3.0**
 * **HSWQ Ultimate SD Upscale**（`usdu_bundle/`、`nodes/nunchaku_usdu.py`、相关 USDU 补丁）以 [ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)（ssitu，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ssitu 原作版权保留；本仓库内的独有部分 © ussoewwin
 * **HSWQ Torch Compile**（`nodes/hswq_torch_compile.py`）以 ComfyUI-KJNodes torch.compile 节点（[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)，GPL-3.0）为基底开发，并加入了**独有改良与功能**。KJNodes 原作版权保留；本仓库内的独有部分 © ussoewwin。该 KJ 来源**不**适用于 HSWQ 量化方法本身
+* **HSWQ Batched Detailer (SEGS)**（`nodes/hswq_batched_detailer.py`）以 [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) Detailer (SEGS)（ltdrdata，GPL-3.0）为基底开发，并加入了**独有改良与功能**——**尤其为维持 HSWQ 兼容性**。Impact Pack 原作版权保留；本仓库内的独有部分 © ussoewwin。运行本节点仍需安装 Impact Pack
 * 您可在 GPL-3.0 条款下自由**使用、修改和分发**本软件。
 * 当您分发本软件或其修改版时，您**必须**：
   * 保留版权与许可声明（含第三方 / 衍生作品声明，例如 ssitu UltimateSDUpscale 与 KJNodes）

@@ -170,6 +170,8 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 <img src="png/detailersegs.png" alt="HSWQ Batched Detailer (SEGS)" width="400">
 
+**Provenance:** This node was developed based on **[ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack)** Detailer (SEGS) / DetailerForEach (ltdrdata, **GPL-3.0**), with original improvements and features added **especially to maintain compatibility with HSWQ** quantized UNets (INT8 / NVFP4 ConvRot, Dynamic VRAM, QuantizedTensor paths) while keeping the Impact Pack SEGS interface. Impact Pack remains required at runtime; that does **not** remove the copyright / GPL obligation to the Impact Pack original.
+
 **Detailer (SEGS)**-style node that processes face (or other) segments in **three phases** instead of per-segment encode → sample → decode. This greatly reduces how often VAE and UNet are loaded and unloaded when using Dynamic VRAM Loading.
 
 #### Problem with per-segment processing
@@ -184,13 +186,14 @@ So the pipeline does: VAE load → UNet load → VAE load → UNet load → … 
 
 #### What HSWQ Batched Detailer does
 
+- **HSWQ compatibility**: Keeps Impact Pack Detailer (SEGS) behavior while remaining usable with HSWQ quantized models (ConvRot INT8 / NVFP4, Dynamic VRAM, QuantizedTensor-related paths)
 - **Phase 1 (VAE)**: Encode all segments → VAE is loaded once.  
 - **Phase 2 (UNet)**: Run KSampler for all encoded latents → UNet is loaded once.  
 - **Phase 3 (VAE)**: Decode all refined latents and paste back → VAE is loaded once.
 
 Model switches drop from **O(3n)** to **O(2)** (one VAE load, one UNet load per run). Input/output (INPUT_TYPES, RETURN_TYPES, etc.) is compatible with the original Detailer (SEGS) interface; behavior for a single segment is unchanged.
 
-**Requirement**: [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) (or equivalent that provides the DetailerForEach SEGS behavior) is required.
+**Requirement**: [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) (or equivalent that provides the DetailerForEach SEGS behavior) is required. See Provenance above for GPL-3.0 base and HSWQ-compatibility improvements (`nodes/hswq_batched_detailer.py`).
 
 ### HSWQ Sampler
 
@@ -278,6 +281,7 @@ This project is licensed under the **GNU General Public License, Version 3**.
 * **This repository** (ComfyUI loaders / tools) is licensed under **GPL-3.0** as stated above
 * **HSWQ Ultimate SD Upscale** (`usdu_bundle/`, `nodes/nunchaku_usdu.py`, related USDU patches) was developed based on [ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale) (ssitu, GPL-3.0), with original improvements and features added. Copyright in the ssitu original is retained; original work in this repository is © ussoewwin
 * **HSWQ Torch Compile** (`nodes/hswq_torch_compile.py`) was developed based on ComfyUI-KJNodes torch.compile nodes ([ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes), GPL-3.0), with original improvements and features added. Copyright in the KJNodes original is retained; original work in this repository is © ussoewwin. That KJ provenance does **not** apply to the HSWQ quantization method itself
+* **HSWQ Batched Detailer (SEGS)** (`nodes/hswq_batched_detailer.py`) was developed based on [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) Detailer (SEGS) (ltdrdata, GPL-3.0), with original improvements and features added **especially to maintain HSWQ compatibility**. Copyright in the Impact Pack original is retained; original work in this repository is © ussoewwin. Impact Pack must still be installed for this node to run
 * You are free to **use, modify, and distribute** this software under GPL-3.0 terms.
 * When you distribute this software or a modified version, you **must**:
   * Keep the copyright and license notices (including third-party / derived-work notices such as ssitu UltimateSDUpscale and KJNodes)
