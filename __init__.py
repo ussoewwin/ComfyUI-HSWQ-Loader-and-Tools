@@ -119,6 +119,14 @@ from .utils import get_package_version, get_plugin_version
 # Dynamic INT8 LoRA bake must detect comfy QuantizedTensor only — never bare
 # torch.int8 (Nunchaku SVDQ false positive → Abort on Z-Image / Lumina2).
 
+# LATENT None-guard: stock VAEDecode / VAEDecodeTiled index samples["samples"],
+# so a dropped LATENT kills the prompt after sampling already finished.
+try:
+    from .patches.vae_decode_none_guard import apply_vae_decode_none_guard
+    apply_vae_decode_none_guard()
+except Exception as e:
+    logger.debug("LATENT None-guard not applied: %s", e)
+
 # HSWQ Ultimate SD Upscale: apply copy_ / FP8 bias / embedder / Lumina compat patches in this extension
 try:
     from .usdu_compat_patches import apply_usdu_compat_patches
@@ -631,6 +639,13 @@ try:
     logger.info("Registered HSWQ Sampler")
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Sampler not registered: %s", e)
+
+try:
+    from .nodes.hswq_vae_decode_tiled import HSWQVAEDecodeTiled
+    NODE_CLASS_MAPPINGS["HSWQVAEDecodeTiled"] = HSWQVAEDecodeTiled
+    logger.info("Registered HSWQ VAE Decode Tiled")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ VAE Decode Tiled not registered: %s", e)
 
 try:
     from .nodes.hswq_torch_compile import HSWQTorchCompileModel
