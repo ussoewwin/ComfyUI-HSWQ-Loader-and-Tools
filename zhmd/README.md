@@ -252,7 +252,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 
 * **本仓库不分发任何模型检查点、权重或训练数据。**
 * 所有模型文件（包括 SDXL 检查点、量化 UNet 文件、CLIP、VAE、LoRA 与 ControlNet 模型）**必须由用户自行获取**。
-* 用户需自行确保**所有下载或生成的模型文件符合其各自的许可**（例如 CreativeML Open RAIL、Apache-2.0、自定义研究许可等）。
+* 用户需自行确保**所有下载或生成的模型文件符合其各自的许可**（例如 CreativeML Open RAIL、自定义研究许可等）。
 * 作者**不授予**任何超出原始许可所允许范围的重分发、修改或使用第三方模型的权利。
 
 ### 量化与衍生模型
@@ -260,19 +260,18 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 * 量化模型（例如 SVDQ / FP4 / INT4）被视为原始检查点的**衍生作品**。
 * 在共享或重分发量化模型之前，请确认**原始模型许可明确允许重分发与衍生作品**。
 
-## 许可（Apache License 2.0）
+## 许可（GNU GPL v3）
 
-本项目基于 **Apache License, Version 2.0** 授权。
+本项目基于 **GNU General Public License, Version 3** 授权。
 
 ### 要点
 
-* Copyright © 2024–2025 ussoewwin
-* 您可自由**使用、修改和分发**本软件，包括用于商业用途。
-* 您**必须保留**：
-  * 原始版权声明
-  * Apache-2.0 许可副本
-  * 任何现有的 NOTICE 文件（若有）
-* 如果您修改了源代码，**必须明确标示**已做出更改。
+* Copyright © 2024–2026 ussoewwin
+* 您可在 GPL-3.0 条款下自由**使用、修改和分发**本软件。
+* 当您分发本软件或其修改版时，您**必须**：
+  * 保留版权与许可声明
+  * 提供对应的源代码
+  * 以 **GPL-3.0** 许可分发作品（copyleft）
 * 本软件按 **“AS IS”** 提供，不附带任何形式的保证或条件。
 
-完整许可文本见 [`LICENCE.txt`](../LICENCE.txt)。
+完整许可文本见 [`LICENSE`](../LICENSE)。

@@ -216,7 +216,7 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 
 <img src="png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
 
-ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows). Uses ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper` — **no KJNodes dependency**.
+ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows). Uses ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper`.
 
 Defaults are chosen for HSWQ + Ultimate SD Upscale: **inductor** + **`max-autotune-no-cudagraphs`**, `fullgraph` off, and Distorch weight-cast helpers marked eager so multi-tile USDU does not explode recompiles or hit CUDA-graph / `cudaMallocAsync` pool errors.
 
@@ -239,7 +239,6 @@ On Windows, other extensions (for example SeedVR2) may raise inductor `compile_t
 - **Category**: `HSWQ/torchcompile`
 - **Placement**: After **HSWQ Checkpoint Loader (SDXL)** or **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (and any LoRA), before the sampler / **HSWQ Ultimate SD Upscale**
 - **Avoid `cudagraphs` with multi-tile USDU**: Prefer inductor; CUDA graphs often fail on tiled / pool allocation paths
-- **KJNodes**: Not required; this is a standalone HSWQ menu node
 - **Details**: See `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
 ## Changelog
@@ -252,7 +251,7 @@ See [changelog.md](changelog.md).
 
 * **This repository does NOT distribute any model checkpoints, weights, or training data.**
 * All model files (including SDXL checkpoints, quantized UNet files, CLIP, VAE, LoRA, and ControlNet models) **must be obtained separately by the user**.
-* Users are solely responsible for ensuring that **all downloaded or generated model files comply with their respective licenses** (e.g., CreativeML Open RAIL, Apache-2.0, custom research licenses, etc.).
+* Users are solely responsible for ensuring that **all downloaded or generated model files comply with their respective licenses** (e.g., CreativeML Open RAIL, custom research licenses, etc.).
 * The author does **not grant any rights** to redistribute, modify, or use third-party models beyond what is permitted by their original licenses.
 
 ### Quantized & Derived Models
@@ -260,19 +259,18 @@ See [changelog.md](changelog.md).
 * Quantized models (e.g., SVDQ / FP4 / INT4) are considered **derivative works** of the original checkpoints.
 * Before sharing or redistributing quantized models, verify that the **original model license explicitly allows redistribution and derivative works**.
 
-## License (Apache License 2.0)
+## License (GNU GPL v3)
 
-This project is licensed under the **Apache License, Version 2.0**.
+This project is licensed under the **GNU General Public License, Version 3**.
 
 ### Key Points
 
-* Copyright © 2024–2025 ussoewwin
-* You are free to **use, modify, and distribute** this software, including for commercial purposes.
-* You **must retain**:
-  * The original copyright notice
-  * A copy of the Apache-2.0 license
-  * Any existing NOTICE files (if present)
-* If you modify the source code, you **must clearly indicate** that changes were made.
+* Copyright © 2024–2026 ussoewwin
+* You are free to **use, modify, and distribute** this software under GPL-3.0 terms.
+* When you distribute this software or a modified version, you **must**:
+  * Keep the copyright and license notices
+  * Provide the corresponding source code
+  * License the distributed work under **GPL-3.0** (copyleft)
 * This software is provided **"AS IS"**, without warranties or conditions of any kind.
 
-See the full license text in [`LICENCE.txt`](./LICENCE.txt).
+See the full license text in [`LICENSE`](./LICENSE).
