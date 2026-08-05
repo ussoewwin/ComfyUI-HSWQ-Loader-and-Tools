@@ -30,18 +30,15 @@ import nodes
 import torch
 from nodes import MAX_RESOLUTION
 
-try:
-    import impact.core as core
-    from impact.core import SEG
-    import impact.utils as utils
-    import impact.wildcards as wildcards
-    import impact.impact_sampling as impact_sampling
-    from comfy_extras import nodes_differential_diffusion
-except ImportError:
-    raise ImportError(
-        "[HSWQ] ComfyUI-Impact-Pack is required for HSWQBatchedDetailer. "
-        "Please install it first."
-    )
+from comfy_extras import nodes_differential_diffusion
+
+from .batched_detailer_lib import (
+    SEG,
+    impact_sampling,
+    utils,
+    wildcards,
+)
+from .batched_detailer_lib import core
 
 logger = logging.getLogger("HSWQ_BatchedDetailer")
 
@@ -122,7 +119,7 @@ class HSWQBatchedDetailer:
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "doit"
-    CATEGORY = "ImpactPack/Detailer"
+    CATEGORY = "HSWQ/Detailer"
     TITLE = "HSWQ Batched Detailer (SEGS)"
     DESCRIPTION = (
         "Phase-split version of Detailer (SEGS). Groups all VAE encodes, "

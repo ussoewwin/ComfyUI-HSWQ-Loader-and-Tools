@@ -1,0 +1,10 @@
+HSWQ Batched Detailer in-tree Impact helpers
+============================================
+
+Portions of this package were developed based on ComfyUI-Impact-Pack
+(https://github.com/ltdrdata/ComfyUI-Impact-Pack) by ltdrdata, licensed under
+the GNU General Public License v3.0. See IMPACT_PACK_LICENSE.txt.
+
+Original Impact Pack copyright is retained. Modifications and packaging for
+HSWQ Batched Detailer (no runtime import of the Impact Pack package) are
+© ussoewwin under this repository's GPL-3.0 terms.
