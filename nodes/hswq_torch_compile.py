@@ -227,13 +227,6 @@ class HSWQTorchCompileModel:
                         "tooltip": "Dynamic shape tracing. Prefer false unless tile shapes vary every step.",
                     },
                 ),
-                "compile_transformer_blocks_only": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "tooltip": "Compile per-block (layers/blocks/…). Faster and more stable for Z-Image.",
-                    },
-                ),
                 "dynamo_cache_size_limit": (
                     "INT",
                     {
@@ -281,12 +274,12 @@ class HSWQTorchCompileModel:
         fullgraph,
         mode,
         dynamic,
-        compile_transformer_blocks_only,
         dynamo_cache_size_limit,
         force_parameter_static_shapes,
         patch_distorch_weight_cast,
         debug_compile_keys,
         disable_dynamic_vram=False,
+        **_kwargs,
     ):
         from comfy_api.torch_helpers import set_torch_compile_wrapper
 
@@ -330,20 +323,18 @@ class HSWQTorchCompileModel:
         except KeyError as e:
             raise ValueError(f"Invalid dynamic arg {dynamic!r}") from e
 
-        compile_key_list: list[str] = []
-        if compile_transformer_blocks_only:
-            compile_key_list = _collect_block_keys(diffusion_model)
-            if not compile_key_list:
-                logger.warning(
-                    "[HSWQ TorchCompile] No known transformer blocks found; "
-                    "compiling entire diffusion_model"
-                )
-            elif debug_compile_keys:
-                logger.info("[HSWQ TorchCompile] compile keys:")
-                for key in compile_key_list:
-                    logger.info(" - %s", key)
+        # Always compile per transformer block (former toggle default ON).
+        compile_key_list = _collect_block_keys(diffusion_model)
         if not compile_key_list:
+            logger.warning(
+                "[HSWQ TorchCompile] No known transformer blocks found; "
+                "compiling entire diffusion_model"
+            )
             compile_key_list = ["diffusion_model"]
+        elif debug_compile_keys:
+            logger.info("[HSWQ TorchCompile] compile keys:")
+            for key in compile_key_list:
+                logger.info(" - %s", key)
 
         compile_kwargs = _build_compile_kwargs(backend, mode, fullgraph, dynamic_val)
         try:
