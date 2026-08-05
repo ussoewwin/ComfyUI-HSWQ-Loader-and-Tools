@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.7
+
+- **Fixed / Changed (license & provenance)**: Dropped leftover Apache-2.0 wording so this loader repo is consistently **GPL-3.0**; clarified that upstream **HSWQ** ([Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)) remains **AGPL-3.0** and is separate from this package’s license. Reworked README / zhmd provenance for **USDU**, **Torch Compile (KJNodes)**, and **Batched Detailer (Impact Pack)** without “copy” phrasing. Batched Detailer now ships helpers in `nodes/batched_detailer_lib/` so Impact Pack is **not** required at runtime while GPL attribution remains.
+- See [Release Notes v3.3.7](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.7) for details.
+
 ## Version 3.3.6
 
 - **Added / Fixed**: **HSWQ Torch Compile** node (`HSWQTorchCompileModel`) — ComfyUI `set_torch_compile_wrapper` path without KJNodes; forces `compile_threads=1` and `worker_start_method=subprocess` so SeedVR2 / `utils.install_util` spawn crashes stay off; defaults inductor + `max-autotune-no-cudagraphs`. **ZI INT8 peel**: `peel_non_product_nvfp4_ops` dives under PRODUCT NVFP4 load when the under layer is foreign INT8 / ZI protect, so SDXL INT8 survives after Z Image. Docs: EN/ZH README node sections, technical guide, BETA badge removed.
