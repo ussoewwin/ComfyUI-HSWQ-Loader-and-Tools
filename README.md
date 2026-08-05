@@ -96,6 +96,8 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 <img src="png/usdu_auto_workflow.png" alt="HSWQ Ultimate SD Upscale" width="400">
 
+**Provenance:** This node was developed based on **[ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)** (ssitu, **GPL-3.0**), itself derived from Coyote-A’s Ultimate SD Upscale for Automatic1111, with original improvements and features added for HSWQ / FP8 / torch.compile / Auto scale (`usdu_bundle`, `nodes/nunchaku_usdu.py`, `usdu_compat_patches.py`). Shipping a standalone `usdu_bundle` does **not** remove the copyright / GPL obligation to the ssitu original.
+
 #### Features
 
 - **Tile-based Upscaling**: Processes images in tiles to handle high-resolution upscaling efficiently
@@ -116,9 +118,10 @@ Example: input height 1080, `upscale_by = Auto`, `target_height = 4320` → scal
 
 #### Usage Notes
 
-- **Standalone**: This node does **not** require `ComfyUI_UltimateSDUpscale`. It uses a bundled copy (`usdu_bundle`) and works on its own. You can use this node without installing any other Ultimate SD Upscale extension.
+- **Standalone**: Installing the separate `ComfyUI_UltimateSDUpscale` package is **not** required at runtime. This node ships `usdu_bundle` in-tree. That is a packaging choice; provenance and GPL-3.0 obligations still apply (see Provenance above).
 - **Color Range**: Automatically normalizes Nunchaku SDXL VAE's compressed color range (e.g., 0.15-0.85) to full range (0.0-1.0) to restore proper contrast and color saturation
 - **Module Safety**: Uses isolated module loading to prevent conflicts with other custom nodes
+- **ssitu / UltimateSDUpscale**: Base of the tiled upscale design ([ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale), GPL-3.0)
 
 #### FP8 (fp8e4m3) and torch.compile
 - **Purpose:** Use this node with FP8 quantized models (e.g. HSWQ SDXL) and torch.compile together.
@@ -220,7 +223,7 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 
 ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows).
 
-**Provenance:** This node is based on **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** `TorchCompileModelAdvanced` (kijai). The HSWQ tree **copied and modified** that work for HSWQ / USDU / Distorch / Windows inductor hardening. At runtime it calls ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper` and does **not** import the KJNodes package; that does **not** remove the copyright / GPL obligation to the KJNodes original.
+**Provenance:** This node was developed based on **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** `TorchCompileModelAdvanced` (kijai), with original improvements and features added for HSWQ / USDU / Distorch / Windows inductor hardening. At runtime it calls ComfyUI core `comfy_api.torch_helpers.set_torch_compile_wrapper` and does **not** import the KJNodes package; that does **not** remove the copyright / GPL obligation to the KJNodes original.
 
 Defaults are chosen for HSWQ + Ultimate SD Upscale: **inductor** + **`max-autotune-no-cudagraphs`**, `fullgraph` off, and Distorch weight-cast helpers marked eager so multi-tile USDU does not explode recompiles or hit CUDA-graph / `cudaMallocAsync` pool errors.
 
@@ -243,7 +246,7 @@ On Windows, other extensions (for example SeedVR2) may raise inductor `compile_t
 - **Category**: `HSWQ/torchcompile`
 - **Placement**: After **HSWQ Checkpoint Loader (SDXL)** or **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (and any LoRA), before the sampler / **HSWQ Ultimate SD Upscale**
 - **Avoid `cudagraphs` with multi-tile USDU**: Prefer inductor; CUDA graphs often fail on tiled / pool allocation paths
-- **KJNodes**: Source of the torch.compile UI / wrapper design (GPL-3.0). Installing KJNodes is **not** required to run this node; attribution and copyleft still apply
+- **KJNodes**: Base of the torch.compile UI / wrapper design (GPL-3.0). Installing KJNodes is **not** required to run this node; attribution and GPL obligations still apply
 - **Details**: See `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
 ## Changelog
@@ -273,12 +276,13 @@ This project is licensed under the **GNU General Public License, Version 3**.
 * Copyright © 2024–2026 ussoewwin
 * **Upstream HSWQ** ([Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)) is **fully developed by ussoewwin** and is licensed under **AGPL-3.0**. That repo’s AGPL terms apply to the quantization code and docs there; they are **not** the same as this loader’s license file
 * **This repository** (ComfyUI loaders / tools) is licensed under **GPL-3.0** as stated above
-* **HSWQ Torch Compile** (`nodes/hswq_torch_compile.py`) alone is a **derivative** of ComfyUI-KJNodes torch.compile nodes ([ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes), GPL-3.0). Copyright in the KJNodes original is retained; modifications in this repository are © ussoewwin. That KJ provenance does **not** apply to the HSWQ quantization method itself
+* **HSWQ Ultimate SD Upscale** (`usdu_bundle/`, `nodes/nunchaku_usdu.py`, related USDU patches) was developed based on [ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale) (ssitu, GPL-3.0), with original improvements and features added. Copyright in the ssitu original is retained; original work in this repository is © ussoewwin
+* **HSWQ Torch Compile** (`nodes/hswq_torch_compile.py`) was developed based on ComfyUI-KJNodes torch.compile nodes ([ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes), GPL-3.0), with original improvements and features added. Copyright in the KJNodes original is retained; original work in this repository is © ussoewwin. That KJ provenance does **not** apply to the HSWQ quantization method itself
 * You are free to **use, modify, and distribute** this software under GPL-3.0 terms.
 * When you distribute this software or a modified version, you **must**:
-  * Keep the copyright and license notices (including third-party / derived-work notices such as KJNodes)
+  * Keep the copyright and license notices (including third-party / derived-work notices such as ssitu UltimateSDUpscale and KJNodes)
   * Provide the corresponding source code
-  * License the distributed work under **GPL-3.0** (copyleft)
+  * License the distributed work under **GPL-3.0** (reciprocal / share-alike terms)
 * This software is provided **"AS IS"**, without warranties or conditions of any kind.
 
 See the full license text in [`LICENSE`](./LICENSE). Upstream HSWQ AGPL text lives in that project’s own `LICENSE`.

@@ -96,6 +96,8 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 <img src="../png/usdu_auto_workflow.png" alt="HSWQ Ultimate SD Upscale" width="400">
 
+**来源说明：** 本节点以 **[ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)**（ssitu，**GPL-3.0**）为基底开发（该项目本身又源自 Coyote-A 的 Automatic1111 用 Ultimate SD Upscale），并加入了面向 HSWQ / FP8 / torch.compile / Auto 倍率的**独有改良与功能**（`usdu_bundle`、`nodes/nunchaku_usdu.py`、`usdu_compat_patches.py`）。独立打包 **不** 免除对 ssitu 原作的版权与 GPL 义务。
+
 #### 特性
 
 - **分块放大**：以 tile 方式处理图像，高效完成高分辨率放大
@@ -116,9 +118,10 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 #### 使用说明
 
-- **独立运行**：本节点**不**需要 `ComfyUI_UltimateSDUpscale`。它使用内置副本（`usdu_bundle`），可独立运行。无需安装任何其他 Ultimate SD Upscale 扩展即可使用。
+- **独立运行**：运行时**不必**另行安装 `ComfyUI_UltimateSDUpscale` 包。本节点在仓库内提供 `usdu_bundle`。这是打包方式的选择；来源归属与 GPL-3.0 义务仍然适用（见上方来源说明）。
 - **色彩范围**：自动将 Nunchaku SDXL VAE 压缩的色彩范围（例如 0.15-0.85）归一化到完整范围（0.0-1.0），恢复正确的对比度与色彩饱和度
 - **模块安全**：使用隔离的模块加载，避免与其他自定义节点冲突
+- **ssitu / UltimateSDUpscale**：分块放大设计的基底（[ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)，GPL-3.0）
 
 #### FP8 (fp8e4m3) 与 torch.compile
 - **目的：** 将本节点与 FP8 量化模型（例如 HSWQ SDXL）和 torch.compile 一起使用。
@@ -220,7 +223,7 @@ ComfyUI 输出节点，将图像以 **PNG** 或 **JPG** 保存到 ComfyUI 的 **
 
 ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面向 HSWQ 扩散路径（SDXL ConvRot INT8 / ConvRot NVFP4、Z Image / ZIT ConvRot NVFP4，以及相关的 USDU / Distorch 工作流）。
 
-**来源说明：** 本节点基于 **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** 的 `TorchCompileModelAdvanced`（kijai），由 HSWQ 侧**复制并改写**，以适配 HSWQ / USDU / Distorch / Windows inductor 加固。运行时调用 ComfyUI 核心 `comfy_api.torch_helpers.set_torch_compile_wrapper`，**不 import KJNodes 包**；这**不**免除对 KJNodes 原作的版权与 GPL 义务。
+**来源说明：** 本节点以 **[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)** 的 `TorchCompileModelAdvanced`（kijai）为基底开发，并加入了面向 HSWQ / USDU / Distorch / Windows inductor 加固的**独有改良与功能**。运行时调用 ComfyUI 核心 `comfy_api.torch_helpers.set_torch_compile_wrapper`，**不 import KJNodes 包**；这**不**免除对 KJNodes 原作的版权与 GPL 义务。
 
 默认值针对 HSWQ + Ultimate SD Upscale 选定：**inductor** + **`max-autotune-no-cudagraphs`**、关闭 `fullgraph`，并将 Distorch 权重 cast 辅助函数标为 eager，避免多 tile USDU 导致重编译爆炸，或触发 CUDA graph / `cudaMallocAsync` 池错误。
 
@@ -243,7 +246,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 - **分类**：`HSWQ/torchcompile`
 - **放置位置**：放在 **HSWQ Checkpoint Loader (SDXL)** 或 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
 - **多 tile USDU 时避免 `cudagraphs`**：优先 inductor；CUDA graphs 在 tiled / 池分配路径上经常失败
-- **KJNodes**：torch.compile UI / wrapper 设计的来源（GPL-3.0）。运行本节点**不必**安装 KJNodes；归属与 copyleft 义务仍然适用
+- **KJNodes**：torch.compile UI / wrapper 设计的基底（GPL-3.0）。运行本节点**不必**安装 KJNodes；归属与 GPL 义务仍然适用
 - **详情**：见 `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
 ## 更新日志
@@ -273,12 +276,13 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 * Copyright © 2024–2026 ussoewwin
 * **上游 HSWQ**（[Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)）由 **ussoewwin 完整开发**，许可为 **AGPL-3.0**。该仓库的 AGPL 条款适用于其中的量化代码与文档；**不等于**本加载器仓库的 `LICENSE`
 * **本仓库**（ComfyUI 加载器 / 工具）如上所述，许可为 **GPL-3.0**
-* **仅 HSWQ Torch Compile**（`nodes/hswq_torch_compile.py`）是 ComfyUI-KJNodes torch.compile 节点（[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)，GPL-3.0）的**衍生作品**。KJNodes 原作版权保留；本仓库内的改写 © ussoewwin。该 KJ 来源**不**适用于 HSWQ 量化方法本身
+* **HSWQ Ultimate SD Upscale**（`usdu_bundle/`、`nodes/nunchaku_usdu.py`、相关 USDU 补丁）以 [ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)（ssitu，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ssitu 原作版权保留；本仓库内的独有部分 © ussoewwin
+* **HSWQ Torch Compile**（`nodes/hswq_torch_compile.py`）以 ComfyUI-KJNodes torch.compile 节点（[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)，GPL-3.0）为基底开发，并加入了**独有改良与功能**。KJNodes 原作版权保留；本仓库内的独有部分 © ussoewwin。该 KJ 来源**不**适用于 HSWQ 量化方法本身
 * 您可在 GPL-3.0 条款下自由**使用、修改和分发**本软件。
 * 当您分发本软件或其修改版时，您**必须**：
-  * 保留版权与许可声明（含第三方 / 衍生作品声明，例如 KJNodes）
+  * 保留版权与许可声明（含第三方 / 衍生作品声明，例如 ssitu UltimateSDUpscale 与 KJNodes）
   * 提供对应的源代码
-  * 以 **GPL-3.0** 许可分发作品（copyleft）
+  * 以 **GPL-3.0** 许可分发作品（互惠 / share-alike 条款）
 * 本软件按 **“AS IS”** 提供，不附带任何形式的保证或条件。
 
 完整许可文本见 [`LICENSE`](../LICENSE)。上游 HSWQ 的 AGPL 全文见该项目自身的 `LICENSE`。
