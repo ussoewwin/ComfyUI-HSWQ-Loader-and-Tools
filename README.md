@@ -223,7 +223,7 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 
 ### HSWQ Torch Compile
 
-<img src="png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
+<img src="png/torchcompile.png?v=2" alt="HSWQ Torch Compile" width="400">
 
 ComfyUI node that wraps a loaded **MODEL** with PyTorch `torch.compile` for HSWQ diffusion paths (SDXL ConvRot INT8 / ConvRot NVFP4, Z Image / ZIT ConvRot NVFP4, and related USDU / Distorch workflows).
 

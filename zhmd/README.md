@@ -223,7 +223,7 @@ GPL-3.0 基底与面向 HSWQ 兼容性的改良见上方来源说明（`nodes/hs
 
 ### HSWQ Torch Compile
 
-<img src="../png/torchcompile.png" alt="HSWQ Torch Compile" width="400">
+<img src="../png/torchcompile.png?v=2" alt="HSWQ Torch Compile" width="400">
 
 ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面向 HSWQ 扩散路径（SDXL ConvRot INT8 / ConvRot NVFP4、Z Image / ZIT ConvRot NVFP4，以及相关的 USDU / Distorch 工作流）。
 
