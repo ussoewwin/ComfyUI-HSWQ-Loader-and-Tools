@@ -43,7 +43,7 @@ Style matches other public manuals under `md/`.
 | `backend` | inductor / cudagraphs | `inductor` | Prefer inductor with USDU |
 | `fullgraph` | BOOLEAN | `False` | Keep False for ConvRot / Distorch |
 | `mode` | enum | `max-autotune-no-cudagraphs` | Avoid CUDA graphs with USDU |
-| `dynamic` | auto / true / false | `false` | Shape tracing |
+| `dynamic` | BOOLEAN | `False` | Shape tracing (`torch.compile` dynamic) |
 | `compile_transformer_blocks_only` | BOOLEAN | `True` | Per-block keys when possible |
 | `dynamo_cache_size_limit` | INT | `64` | `torch._dynamo.config.cache_size_limit` |
 | `force_parameter_static_shapes` | BOOLEAN | `True` | Reduce symbolic `torch.Size` on weights |
@@ -315,10 +315,10 @@ class HSWQTorchCompileModel:
                     },
                 ),
                 "dynamic": (
-                    ["auto", "true", "false"],
+                    "BOOLEAN",
                     {
-                        "default": "false",
-                        "tooltip": "Dynamic shape tracing. Prefer false unless tile shapes vary every step.",
+                        "default": False,
+                        "tooltip": "Dynamic shape tracing. Prefer off unless tile shapes vary every step.",
                     },
                 ),
                 "compile_transformer_blocks_only": (
@@ -418,12 +418,6 @@ class HSWQTorchCompileModel:
         if patch_distorch_weight_cast:
             _patch_distorch_ops_for_compile()
 
-        dynamic_kv = {"true": True, "false": False, "auto": None}
-        try:
-            dynamic_val = dynamic_kv[dynamic]
-        except KeyError as e:
-            raise ValueError(f"Invalid dynamic arg {dynamic!r}") from e
-
         compile_key_list: list[str] = []
         if compile_transformer_blocks_only:
             compile_key_list = _collect_block_keys(diffusion_model)
@@ -439,7 +433,7 @@ class HSWQTorchCompileModel:
         if not compile_key_list:
             compile_key_list = ["diffusion_model"]
 
-        compile_kwargs = _build_compile_kwargs(backend, mode, fullgraph, dynamic_val)
+        compile_kwargs = _build_compile_kwargs(backend, mode, fullgraph, bool(dynamic))
         try:
             set_torch_compile_wrapper(model=m, keys=compile_key_list, **compile_kwargs)
         except Exception as e:
@@ -451,7 +445,7 @@ class HSWQTorchCompileModel:
             backend,
             mode,
             fullgraph,
-            dynamic_val,
+            bool(dynamic),
         )
         return (m,)
 

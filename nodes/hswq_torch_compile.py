@@ -35,6 +35,11 @@ import os
 import torch
 
 logger = logging.getLogger(__name__)
+# Match usdu_bundle/usdu_patch.py: Comfy console often misses bare module loggers.
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 _DISTORCH_COMPILE_PATCHED = False
 _INDUCTOR_COMFY_HARDENED = False
@@ -221,10 +226,10 @@ class HSWQTorchCompileModel:
                     },
                 ),
                 "dynamic": (
-                    ["auto", "true", "false"],
+                    "BOOLEAN",
                     {
-                        "default": "false",
-                        "tooltip": "Dynamic shape tracing. Prefer false unless tile shapes vary every step.",
+                        "default": False,
+                        "tooltip": "Dynamic shape tracing. Prefer off unless tile shapes vary every step.",
                     },
                 ),
                 "dynamo_cache_size_limit": (
@@ -317,12 +322,6 @@ class HSWQTorchCompileModel:
         if patch_distorch_weight_cast:
             _patch_distorch_ops_for_compile()
 
-        dynamic_kv = {"true": True, "false": False, "auto": None}
-        try:
-            dynamic_val = dynamic_kv[dynamic]
-        except KeyError as e:
-            raise ValueError(f"Invalid dynamic arg {dynamic!r}") from e
-
         # Always compile per transformer block (former toggle default ON).
         compile_key_list = _collect_block_keys(diffusion_model)
         if not compile_key_list:
@@ -331,12 +330,12 @@ class HSWQTorchCompileModel:
                 "compiling entire diffusion_model"
             )
             compile_key_list = ["diffusion_model"]
-        elif debug_compile_keys:
-            logger.info("[HSWQ TorchCompile] compile keys:")
+        if debug_compile_keys:
+            logger.info("[HSWQ TorchCompile] compile keys (%d):", len(compile_key_list))
             for key in compile_key_list:
                 logger.info(" - %s", key)
 
-        compile_kwargs = _build_compile_kwargs(backend, mode, fullgraph, dynamic_val)
+        compile_kwargs = _build_compile_kwargs(backend, mode, fullgraph, bool(dynamic))
         try:
             set_torch_compile_wrapper(model=m, keys=compile_key_list, **compile_kwargs)
         except Exception as e:
@@ -348,7 +347,7 @@ class HSWQTorchCompileModel:
             backend,
             mode,
             fullgraph,
-            dynamic_val,
+            bool(dynamic),
         )
         return (m,)
 
