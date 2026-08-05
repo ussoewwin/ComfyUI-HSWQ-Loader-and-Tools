@@ -213,13 +213,27 @@ GPL-3.0 基底与面向 HSWQ 兼容性的改良见上方来源说明（`nodes/hs
 - **与 Forge 一致的 RK 包装生成**：为所有 RK sampler 名称构建 `sample_fn` / `sample_ode_fn` 闭包，自动生成 ODE 变体，同时排除隐式 samplers（gauss-legendre、radau、lobatto 等）
 - **可靠的重新注入**：通过 `setattr` 将每个 sampler 同时注册到 `KSampler.SAMPLERS`（UI 可选）与 `comfy.k_diffusion.sampling`（实际推理），防止 RES4LYF 的 `importlib.reload()` 抹去函数引用
 - **Scheduler 合并**：在标准 scheduler 列表之外，还包含 ComfyUI 的 `SCHEDULER_HANDLERS`
+- **`clip_perfect_offload (Krea2 only)`**：可选开关，在采样前释放 Krea2 文本编码器（见下）
+
+#### Krea2 文本编码器卸载（`clip_perfect_offload`）
+
+可选的 **`clip_perfect_offload (Krea2 only)`** 开关复刻了 Krea2 基准测试中的 `clip.cond_stage_model.cpu()` 行为：prompt 编码完成后，采样循环不再需要 Krea2 文本编码器（TE），因此在采样前卸载它可以释放 DiT 所需的显存。在紧张显存的显卡上，常驻的 TE 与 DiT 会在采样期间同时占用显存，从而导致 OOM 或 loader 反复换入换出。
+
+该功能刻意保持狭窄且安全：
+
+- **默认关闭**，作为显式选择加入的控件暴露。
+- **双向限定 Krea2**：仅当 **MODEL 是 Krea2 扩散模型** *并且* 只会卸载 **Krea2 文本编码器** 时才运行。两者都通过 loader 在加载时打的标记（`_hswq_is_krea2`）与精确的模块身份（`comfy.text_encoders.krea2`）识别 —— 绝不靠类名猜测 —— 因此 Z Image / Lumina2、Flux、SDXL、Qwen 和 WAN 永远不会被触碰。
+- **严格读取开关**：只有真正的布尔值 `True` 才会启用它。旧存档工作流中错位的值会被拒绝并记录为关闭，因此当 UI 显示开关为关时，它不会触发。
+- **全局隔离**：通过从 `current_loaded_models` 丢弃其 patcher（Python 引用计数）来释放 TE；其他所有模型（DiT / VAE / ControlNet）都保持常驻，并且**绝不**调用任何全局分配器操作（`soft_empty_cache` / `empty_cache` / `unload_all_models`），因此共享同一 CUDA 分配器的并发非 Krea2 工作流不会被干扰。
+- **绝不中断运行**：若模型不是 Krea2，则忽略开关并记录；任何卸载失败都会被捕获，采样正常继续。
 
 #### 使用说明
 
 - **可选依赖**：未安装 RES4LYF 时，作为普通 KSampler 工作
 - **分类**：`sampling`
 - **可扩展性**：作为轻量 UI 包装设计，以便将来可以在 `sample()` 中拦截 HSWQ / Z-Image 量化推理参数，而无需改动 ComfyUI 核心
-- **详情**：见 `md/hswq_sampler_technical_reference.md`
+- **Krea2 TE 卸载**：对所有非 Krea2 模型请保持 `clip_perfect_offload (Krea2 only)` 关闭；对 Krea2 则打开以达到与基准一致的显存占用。旧工作流中原名 `clip_perfect_offload` 仍映射到同一开关。
+- **详情**：见 `md/hswq_sampler_technical_reference.md` 与 `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`
 
 ### HSWQ Torch Compile
 

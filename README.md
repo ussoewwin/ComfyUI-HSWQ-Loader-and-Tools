@@ -213,13 +213,27 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 - **Forge-identical RK wrapper generation**: Builds `sample_fn` / `sample_ode_fn` closures for all RK sampler names, auto-generating ODE variants while excluding implicit samplers (gauss-legendre, radau, lobatto, etc.)
 - **Reliable re-injection**: Registers every sampler into both `KSampler.SAMPLERS` (UI selectable) and `comfy.k_diffusion.sampling` via `setattr` (actual inference), guarding against RES4LYF's `importlib.reload()` wiping out function references
 - **Scheduler merge**: Includes ComfyUI's `SCHEDULER_HANDLERS` in addition to the standard scheduler list
+- **`clip_perfect_offload (Krea2 only)`**: Optional toggle that frees the Krea2 text encoder before sampling (see below)
+
+#### Krea2 text-encoder offload (`clip_perfect_offload`)
+
+The optional **`clip_perfect_offload (Krea2 only)`** toggle reproduces the Krea2 benchmark's `clip.cond_stage_model.cpu()` behaviour: once the prompt is encoded, the Krea2 text encoder (TE) is no longer needed for the sampling loop, so unloading it before sampling frees the VRAM the DiT needs. On tight-VRAM cards the resident TE and the DiT would otherwise co-reside during sampling and push the run into OOM or loader thrashing.
+
+The feature is deliberately narrow and safe:
+
+- **Off by default**, exposed as an explicit opt-in widget.
+- **Krea2-scoped both ways**: it runs only when the **MODEL is a Krea2 diffusion model** *and* only ever unloads a **Krea2 text encoder**. Both are identified by the loader's load-time tag (`_hswq_is_krea2`) and by exact module identity (`comfy.text_encoders.krea2`) — never by class-name guessing — so Z Image / Lumina2, Flux, SDXL, Qwen and WAN are never touched.
+- **Strict toggle read**: only a real boolean `True` enables it. A misaligned value from an old saved workflow is refused and logged as OFF, so it cannot fire while the UI shows the toggle off.
+- **Globally isolated**: the TE is freed by dropping its patcher from `current_loaded_models` (Python refcount); every other model (DiT / VAE / ControlNet) stays resident, and **no** global allocator op (`soft_empty_cache` / `empty_cache` / `unload_all_models`) is ever called, so a concurrent non-Krea2 workflow sharing the CUDA allocator is never disturbed.
+- **Never breaks a run**: if the model is not Krea2 the toggle is ignored and logged; any unload failure is caught and sampling proceeds normally.
 
 #### Usage Notes
 
 - **Optional dependency**: Without RES4LYF installed, it works as a plain KSampler
 - **Category**: `sampling`
 - **Extensibility**: Designed as a thin UI wrapper so future HSWQ / Z-Image quantized-inference arguments can be intercepted in `sample()` without patching the ComfyUI core
-- **Details**: See `md/hswq_sampler_technical_reference.md`
+- **Krea2 TE offload**: Leave `clip_perfect_offload (Krea2 only)` off for every non-Krea2 model; turn it on for Krea2 to reach bench-parity VRAM. For old workflows the pre-rename key `clip_perfect_offload` still maps to the same toggle.
+- **Details**: See `md/hswq_sampler_technical_reference.md` and `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`
 
 ### HSWQ Torch Compile
 
