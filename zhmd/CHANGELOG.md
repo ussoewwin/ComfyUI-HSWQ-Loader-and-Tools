@@ -10,7 +10,7 @@
 ## Version 3.3.7
 
 - **修复 / 更改（许可与来源说明）**：清除残留的 Apache-2.0 表述，使本加载器仓库统一为 **GPL-3.0**；明确上游 **HSWQ**（[Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)）仍为 **AGPL-3.0**，与本包许可分离。重写 README / zhmd 中 **USDU**、**Torch Compile（KJNodes）**、**Batched Detailer（Impact Pack）** 的来源说明（去掉 “copy” 类措辞）。Batched Detailer 现于 `nodes/batched_detailer_lib/` 内嵌辅助代码，运行时**不需要**安装 Impact Pack，同时保留 GPL 归属声明。
-- 详情见 [Release Notes v3.3.7](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.7)。
+- 详情见 [Release Notes v3.3.7](v3.3.7.md)。
 
 ## Version 3.3.6
 
