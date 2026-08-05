@@ -420,7 +420,9 @@ class HSWQSampler:
             "optional": {
                 # Optional so workflows saved before this widget existed keep their
                 # own widget order instead of shifting a neighbouring value onto it.
-                "clip_perfect_offload": ("BOOLEAN", {
+                # Label matches HSWQ Save Image's "quality (JPG only)" pattern so the
+                # scope tag is visible on the node, not only in the tooltip.
+                "clip_perfect_offload (Krea2 only)": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Krea2 only. Frees the Krea2 text encoder before sampling. "
                                "Ignored for every other architecture.",
@@ -434,8 +436,12 @@ class HSWQSampler:
     TITLE = "HSWQ Sampler"
 
     def sample(self, model, seed, steps, cfg, sampler_name, scheduler,
-               positive, negative, latent_image, denoise=1.0,
-               clip_perfect_offload=False):
+               positive, negative, latent_image, denoise=1.0, **kwargs):
+        # New label name, plus the pre-rename key so older workflow JSON still maps.
+        clip_perfect_offload = kwargs.get(
+            "clip_perfect_offload (Krea2 only)",
+            kwargs.get("clip_perfect_offload", False),
+        )
         if _offload_requested(clip_perfect_offload):
             try:
                 if _is_krea2_diffusion_model(model):
