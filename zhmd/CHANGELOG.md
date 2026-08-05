@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.8
+
+- **新增**：**HSWQ Sampler** `clip_perfect_offload (Krea2 only)` 开关 —— 在采样前释放 Krea2 文本编码器（从 `current_loaded_models` 丢弃其 patcher），在紧张显存的显卡上达到与基准一致的显存占用。双向限定 Krea2：通过 loader 标记 `_hswq_is_krea2` 与精确的 `comfy.text_encoders.krea2` 模块身份识别（不靠类名猜测）；默认关闭、严格布尔读取、绝不调用任何全局分配器操作，任何失败都会被捕获，运行绝不中断。UI 控件现显示 `(Krea2 only)` 范围标记。文档：中英 README 节点说明与新增 `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`。
+- 详情见 [Release Notes v3.3.8](v3.3.8.md)。
+
 ## Version 3.3.7
 
 - **修复 / 更改（许可与来源说明）**：清除残留的 Apache-2.0 表述，使本加载器仓库统一为 **GPL-3.0**；明确上游 **HSWQ**（[Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)）仍为 **AGPL-3.0**，与本包许可分离。重写 README / zhmd 中 **USDU**、**Torch Compile（KJNodes）**、**Batched Detailer（Impact Pack）** 的来源说明（去掉 “copy” 类措辞）。Batched Detailer 现于 `nodes/batched_detailer_lib/` 内嵌辅助代码，运行时**不需要**安装 Impact Pack，同时保留 GPL 归属声明。

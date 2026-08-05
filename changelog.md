@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.3.8
+
+- **Added**: **HSWQ Sampler** `clip_perfect_offload (Krea2 only)` toggle — frees the Krea2 text encoder before sampling (drops its patcher from `current_loaded_models`) to reach bench-parity VRAM on tight cards. Krea2-scoped both ways via the loader tag `_hswq_is_krea2` and exact `comfy.text_encoders.krea2` module identity (no class-name guessing); off by default, strict boolean read, no global allocator ops, and any failure is caught so a run never breaks. UI widget now shows the `(Krea2 only)` scope tag. Docs: EN/ZH README node sections and new `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`.
+- See [Release Notes v3.3.8](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.8) for details.
+
 ## Version 3.3.7
 
 - **Fixed / Changed (license & provenance)**: Dropped leftover Apache-2.0 wording so this loader repo is consistently **GPL-3.0**; clarified that upstream **HSWQ** ([Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)) remains **AGPL-3.0** and is separate from this package’s license. Reworked README / zhmd provenance for **USDU**, **Torch Compile (KJNodes)**, and **Batched Detailer (Impact Pack)** without “copy” phrasing. Batched Detailer now ships helpers in `nodes/batched_detailer_lib/` so Impact Pack is **not** required at runtime while GPL attribution remains.
