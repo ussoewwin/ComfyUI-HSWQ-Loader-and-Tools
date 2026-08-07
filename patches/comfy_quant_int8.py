@@ -2390,6 +2390,23 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
     needs_conv2d = checkpoint_needs_hswq_int8_conv2d(unet_path)
 
     if is_int8 and is_convrot and not needs_conv2d:
+        # Peel Z Image comfy_parity + ZI bake hooks before Krea2/DiT stock load.
+        # Without this, comfy_parity stays on mixed_precision_ops / _load_quantized_module
+        # from the previous Z Image run, arming _hswq_int8_convrot on Krea2 INT8 ConvRot
+        # layers and installing forward_parity (online act rotate) on every Linear.
+        # Krea2 does not need or want Z Image parity - it uses stock MixedPrecision -
+        # but the leftover wrapper makes forward_parity fire Hadamard rotations every
+        # step, causing progressive slowdown (4s/step -> 16s -> 22s -> 26s across runs).
+        try:
+            from ..nodes.nvfp4.comfy_quant_nvfp4 import (
+                _clear_zimage_parity_contamination_for_sdxl,
+            )
+
+            _clear_zimage_parity_contamination_for_sdxl()
+        except Exception as e:
+            logging.warning(
+                "[HSWQ INT8] clear Z Image NVFP4 contamination for Krea2 failed: %s", e
+            )
         model_options = {}
         logging.info(
             "[HSWQ INT8] DiT/Krea2 ConvRot — stock-equivalent load "
