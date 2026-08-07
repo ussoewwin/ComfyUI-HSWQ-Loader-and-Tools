@@ -34,6 +34,9 @@ from tqdm import tqdm
 
 _DEFAULT_GROUPSIZE = 256
 _HADAMARD_CACHE: dict[tuple[int, str, torch.dtype], torch.Tensor] = {}
+# GPU-side cache: avoids CPU→GPU transfer on every rotate_activation call.
+# Keyed by (size, device_str, dtype) – same as CPU cache but on target device.
+_HADAMARD_GPU_CACHE: dict[tuple[int, str, torch.dtype], torch.Tensor] = {}
 
 _SKIP_PREFIXES = (
     "conditioner.",

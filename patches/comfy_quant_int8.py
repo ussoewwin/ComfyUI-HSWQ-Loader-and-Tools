@@ -730,6 +730,8 @@ def _model_is_nunchaku_svdq(model) -> bool:
         if dm2 is not None:
             roots.append(dm2)
     seen = set()
+    _checked = 0
+    _MAX_CHECK_SVDQ = 100  # Early exit: SVDQ modules are typically at the top
     for root in roots:
         rid = id(root)
         if rid in seen:
@@ -750,6 +752,9 @@ def _model_is_nunchaku_svdq(model) -> bool:
             mod = getattr(type(module), "__module__", "") or ""
             if _module_path_is_real_nunchaku_package(mod):
                 return True
+            _checked += 1
+            if _checked >= _MAX_CHECK_SVDQ:
+                break
     return False
 
 
@@ -790,6 +795,8 @@ def _model_has_int8_quantized_weights(model) -> bool:
         from comfy.quant_ops import QuantizedTensor
     except ImportError:
         return False
+    _checked = 0
+    _MAX_CHECK = 200  # Early exit: only scan first 200 modules
     for _, module in model.named_modules():
         cls_name = type(module).__name__
         if "SVDQ" in cls_name or "Nunchaku" in cls_name:
@@ -799,6 +806,15 @@ def _model_has_int8_quantized_weights(model) -> bool:
             continue
         if isinstance(w, QuantizedTensor):
             return True
+        # 0.30.2: Parameter wrapping QuantizedTensor
+        if hasattr(w, "data") and isinstance(w.data, QuantizedTensor):
+            return True
+        # Fast path: layout_type set means quantized
+        if getattr(module, "layout_type", None) is not None:
+            return True
+        _checked += 1
+        if _checked >= _MAX_CHECK:
+            break
     return False
 
 
@@ -962,7 +978,7 @@ def _make_quantized_conv2d(ops_module, MixedPrecisionOps, disabled):
 
         def state_dict(self, *args, destination=None, prefix="", **kwargs):
             sd = destination if destination is not None else {}
-            sd = _quantized_weight_state_dict(self, sd, prefix)
+            sd = _quantized_weight_state_dict(self, sd, prefix, extra_quant_params=("input_scale", "pre_quant_scale"))
             # Re-stamp ConvRot on export (Params.convrot cleared for safe 4D dequant).
             if getattr(self, "_hswq_convrot", False):
                 cq_key = f"{prefix}comfy_quant"
@@ -1004,7 +1020,8 @@ def _make_quantized_conv2d(ops_module, MixedPrecisionOps, disabled):
             if getattr(self, "_hswq_convrot", False):
                 nc = _load_native_convert_int8_helpers()
                 gs = int(getattr(self, "_hswq_convrot_groupsize", 256) or 256)
-                h = nc.build_hadamard(gs, device="cpu", dtype=torch.float32)
+                # Use GPU-cached Hadamard via nc.get_hadamard_on_device
+                h = nc.get_hadamard_on_device(gs, device=input.device, dtype=input.dtype)
                 input = nc.rotate_activation_nchw(input, h, gs)
             want_requant = isinstance(getattr(self, "weight", None), QuantizedTensor)
             weight, bias, offload_stream = cast_bias_weight(
@@ -1059,6 +1076,7 @@ def _make_quantized_conv2d(ops_module, MixedPrecisionOps, disabled):
                 gs = int(getattr(self, "_hswq_convrot_groupsize", 256) or 256)
                 h = nc.build_hadamard(gs, device="cpu", dtype=torch.float32)
                 out = nc.unrotate_weight_conv2d(out, h, gs)
+                # Note: unrotate stays on CPU since LoRA bake is CPU-side
             if _lora_convert_logs < _LORA_CONVERT_LOG_MAX:
                 _lora_convert_logs += 1
                 wdtype = getattr(weight, "dtype", None)
@@ -1216,7 +1234,9 @@ def _patch_ops_decode_and_conv() -> bool:
 
             compute_dtype = torch.bfloat16
         if disabled is None:
-            disabled = []
+            disabled = set()
+        elif isinstance(disabled, list):
+            disabled = set(disabled)
         result = true_orig(
             quant_config=quant_config,
             compute_dtype=compute_dtype,
@@ -1283,7 +1303,7 @@ def _patch_lowvram_patch_float_intermediate() -> bool:
     true_orig = getattr(original, "_hswq_orig_lowvram_call", original)
 
     def __call__(self, weight):
-        # QuantizedTensor only. Bare int8 / float / None → upstream unchanged.
+        # QuantizedTensor only. Bare int8 / float / None -> upstream unchanged.
         if weight is None or not isinstance(weight, QuantizedTensor):
             return true_orig(self, weight)
         patches = (
@@ -1297,7 +1317,12 @@ def _patch_lowvram_patch_float_intermediate() -> bool:
             idtype = dtype
         else:
             idtype = torch.float32
-        return comfy.lora.calculate_weight(patches, w, self.key, intermediate_dtype=idtype)
+        # 0.30.2: calculate_weight accepts original_weight=None
+        try:
+            return comfy.lora.calculate_weight(patches, w, self.key, intermediate_dtype=idtype, original_weights=None)
+        except TypeError:
+            # Fallback for older ComfyUI without original_weights param
+            return comfy.lora.calculate_weight(patches, w, self.key, intermediate_dtype=idtype)
 
     __call__._hswq_int8_lora_dtype = True
     __call__._hswq_int8_lora_dtype_ver = _LV_VER
@@ -1408,7 +1433,7 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
             # SDXL path (3.3.0): bake all comfy_quant QuantizedTensor — never bare int8.
             # NVFP4 Linear uses nodes/nvfp4 ConvRot convert/set_weight.
             # Z Image path never reaches here (parity early-return above).
-            if not isinstance(weight, QuantizedTensor):
+            if not isinstance(weight_inner, QuantizedTensor):
                 continue
             if set_func is None:
                 _console(

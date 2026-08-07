@@ -745,18 +745,22 @@ def install_load_models_gpu_bake_hook(force: bool = False) -> bool:
                 patcher = getattr(loaded, "model", None)
                 if patcher is None:
                     continue
+                # Fast skip: no patches AND no baked keys = not our model
+                has_patches = bool(getattr(patcher, "patches", None))
+                has_baked = bool(getattr(getattr(patcher, "model", None), "_hswq_zi_nvfp4_baked_keys", None))
+                if not has_patches and not has_baked:
+                    continue
+                # Skip non-dynamic models
                 try:
                     if not bool(patcher.is_dynamic()):
                         continue
                 except Exception:
                     continue
-                if not getattr(patcher, "patches", None):
-                    # Still try if bake keys exist (LowVram cleared but leftover)
-                    if not getattr(
-                        getattr(patcher, "model", None),
-                        "_hswq_zi_nvfp4_baked_keys",
-                        None,
-                    ):
+                # Fast skip: check if this is a ZI NVFP4 model via cached diag
+                model = getattr(patcher, "model", None)
+                if model is not None:
+                    diag = _nvfp4_convrot_diag(model)
+                    if not diag["has"] and not has_baked:
                         continue
                 run_zimage_nvfp4_lora_bake_on_patcher(
                     patcher,

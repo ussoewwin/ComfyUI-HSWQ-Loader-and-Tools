@@ -170,7 +170,10 @@ try:
 
         # LoraDiff.calculate_weight patch lives at end of apply_patches(); apply directly
         try:
-            import comfy.weight_adapter.lora as _lora_mod
+            try:
+                import comfy.weight_adapter.lora as _lora_mod
+            except ImportError:
+                import comfy.lora as _lora_mod
             _LoraDiff = getattr(_lora_mod, "LoraDiff", None)
             if _LoraDiff is not None:
                 _orig_cw = getattr(_LoraDiff, "calculate_weight", None)
@@ -179,10 +182,8 @@ try:
 
                     def _lora_skip_calculate_weight(
                         self, weight, key, strength, strength_model, offset,
-                        function, intermediate_dtype=None, original_weight=None,
+                        function, intermediate_dtype=_torch_lora.float32, original_weight=None,
                     ):
-                        if intermediate_dtype is None:
-                            intermediate_dtype = _torch_lora.float32
                         v = self.weights
                         reshape = v[5]
                         if reshape is not None and tuple(reshape) != weight.shape:
