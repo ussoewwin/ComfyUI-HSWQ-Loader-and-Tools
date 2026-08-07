@@ -81,6 +81,26 @@ def build_hadamard(
     return h_matrix
 
 
+def get_hadamard_on_device(
+    size: int,
+    device: str | torch.device = "cpu",
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Return Hadamard matrix on target device, with GPU-side caching.
+
+    Builds on CPU (via build_hadamard) once, then transfers to the target
+    device and caches there. Subsequent calls with the same
+    (size, device, dtype) hit the GPU cache and skip CPU->GPU transfer.
+    """
+    cache_key = (size, str(device), dtype)
+    cached = _HADAMARD_GPU_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    h = build_hadamard(size, device="cpu", dtype=torch.float32)
+    h = h.to(dtype=dtype, device=device)
+    _HADAMARD_GPU_CACHE[cache_key] = h
+    return h
+
 def convrot_group_size_for_features(n: int, preferred: int = _DEFAULT_GROUPSIZE) -> int | None:
     """Largest power-of-4 group size <= preferred that divides n (or None)."""
     if n < 4:
@@ -155,7 +175,8 @@ def rotate_activation(
         raise ValueError(f"features {features} not divisible by group_size {group_size}")
     group_count = features // group_size
     x_grouped = x.reshape(-1, group_count, group_size)
-    h = h_matrix.to(dtype=x.dtype, device=x.device)
+    # GPU-cached Hadamard: build/transfer once, reuse on every call
+    h = get_hadamard_on_device(group_size, device=x.device, dtype=x.dtype)
     return torch.matmul(x_grouped, h).reshape(orig_shape)
 
 
