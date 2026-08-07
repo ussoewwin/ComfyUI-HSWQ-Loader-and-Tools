@@ -1430,6 +1430,8 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
             weight, set_func, convert_func = mp.get_key_weight(patcher.model, key)
             if weight is None:
                 continue
+            # 0.30.2: weight may be Parameter(QuantizedTensor) - unwrap for isinstance check
+            weight_inner = weight.data if hasattr(weight, "data") else weight
             # SDXL path (3.3.0): bake all comfy_quant QuantizedTensor — never bare int8.
             # NVFP4 Linear uses nodes/nvfp4 ConvRot convert/set_weight.
             # Z Image path never reaches here (parity early-return above).
