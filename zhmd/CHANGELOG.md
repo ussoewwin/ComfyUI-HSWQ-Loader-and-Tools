@@ -7,6 +7,16 @@
   </tr>
 </table>
 
+## Version 3.3.9
+
+- **ComfyUI 0.30.2 兼容性 & Krea2 parity 污染修复**（commits `21792a8`..`ecd6bc0`）：
+  - **性能**: Krea2 ConvRot INT8 GPU 缓存 Hadamard 矩阵（`native_convert_int8.get_hadamard_on_device`）、全模型 INT8/SVDQ 扫描 200 模块提前退出、`mixed_precision_ops` 重入守卫、`disabled` set 归一化。
+  - **性能 / 显存**: ZI NVFP4 `load_models_gpu` bake 钩子快速跳过（无 patches + 无 baked keys -> 跳过；非 dynamic 模型 -> 跳过），降低每次 GPU load 时全量诊断导致的显存压力。
+  - **性能**: Krea2 ConvRot INT8 多次运行逐步恶化（1 次 ~4s/step，2 次 4s->16s->22s->26s/step）**已修复**。根因：Z Image `comfy_parity` 包装器残留在 `mixed_precision_ops` / `_load_quantized_module` 上，导致 Krea2 INT8 ConvRot 层被标记 `_hswq_int8_convrot` 并在每个 Linear 上安装 `forward_parity`（在线 Hadamard act rotate）-> 每步不必要的旋转 -> CUDA 碎片逐次累积。修复：在 Krea2 纯 stock 加载前调用 `_clear_zimage_parity_contamination_for_sdxl()`（与 SDXL 路径一致）。
+  - **兼容**: `Parameter.data` 解包适配 ComfyUI 0.30.2 延迟权重表示、`comfy.weight_adapter.lora` 导入回退、`calculate_weight` `intermediate_dtype` 默认 = `torch.float32`、`LowVramPatch.__call__` `original_weights` 参数、`state_dict` `extra_quant_params`。
+  - **文档**: 技术解说 `md/HSWQ_COMFYUI_0_30_2_COMPATIBILITY_FIX_GUIDE.md` 覆盖所有根因、修复与验证。
+- 详情见 [发布说明 v3.3.9](v3.3.9.md)。
+
 ## Version 3.3.8
 
 - **新增**：**HSWQ Sampler** `clip_perfect_offload (Krea2 only)` 开关 —— 在采样前释放 Krea2 文本编码器（从 `current_loaded_models` 丢弃其 patcher），在紧张显存的显卡上达到与基准一致的显存占用。双向限定 Krea2：通过 loader 标记 `_hswq_is_krea2` 与精确的 `comfy.text_encoders.krea2` 模块身份识别（不靠类名猜测）；默认关闭、严格布尔读取、绝不调用任何全局分配器操作，任何失败都会被捕获，运行绝不中断。UI 控件现显示 `(Krea2 only)` 范围标记。文档：中英 README 节点说明与新增 `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`。
