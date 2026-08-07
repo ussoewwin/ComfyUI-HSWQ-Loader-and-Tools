@@ -7,6 +7,16 @@
   </tr>
 </table>
 
+## Version 3.3.9
+
+- **ComfyUI 0.30.2 compatibility & Krea2 parity contamination** (commits `21792a8`..`ecd6bc0`):
+  - **Perf**: Krea2 ConvRot INT8 GPU-cached Hadamard matrices (`native_convert_int8.get_hadamard_on_device`), 200-module early exit for full-model INT8/SVDQ scans, `mixed_precision_ops` re-entry guards, and `disabled` set normalization.
+  - **Perf / VRAM**: ZI NVFP4 `load_models_gpu` bake hook fast-skip (no patches + no baked keys -> skip; non-dynamic model -> skip), reducing VRAM pressure from redundant full-diagnostics on every GPU load.
+  - **Perf**: Krea2 ConvRot INT8 progressive slowdown across runs (1st ~4s/step, 2nd 4s->16s->22s->26s/step) **fixed**. Root cause: Z Image `comfy_parity` wrappers left on `mixed_precision_ops` / `_load_quantized_module` armed `_hswq_int8_convrot` on Krea2 INT8 ConvRot layers and installed `forward_parity` (online Hadamard act rotate) on every Linear -> unnecessary rotation every step -> CUDA fragmentation worsening each run. Fix: `_clear_zimage_parity_contamination_for_sdxl()` called before Krea2 stock load (same as SDXL path).
+  - **Compat**: `Parameter.data` unwrap for ComfyUI 0.30.2 lazy weight repr, `comfy.weight_adapter.lora` import fallback, `calculate_weight` `intermediate_dtype` default = `torch.float32`, `LowVramPatch.__call__` `original_weights` kwarg, `state_dict` `extra_quant_params`.
+  - **Docs**: Technical guide `md/HSWQ_COMFYUI_0_30_2_COMPATIBILITY_FIX_GUIDE.md` covering all root causes, fixes, and verification.
+- See [Release Notes v3.3.9](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.3.9) for details.
+
 ## Version 3.3.8
 
 - **Added**: **HSWQ Sampler** `clip_perfect_offload (Krea2 only)` toggle — frees the Krea2 text encoder before sampling (drops its patcher from `current_loaded_models`) to reach bench-parity VRAM on tight cards. Krea2-scoped both ways via the loader tag `_hswq_is_krea2` and exact `comfy.text_encoders.krea2` module identity (no class-name guessing); off by default, strict boolean read, no global allocator ops, and any failure is caught so a run never breaks. UI widget now shows the `(Krea2 only)` scope tag. Docs: EN/ZH README node sections and new `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`.
