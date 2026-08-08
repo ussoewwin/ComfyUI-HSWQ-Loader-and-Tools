@@ -2564,9 +2564,9 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
     if sdxl_cls is not None:
         _orig_load_checkpoint = sdxl_cls.load_checkpoint
 
-        def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
+        def load_checkpoint(self, ckpt_name, weight_dtype, device=None, **kwargs):
             if weight_dtype in _FP8_WEIGHT_DTYPES:
-                return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+                return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
             if weight_dtype == "int8_tensorwise":
                 return load_checkpoint_sdxl_hswq_weight_dtype(
                     ckpt_name, weight_dtype, device=device
@@ -2578,7 +2578,7 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
                 return load_checkpoint_sdxl_hswq_weight_dtype(
                     ckpt_name, weight_dtype, device=device
                 )
-            return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+            return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
 
         sdxl_cls.load_checkpoint = load_checkpoint
 

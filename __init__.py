@@ -554,6 +554,11 @@ try:
                         # SDXL only — never reuse Z Image / Krea "Z Image ConvRot NVFP4".
                         "ConvRot NVFP4",
                     ],),
+                    "tensor_boost": ([
+                        "auto",
+                        "enable",
+                        "disable",
+                    ], {"default": "auto", "tooltip": "Blackwell Per-Weight CUDA Graph Tensor Boost (auto: active on Blackwell GPUs, enable: force ON, disable: force OFF)."}),
                 }
                 opt = {"device": (devices, {"default": default_dev})}
                 return {"required": req, "optional": opt}
@@ -564,7 +569,7 @@ try:
             CATEGORY = "loaders"
             TITLE = "HSWQ Checkpoint Loader (SDXL)"
 
-            def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
+            def load_checkpoint(self, ckpt_name, weight_dtype, device=None, tensor_boost="auto", **kwargs):
                 original_device = get_current_device()
                 if device is not None:
                     set_current_device(device)

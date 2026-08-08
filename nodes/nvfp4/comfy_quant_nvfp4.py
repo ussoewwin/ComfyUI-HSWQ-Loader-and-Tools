@@ -377,7 +377,9 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
 NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"
 
 
-def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None):
+def load_checkpoint_sdxl_nvfp4_weight_dtype(
+    ckpt_name, weight_dtype, device=None, tensor_boost="auto"
+):
     """Load SDXL checkpoint with HSWQ NVFP4 Linear (+ INT8 Conv2d ConvRot) stack."""
     import sys
 
@@ -396,6 +398,14 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         reset_int8_lora_log_counters,
         summarize_int8_lora_capability,
     )
+
+    tb_str = str(tensor_boost).strip().lower() if tensor_boost is not None else "auto"
+    if tb_str in ("enable", "enabled", "1", "true"):
+        os.environ["HSWQ_NVFP4_TENSORBOOST"] = "1"
+    elif tb_str in ("disable", "disabled", "0", "false"):
+        os.environ["HSWQ_NVFP4_TENSORBOOST"] = "0"
+    else:
+        os.environ.pop("HSWQ_NVFP4_TENSORBOOST", None)
 
     original_device = get_current_device()
     if device is not None:
@@ -418,12 +428,12 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         elif _bw and not _cg:
             _console(
                 "[HSWQ NVFP4 Tensor Boost] Blackwell GPU DETECTED, but CUDA Graph / Tensor Boost "
-                "DISABLED via environment variable (HSWQ_NVFP4_CUDAGRAPH=0): Eager Pooled Path ACTIVE"
+                "DISABLED (tensor_boost=disable or HSWQ_NVFP4_CUDAGRAPH=0): Eager Pooled Path ACTIVE"
             )
         elif not _bw and _cg:
             _console(
                 "[HSWQ NVFP4] Non-Blackwell GPU: "
-                "Shape-Shared CUDA Graph ACTIVE (via HSWQ_NVFP4_CUDAGRAPH=1)"
+                "Shape-Shared CUDA Graph ACTIVE (via tensor_boost=enable or HSWQ_NVFP4_CUDAGRAPH=1)"
             )
         else:
             sdxl_logger.info(
@@ -470,12 +480,12 @@ def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
 
     _prev_load_checkpoint = sdxl_cls.load_checkpoint
 
-    def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
+    def load_checkpoint(self, ckpt_name, weight_dtype, device=None, tensor_boost="auto", **kwargs):
         if weight_dtype in _FP8_WEIGHT_DTYPES:
-            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost, **kwargs)
         if weight_dtype == NVFP4_WEIGHT_DTYPE:
             return load_checkpoint_sdxl_nvfp4_weight_dtype(
-                ckpt_name, weight_dtype, device=device
+                ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost
             )
         import folder_paths
 
@@ -485,9 +495,9 @@ def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
             ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
             if checkpoint_looks_like_comfy_quant_nvfp4(ckpt_path):
                 return load_checkpoint_sdxl_nvfp4_weight_dtype(
-                    ckpt_name, weight_dtype, device=device
+                    ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost
                 )
-        return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
+        return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost, **kwargs)
 
     sdxl_cls.load_checkpoint = load_checkpoint
     _console(
