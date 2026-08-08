@@ -26,10 +26,12 @@ from .nvfp4_hadamard import (
     rotate_weight_linear,
     unrotate_weight_linear,
 )
+from .nvfp4_conf import is_blackwell_gpu
 from .nvfp4_runtime import (
     ensure_act_scale,
     clear_nvfp4_cudagraphs,
     nvfp4_quant_mm_cudagraph,
+    nvfp4_quant_mm_cudagraph_perweight,
     quantize_nvfp4_act_pooled,
     rotate_last_dim_pooled,
     scaled_mm_nvfp4_pooled,
@@ -190,11 +192,60 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
         else:
             alpha = cached_alpha
 
-        # CUDA Graph is OFF by default: shape-shared replay copies full weight
-        # every call and was slower than eager (13.05s vs ~11.8s). Opt-in:
-        # HSWQ_NVFP4_CUDAGRAPH=1
+        # Blackwell per-weight CUDA Graph (auto-enabled, no env var needed).
+        # Weight tensor is used directly in the captured graph — no .copy_()
+        # per replay.  Only activations + scales are copied (much smaller).
+        # Guard: is_blackwell_gpu() is called only here, inside the SDXL-only
+        # _tc_forward_pooled.  Z Image never enters this function.
+        _bw = is_blackwell_gpu()
+        if (
+            _bw
+            and orig_m <= _GRAPH_MAX_M
+            and not getattr(module, "_hswq_nvfp4_no_cudagraph", False)
+        ):
+            try:
+                result = nvfp4_quant_mm_cudagraph_perweight(
+                    input_2d,
+                    w_qdata=w_qdata,
+                    weight_scale=scale_b,
+                    block_scale_w=block_scale_b,
+                    scale_a=scale_a,
+                    bias=bias,
+                    out_dtype=out_dtype,
+                    alpha=alpha,
+                    pad_16x=needs_padding,
+                    orig_n=orig_n,
+                )
+                _TC_HITS += 1
+                return result
+            except torch.cuda.OutOfMemoryError:
+                clear_nvfp4_cudagraphs()
+                torch.cuda.empty_cache()
+                logger.warning(
+                    "[HSWQ NVFP4 Blackwell] per-weight Graph OOM — "
+                    "cache cleared; eager pooled"
+                )
+            except (RuntimeError, TypeError, ValueError) as e:
+                if "out of memory" in str(e).lower():
+                    clear_nvfp4_cudagraphs()
+                    torch.cuda.empty_cache()
+                    logger.warning(
+                        "[HSWQ NVFP4 Blackwell] per-weight Graph OOM "
+                        "(%s); eager pooled", e
+                    )
+                else:
+                    module._hswq_nvfp4_no_cudagraph = True
+                    logger.warning(
+                        "[HSWQ NVFP4 Blackwell] per-weight Graph disabled "
+                        "for module (%s); eager pooled", e,
+                    )
+
+        # Non-Blackwell CUDA Graph: OFF by default (shape-shared replay copies
+        # full weight every call, slower than eager: 13.05s vs ~11.8s).
+        # Opt-in: HSWQ_NVFP4_CUDAGRAPH=1
         use_cg = (
-            os.environ.get("HSWQ_NVFP4_CUDAGRAPH", "").strip() == "1"
+            not _bw
+            and os.environ.get("HSWQ_NVFP4_CUDAGRAPH", "").strip() == "1"
             and orig_m <= _GRAPH_MAX_M
             and not getattr(module, "_hswq_nvfp4_no_cudagraph", False)
         )

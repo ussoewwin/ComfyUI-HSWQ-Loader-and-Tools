@@ -153,3 +153,45 @@ def fix_unet_config_packed_dims(unet_config: dict, state_dict: dict, key_prefix:
                 logger.warning("[HSWQ NVFP4] context_dim fix skipped: %s", e)
 
     return unet_config
+
+
+# ---------------------------------------------------------------------------
+# Blackwell GPU capability detection (SDXL NVFP4 product path only)
+# ---------------------------------------------------------------------------
+_GPU_CC: tuple | None = None
+
+
+def _get_gpu_cc() -> tuple:
+    """Return (major, minor) compute capability, cached."""
+    global _GPU_CC
+    if _GPU_CC is None:
+        import torch
+
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            _GPU_CC = torch.cuda.get_device_capability()
+        else:
+            _GPU_CC = (0, 0)
+    return _GPU_CC
+
+
+def is_blackwell_gpu() -> bool:
+    """True if GPU is Blackwell class (SM >= 100): B200, RTX 5090, etc.
+
+    Called only from nodes/nvfp4 product-TC path guards.  Z Image and INT8
+    never reach this code.
+    """
+    major, _ = _get_gpu_cc()
+    return major >= 10
+
+
+def is_blackwell_datacenter() -> bool:
+    """True if GPU is SM100 datacenter Blackwell (TMA/TMEM available)."""
+    major, minor = _get_gpu_cc()
+    return major == 10 and minor == 0
+
+
+def is_blackwell_consumer() -> bool:
+    """True if GPU is SM120/SM121 consumer Blackwell (RTX 50x0 series)."""
+    major, _ = _get_gpu_cc()
+    return major == 12
+
