@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # Counters for bench / diagnostics (reset per run if needed)
 _TC_HITS = 0
 _DEQUANT_FALLBACKS = 0
+_BLACKWELL_GRAPH_HITS = 0
 _LORA_CONVERT_LOGS = 0
 _LORA_SET_LOGS = 0
 _LORA_LOG_MAX = 8
@@ -57,13 +58,19 @@ def reset_nvfp4_lora_log_counters() -> None:
 
 
 def reset_nvfp4_forward_stats() -> None:
-    global _TC_HITS, _DEQUANT_FALLBACKS
+    global _TC_HITS, _DEQUANT_FALLBACKS, _BLACKWELL_GRAPH_HITS
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
+    _BLACKWELL_GRAPH_HITS = 0
 
 
 def nvfp4_forward_stats() -> dict:
-    return {"scaled_mm_hits": _TC_HITS, "dequant_fallbacks": _DEQUANT_FALLBACKS}
+    return {
+        "scaled_mm_hits": _TC_HITS,
+        "dequant_fallbacks": _DEQUANT_FALLBACKS,
+        "blackwell_graph_hits": _BLACKWELL_GRAPH_HITS,
+        "blackwell_tensor_boost_active": is_blackwell_gpu(),
+    }
 
 
 def _slice_nvfp4_mm_out(result, orig_m: int, orig_n: int):
@@ -150,7 +157,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
     Prefers CUDA Graph (quantize+mm) after first capture per shape/weight; falls
     back to eager pooled kernels if capture/replay fails.
     """
-    global _TC_HITS, _DEQUANT_FALLBACKS
+    global _TC_HITS, _DEQUANT_FALLBACKS, _BLACKWELL_GRAPH_HITS
     import torch
     from comfy_kitchen.tensor.base import QuantizedTensor
     from comfy_kitchen.tensor.nvfp4 import TensorCoreNVFP4Layout
@@ -217,6 +224,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
                     orig_n=orig_n,
                 )
                 _TC_HITS += 1
+                _BLACKWELL_GRAPH_HITS += 1
                 return result
             except torch.cuda.OutOfMemoryError:
                 clear_nvfp4_cudagraphs()

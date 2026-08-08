@@ -2,9 +2,33 @@
 
 ## 概要
 
-NVIDIA Blackwell アーキテクチャ (SM >= 100: B200 / GB200, RTX 5090 / SM120) における HSWQ SDXL ConvRot NVFP4 の推論パフォーマンスを最大化するため、**Per-Weight CUDA Graph 自動ディスパッチ機構** を導入した。
+NVIDIA Blackwell アーキテクチャ (SM >= 100: B200 / GB200, RTX 5090 / SM120) における HSWQ SDXL ConvRot NVFP4 の推論パフォーマンスを最大化するため、**Per-Weight CUDA Graph 自動ディスパッチ機構 (Tensor Boost)** を導入した。
 
 本変更は **`nodes/nvfp4/`（SDXL Product Tensor Core パス）内のみ** で閉じており、Z Image ConvRot NVFP4（`nodes/zimage_nvfp4/` comfy-parity パス）、SDXL ConvRot INT8、FP8、標準 FP16/BF16 パスには一切影響を与えない完全分離設計となっている。
+
+---
+
+## ログ出力・状態確認 (Tensor Boost ログ)
+
+Tensor Boost (Blackwell Per-Weight CUDA Graph) の動作状況は、コンソールおよびログ出力で確認可能。
+
+### 1. チェックポイントロード時
+モデルロード時に Blackwell GPU (SM >= 100) を検出すると、以下のログが出力される:
+```text
+[HSWQ NVFP4 Tensor Boost] Blackwell GPU (SM >= 100) DETECTED: Per-Weight CUDA Graph Tensor Boost ACTIVE
+```
+（※ 非 Blackwell 環境の場合は `Standard SDXL NVFP4 Product path ACTIVE` が出力される）
+
+### 2. キャプチャ実行時 (初回の順伝播時)
+各 Linear レイヤーの重み用 CUDA Graph がキャプチャされる際に、レイヤー形状とともにインフォメーションログが出力される:
+```text
+[HSWQ NVFP4 Tensor Boost] Captured Blackwell per-weight CUDA Graph #1 (shape M=512 K=2048 N=2048, w_ptr=0x..., device=cuda:0)
+```
+
+### 3. ベンチマーク・統計情報 (`nvfp4_forward_stats()`)
+`nvfp4_forward_stats()` の戻り値辞書に以下のフィールドが追加され、Blackwell のヒット数およびアクティブ状態を確認可能:
+- `"blackwell_graph_hits"`: Blackwell Per-Weight CUDA Graph リプレイヒット回数
+- `"blackwell_tensor_boost_active"`: Blackwell Tensor Boost の有効判定フラグ (`True` / `False`)
 
 ---
 
@@ -61,7 +85,7 @@ def nvfp4_quant_mm_cudagraph_perweight(
 
 ### 3. 自動ディスパッチガード (`nodes/nvfp4/nvfp4_forward.py`)
 
-`_tc_forward_pooled` 内において、Blackwell CLI / Device 環境検出時に自動で Per-Weight CUDA Graph パスへ分岐する。
+`_tc_forward_pooled` 内において、Blackwell 環境検出時に自動で Per-Weight CUDA Graph パスへ分岐する。
 
 ```python
 _bw = is_blackwell_gpu()
@@ -73,6 +97,7 @@ if (
     try:
         result = nvfp4_quant_mm_cudagraph_perweight(...)
         _TC_HITS += 1
+        _BLACKWELL_GRAPH_HITS += 1
         return result
     except torch.cuda.OutOfMemoryError:
         clear_nvfp4_cudagraphs()

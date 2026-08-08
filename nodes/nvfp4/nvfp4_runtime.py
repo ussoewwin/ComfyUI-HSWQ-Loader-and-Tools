@@ -7,7 +7,10 @@ dominates wall time vs FP16. This module reuses CUDA buffers keyed by shape.
 from __future__ import annotations
 
 from collections import OrderedDict
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # (padded_rows, padded_cols, device_str) -> (qx uint8, sx_uint8)
 # Safe to reuse: only live during one Linear forward (quantize → mm reads sync).
@@ -675,6 +678,16 @@ def nvfp4_quant_mm_cudagraph_perweight(
             "w_ptr": w_ptr,
         }
         _PER_WEIGHT_GRAPH_CACHE[key] = entry
+        logger.info(
+            "[HSWQ NVFP4 Tensor Boost] Captured Blackwell per-weight CUDA Graph #%d "
+            "(shape M=%d K=%d N=%d, w_ptr=0x%x, device=%s)",
+            len(_PER_WEIGHT_GRAPH_CACHE),
+            m,
+            k,
+            n,
+            w_ptr,
+            x.device,
+        )
 
     # -- Replay: copy only activation + scales (NOT weight) ---------------
     static_x = entry["static_x"]
