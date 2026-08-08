@@ -143,6 +143,14 @@ Example: input height 1080, `upscale_by = Auto`, `target_height = 4320` → scal
 - **Module Safety**: Uses isolated module loading to prevent conflicts with other custom nodes
 - **ssitu / UltimateSDUpscale**: Base of the tiled upscale design ([ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale), GPL-3.0)
 
+#### Tensor Boost (`tensor_boost`)
+
+Optional **`tensor_boost`** BOOLEAN (default **OFF**) for **SDXL ConvRot NVFP4** on NVIDIA Blackwell (SM >= 100: B200 / GB200, RTX 5090 / SM120). When **ON**, enables Per-Weight CUDA Graph acceleration inside `nodes/nvfp4/`. When **OFF** (recommended for tiled upscale), clears the CUDA Graph cache via `clear_nvfp4_cudagraphs()` and runs Eager Pooled with **0 MB extra VRAM**, so USDU tiles do not blow VRAM / spill to system RAM.
+
+Intended pairing with **HSWQ Sampler**: turn Tensor Boost **ON** for the fixed-resolution base pass, then keep it **OFF** on this upscaler. Loader has no toggle. Details: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.
+
+**Recommended:** **RTX 5090 with 32 GB VRAM or more** when using Tensor Boost / high-res tiled upscale on this path.
+
 #### FP8 (fp8e4m3) and torch.compile
 - **Purpose:** Use this node with FP8 quantized models (e.g. HSWQ SDXL) and torch.compile together.
 - **Patches:** On load, this extension applies compatibility patches (`usdu_compat_patches.py`) that fix copy_ shape mismatch, FP8 linear/addmm bias–out_features mismatch, control embedder weight layout, and Lumina modulate/apply_gate dimension issues so the node works with FP8 and torch.compile.
@@ -198,9 +206,11 @@ See Provenance above for GPL-3.0 base and HSWQ-compatibility improvements (`node
 
 ### HSWQ Sampler
 
-<img src="png/sampler.png" alt="HSWQ Sampler" width="400">
+<img src="png/sampler.png?v=2" alt="HSWQ Sampler" width="400">
 
 A KSampler-equivalent node that behaves exactly like the standard ComfyUI KSampler, but **automatically adds all of RES4LYF's samplers and schedulers** when [RES4LYF](https://github.com/ClownsharkBatwing/RES4LYF) is installed. It reproduces the dynamic sampler generation logic found in Forge so that the full Runge-Kutta (`rk_beta`) sampler family stays selectable and runnable in vanilla ComfyUI.
+
+**Recommended:** **16 GB VRAM or more**.
 
 #### Why this node exists
 
@@ -214,6 +224,11 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 - **Reliable re-injection**: Registers every sampler into both `KSampler.SAMPLERS` (UI selectable) and `comfy.k_diffusion.sampling` via `setattr` (actual inference), guarding against RES4LYF's `importlib.reload()` wiping out function references
 - **Scheduler merge**: Includes ComfyUI's `SCHEDULER_HANDLERS` in addition to the standard scheduler list
 - **`clip_perfect_offload (Krea2 only)`**: Optional toggle that frees the Krea2 text encoder before sampling (see below)
+- **`tensor_boost`**: Optional BOOLEAN (default **OFF**) for Blackwell Tensor Boost on SDXL ConvRot NVFP4 (see below)
+
+#### Tensor Boost (`tensor_boost`)
+
+Optional **`tensor_boost`** BOOLEAN (default **OFF**) for **SDXL ConvRot NVFP4** on NVIDIA Blackwell (SM >= 100: B200 / GB200, RTX 5090 / SM120). When **ON**, enables Per-Weight CUDA Graph auto-dispatch inside `nodes/nvfp4/` for faster fixed-resolution sampling (e.g. 1024×1024). When **OFF**, clears graphs and uses Eager Pooled. Controlled via `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH`. Does **not** affect Z Image / INT8 / FP8 / stock paths. The Checkpoint Loader has no toggle — only this sampler and **HSWQ Ultimate SD Upscale**. Details: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.
 
 #### Krea2 text-encoder offload (`clip_perfect_offload`)
 
@@ -233,7 +248,8 @@ The feature is deliberately narrow and safe:
 - **Category**: `sampling`
 - **Extensibility**: Designed as a thin UI wrapper so future HSWQ / Z-Image quantized-inference arguments can be intercepted in `sample()` without patching the ComfyUI core
 - **Krea2 TE offload**: Leave `clip_perfect_offload (Krea2 only)` off for every non-Krea2 model; turn it on for Krea2 to reach bench-parity VRAM. For old workflows the pre-rename key `clip_perfect_offload` still maps to the same toggle.
-- **Details**: See `md/hswq_sampler_technical_reference.md` and `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`
+- **Tensor Boost**: Prefer **ON** for the base SDXL ConvRot NVFP4 pass on Blackwell; keep **OFF** on **HSWQ Ultimate SD Upscale** during tiles. Requires **16 GB VRAM or more** (recommendation for this sampler).
+- **Details**: See `md/hswq_sampler_technical_reference.md`, `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`, and `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`
 
 ### HSWQ Torch Compile
 
