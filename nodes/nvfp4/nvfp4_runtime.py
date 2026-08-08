@@ -12,6 +12,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _console(msg: str) -> None:
+    print(msg, flush=True)
+    logger.info(msg)
+
+
 # (padded_rows, padded_cols, device_str) -> (qx uint8, sx_uint8)
 # Safe to reuse: only live during one Linear forward (quantize → mm reads sync).
 _ACT_Q_POOL: dict = {}
@@ -24,11 +30,12 @@ _GRAPH_CACHE_MAX = 32
 # Only graph small-M calls (microbench: NVFP4 mm loses to FP16 when M is small).
 _GRAPH_MAX_M = 512
 # Per-weight CUDA Graph cache (Blackwell auto-detect): weight data_ptr -> graph.
-# Eliminates weight .copy_() overhead of shape-shared graphs.  Weight tensor
+# Eliminates weight .copy_() overhead of shape-shared graphs. Weight tensor
 # is used directly in the captured graph — address is stable while the model
 # stays on GPU during sampling.
 _PER_WEIGHT_GRAPH_CACHE: OrderedDict = OrderedDict()
-_PER_WEIGHT_GRAPH_CACHE_MAX = 160  # ~140 unique Linears in SDXL UNet + margin
+_PER_WEIGHT_GRAPH_CACHE_MAX = 500  # ~140 unique Linears in SDXL UNet x multiple tiles
+_PER_WEIGHT_GRAPH_MAX_M = 16384  # Covers all SDXL UNet layer M dimensions (1024x1024 / USDU)
 # NOTE: MM *output* must NOT be pooled — UNet residuals keep layer outputs alive
 # across later layers; a reused buffer would corrupt activations.
 
@@ -580,8 +587,10 @@ def nvfp4_quant_mm_cudagraph_perweight(
     if x.dim() != 2:
         raise ValueError("nvfp4_quant_mm_cudagraph_perweight expects 2D x")
     m, k = int(x.shape[0]), int(x.shape[1])
-    if m > _GRAPH_MAX_M:
-        raise ValueError("M too large for per-weight CUDA graph")
+    if m > _PER_WEIGHT_GRAPH_MAX_M:
+        raise ValueError(
+            f"M={m} exceeds _PER_WEIGHT_GRAPH_MAX_M={_PER_WEIGHT_GRAPH_MAX_M}"
+        )
     n = int(w_qdata.shape[0])
     has_bias = bias is not None and not (
         isinstance(bias, torch.Tensor) and bias.numel() == 0
@@ -678,15 +687,9 @@ def nvfp4_quant_mm_cudagraph_perweight(
             "w_ptr": w_ptr,
         }
         _PER_WEIGHT_GRAPH_CACHE[key] = entry
-        logger.info(
-            "[HSWQ NVFP4 Tensor Boost] Captured Blackwell per-weight CUDA Graph #%d "
-            "(shape M=%d K=%d N=%d, w_ptr=0x%x, device=%s)",
-            len(_PER_WEIGHT_GRAPH_CACHE),
-            m,
-            k,
-            n,
-            w_ptr,
-            x.device,
+        _console(
+            "[HSWQ NVFP4 Tensor Boost] Captured Blackwell per-weight CUDA Graph #"
+            f"{len(_PER_WEIGHT_GRAPH_CACHE)} (shape M={m} K={k} N={n}, w_ptr=0x{w_ptr:x}, device={x.device})"
         )
 
     # -- Replay: copy only activation + scales (NOT weight) ---------------

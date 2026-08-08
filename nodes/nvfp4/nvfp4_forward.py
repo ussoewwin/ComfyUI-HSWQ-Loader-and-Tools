@@ -36,9 +36,15 @@ from .nvfp4_runtime import (
     rotate_last_dim_pooled,
     scaled_mm_nvfp4_pooled,
     _GRAPH_MAX_M,
+    _PER_WEIGHT_GRAPH_MAX_M,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _console(msg: str) -> None:
+    print(msg, flush=True)
+    logger.info(msg)
 
 # Counters for bench / diagnostics (reset per run if needed)
 _TC_HITS = 0
@@ -207,7 +213,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
         _bw = is_blackwell_gpu()
         if (
             _bw
-            and orig_m <= _GRAPH_MAX_M
+            and orig_m <= _PER_WEIGHT_GRAPH_MAX_M
             and not getattr(module, "_hswq_nvfp4_no_cudagraph", False)
         ):
             try:
@@ -225,6 +231,13 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
                 )
                 _TC_HITS += 1
                 _BLACKWELL_GRAPH_HITS += 1
+                if _BLACKWELL_GRAPH_HITS in (100, 500, 1000, 2000, 5000) or (
+                    _BLACKWELL_GRAPH_HITS > 0 and _BLACKWELL_GRAPH_HITS % 5000 == 0
+                ):
+                    _console(
+                        "[HSWQ NVFP4 Tensor Boost] Running CUDA Graph accelerated GEMM "
+                        f"({_BLACKWELL_GRAPH_HITS} hits active)"
+                    )
                 return result
             except torch.cuda.OutOfMemoryError:
                 clear_nvfp4_cudagraphs()
