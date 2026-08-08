@@ -43,6 +43,9 @@ _PER_WEIGHT_GRAPH_MAX_M = 16384  # Covers all SDXL UNet layer M dimensions (1024
 def clear_nvfp4_cudagraphs() -> None:
     _GRAPH_CACHE.clear()
     _PER_WEIGHT_GRAPH_CACHE.clear()
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def clear_nvfp4_runtime_pools() -> None:

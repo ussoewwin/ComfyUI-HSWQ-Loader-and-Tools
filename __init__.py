@@ -555,10 +555,10 @@ try:
                         "ConvRot NVFP4",
                     ],),
                     "tensor_boost": ([
-                        "auto",
-                        "enable",
                         "disable",
-                    ], {"default": "auto", "tooltip": "Blackwell Per-Weight CUDA Graph Tensor Boost (auto: active on Blackwell GPUs, enable: force ON, disable: force OFF)."}),
+                        "enable",
+                        "auto",
+                    ], {"default": "disable", "tooltip": "CUDA Graph Tensor Boost (disable: OFF by default [0 MB extra VRAM], enable: force ON, auto: Blackwell opt-in)."}),
                 }
                 opt = {"device": (devices, {"default": default_dev})}
                 return {"required": req, "optional": opt}

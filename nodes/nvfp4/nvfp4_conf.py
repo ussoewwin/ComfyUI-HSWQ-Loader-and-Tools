@@ -71,7 +71,13 @@ def convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
 
 
 def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
-    """Return logical in_features for a Linear weight (expand packed NVFP4 K)."""
+    """Return logical in_features for a Linear weight.
+
+    NVFP4 storage K is packed (and often 16-padded). Never guess
+    ``packed_shape[1] * 2`` — that recovers padded K, not logical in_features
+    (e.g. logical 12 → pad 16 → pack 8 → *2 = 16 ≠ 12). Require
+    ``orig_shape`` / ``in_features`` on comfy_quant (or refuse).
+    """
     import torch
 
     weight = state_dict[weight_key]
@@ -85,7 +91,16 @@ def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
     cq_key = comfy_quant_key_for_weight(weight_key)
     conf = decode_comfy_quant_conf(state_dict.get(cq_key))
     if is_nvfp4_conf(conf) and weight.ndim == 2:
-        return packed_in * _NVFP4_PACK_FACTOR
+        orig = conf.get("orig_shape") if isinstance(conf, dict) else None
+        if orig is not None and len(orig) >= 2:
+            return int(orig[1])
+        if conf.get("in_features") is not None:
+            return int(conf["in_features"])
+        raise ValueError(
+            f"{weight_key}: nvfp4 packed weight but comfy_quant lacks "
+            f"orig_shape/in_features; refuse packed_K*{_NVFP4_PACK_FACTOR} guess "
+            f"(packed_K={packed_in})"
+        )
     return packed_in
 
 
@@ -128,16 +143,17 @@ def _probe_path_comfy_quant_nvfp4(path: str) -> bool:
 
 
 def fix_unet_config_packed_dims(unet_config: dict, state_dict: dict, key_prefix: str) -> dict:
-    """Rewrite context_dim / adm_in_channels using logical NVFP4 in_features."""
+    """Rewrite context_dim / adm_in_channels using logical NVFP4 in_features.
+
+    Fail-closed: if the target weight is nvfp4 and logical in_features cannot
+    be resolved from comfy_quant, raise (do not keep packed/padded K).
+    """
     if not isinstance(unet_config, dict):
         return unet_config
 
     y_input = f"{key_prefix}label_emb.0.0.weight"
     if y_input in state_dict and unet_config.get("adm_in_channels") is not None:
-        try:
-            unet_config["adm_in_channels"] = logical_linear_in_features(state_dict, y_input)
-        except Exception as e:
-            logger.warning("[HSWQ NVFP4] adm_in_channels fix skipped: %s", e)
+        unet_config["adm_in_channels"] = logical_linear_in_features(state_dict, y_input)
 
     if unet_config.get("context_dim") is not None:
         attn_k = None
@@ -147,10 +163,7 @@ def fix_unet_config_packed_dims(unet_config: dict, state_dict: dict, key_prefix:
                 attn_k = k
                 break
         if attn_k is not None:
-            try:
-                unet_config["context_dim"] = logical_linear_in_features(state_dict, attn_k)
-            except Exception as e:
-                logger.warning("[HSWQ NVFP4] context_dim fix skipped: %s", e)
+            unet_config["context_dim"] = logical_linear_in_features(state_dict, attn_k)
 
     return unet_config
 
@@ -194,31 +207,4 @@ def is_blackwell_consumer() -> bool:
     """True if GPU is SM120/SM121 consumer Blackwell (RTX 50x0 series)."""
     major, _ = _get_gpu_cc()
     return major == 12
-
-
-def is_nvfp4_cudagraph_enabled() -> bool:
-    """Return whether CUDA Graph / Tensor Boost execution is active.
-
-    Allows full user control via environment variables:
-      - HSWQ_NVFP4_CUDAGRAPH (1/0/true/false/on/off)
-      - HSWQ_NVFP4_TENSORBOOST (1/0/true/false/on/off)
-
-    Setting either env var to 0 / false / off / disable completely disables CUDA
-    Graph execution on ALL GPUs, restoring standard eager pooled mode.
-
-    If environment variables are unset:
-      - Blackwell GPUs (SM >= 100): Per-weight CUDA Graph active by default.
-      - Non-Blackwell GPUs (SM < 100): Eager pooled mode active by default.
-    """
-    import os
-
-    for env_key in ("HSWQ_NVFP4_CUDAGRAPH", "HSWQ_NVFP4_TENSORBOOST"):
-        val = os.environ.get(env_key, "").strip().lower()
-        if val in ("0", "false", "off", "disable", "disabled"):
-            return False
-        if val in ("1", "true", "on", "enable", "enabled"):
-            return True
-
-    return is_blackwell_gpu()
-
 
