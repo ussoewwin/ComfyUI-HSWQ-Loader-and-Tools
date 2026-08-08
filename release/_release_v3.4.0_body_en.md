@@ -37,16 +37,16 @@ During sampling, model weight addresses (`data_ptr`) stay stable in VRAM, so `nv
 | Item | Eager Pooled (`tensor_boost = False`) | Tensor Boost (`tensor_boost = True`) |
 |:---|:---|:---|
 | **Allocation style** | Single buffer (`_ACT_Q_POOL`) reused across ~140 layers | PyTorch non-freed static allocator (CUDA Graph arena) |
-| **Extra VRAM** | **0 MB** (no extra) | About 1.2 GB–1.5 GB (single fixed shape) |
+| **VRAM** | No CUDA Graph arena stack (Eager pooled reuse) | **Several GB more** (CUDA Graph arenas; stacks further if shapes change) |
 | **CPU launch latency** | Present (15–30 μs / layer) | **Zero** (GPU batch replay) |
 | **Speed** | Baseline | **Fastest (~15%–25% faster)** |
-| **Recommended use** | **· USDU tiled upscale<br>· ≤16 GB VRAM<br>· Changing input shapes (tiling)** | **· ≥24 GB VRAM<br>· First-pass 1024×1024 single resolution<br>· Continuous sampling at max speed** |
+| **Recommended use** | **· USDU tiled upscale (keep OFF)<br>· Changing input shapes (tiling)** | **· RTX 5090 32 GB+ recommended<br>· First-pass 1024×1024 single resolution<br>· Continuous sampling at max speed** |
 
 ### 3.2 USDU (tiled upscale) VRAM blow-up and mitigation
-In multi-tile USDU, edge handling and similar cases feed **different input shapes ($M$)** per tile.
-PyTorch CUDA Graphs capture a separate graph per shape, so on 16 GB cards captured arenas stack up — dedicated VRAM near 15.5 GB saturation and >15 GB spill into shared GPU memory (system RAM).
+**Tensor Boost ON already adds several GB of VRAM.** In multi-tile USDU, edge handling and similar cases also feed **different input shapes ($M$)** per tile.
+PyTorch CUDA Graphs capture a separate graph per shape, so arenas stack — dedicated VRAM saturates and spill into shared GPU memory (system RAM) is common on cards without 5090-class headroom.
 
-Setting `tensor_boost = False` (default) on the USDU node clears the CUDA Graph cache as soon as upscale starts and runs **Eager Pooled with 0 MB extra VRAM**.
+Setting `tensor_boost = False` (default) on the USDU node clears the CUDA Graph cache as soon as upscale starts and runs **Eager Pooled**, so per-tile shape changes do not keep stacking Graph arenas.
 
 ---
 
@@ -62,11 +62,11 @@ graph TD
     B --> C["HSWQ Ultimate SD Upscale<br>(USDU tiled upscale)"]
     
     subgraph "First pass (speed)"
-        B -- "tensor_boost = True (ON)" --> B1["CUDA Graph enabled<br>fastest sampling"]
+        B -- "tensor_boost = True (ON)" --> B1["CUDA Graph ON<br>several GB more VRAM"]
     end
     
     subgraph "Tiled upscale (VRAM safety)"
-        C -- "tensor_boost = False (OFF)" --> C1["Eager Pooled<br>0 MB extra VRAM"]
+        C -- "tensor_boost = False (OFF)" --> C1["Eager Pooled<br>clear Graph arenas"]
     end
 ```
 
@@ -76,11 +76,11 @@ graph TD
 
 2. **`HSWQ Sampler` (first sampling node)**:
    - **`tensor_boost` (BOOLEAN toggle)**.
-   - **ON (`True`)**: first 1024×1024 sampling at full Tensor Boost (CUDA Graph) speed.
+   - **ON (`True`)**: first 1024×1024 sampling at full Tensor Boost (CUDA Graph) speed; **VRAM rises by several GB**. Sampler path: **16 GB+** recommended.
 
 3. **`HSWQ Ultimate SD Upscale` (USDU node)**:
    - **`tensor_boost` (BOOLEAN toggle)** (`default: False`).
-   - **OFF (`False`)**: on upscale start, sets `HSWQ_NVFP4_TENSORBOOST=0` and runs `clear_nvfp4_cudagraphs()`, preventing memory spill with 0 MB extra VRAM.
+   - **OFF (`False`)**: on upscale start, sets `HSWQ_NVFP4_TENSORBOOST=0` and runs `clear_nvfp4_cudagraphs()`, so tiles do not stack Graph arenas / spill. **ON** on this path needs **RTX 5090 32 GB+** because Tensor Boost alone already costs **several GB**.
 
 ### 4.2 Environment variable interface
 
@@ -102,7 +102,7 @@ Tensor Boost status is visible in the console / ComfyUI log in real time.
   ```
 - **Toggle OFF**:
   ```text
-  [HSWQ NVFP4 Tensor Boost] Tensor Boost Toggle OFF: Eager Pooled Path ACTIVE (0 MB extra VRAM)
+  [HSWQ NVFP4 Tensor Boost] Tensor Boost Toggle OFF: Eager Pooled Path ACTIVE (Graph arenas cleared)
   ```
 
 ### 5.2 Capture and hit statistics
@@ -253,7 +253,7 @@ def is_nvfp4_cudagraph_enabled() -> bool:
 
 | Symbol | Meaning |
 |:---|:---|
-| `_ACT_Q_POOL` / `_ROT_OUT_POOL` | Eager activation quant / Hadamard rotate buffer reuse (~0 extra VRAM) |
+| `_ACT_Q_POOL` / `_ROT_OUT_POOL` | Eager activation quant / Hadamard rotate buffer reuse (no CUDA Graph arena) |
 | `_GRAPH_CACHE` / `_GRAPH_MAX_M=512` | **Non-Blackwell** shape-shared graphs (weight copy on replay). Not the Blackwell Tensor Boost main path |
 | `_PER_WEIGHT_GRAPH_CACHE` | Blackwell main path. Key includes `w_qdata.data_ptr()` and shapes |
 | `_PER_WEIGHT_GRAPH_CACHE_MAX = 500` | LRU cap (~140 Linears × multiple tile shapes) |
@@ -913,7 +913,7 @@ So §5.1 logs are diagnostics at **NVFP4 load time for the env then in effect**,
         else:
             _console(
                 "[HSWQ NVFP4 Tensor Boost] Tensor Boost Toggle OFF: "
-                "Eager Pooled Path ACTIVE (0 MB extra VRAM)"
+                "Eager Pooled Path ACTIVE (Graph arenas cleared)"
             )
 ```
 
@@ -974,7 +974,7 @@ Loader exposes only `ckpt_name` / `weight_dtype` (including `ConvRot NVFP4`) / `
 | Condition | Path |
 |:---|:---|
 | `not module._hswq_nvfp4` | Stock Linear (not Tensor Boost) |
-| CG OFF (env unset / `0`) | Eager pooled (~0 extra VRAM) |
+| CG OFF (env unset / `0`) | Eager pooled (no CUDA Graph arena stack) |
 | CG ON + Blackwell + `M ≤ 16384` | **Per-weight CUDA Graph (Tensor Boost main line)** |
 | CG ON + non-Blackwell + `M ≤ 512` | Shape-shared CUDA Graph (weight copy) |
 | CG ON but outside above / OOM / non-OOM failure | Eager pooled (clear cache on OOM) |
@@ -1004,10 +1004,10 @@ How to read in practice:
 ## 12. Recommended Workflow (operational steps for §4)
 
 1. Load with `HSWQ Checkpoint Loader (SDXL)`, `weight_dtype = ConvRot NVFP4` (no toggle).
-2. `HSWQ Sampler` with `tensor_boost = True` → speed fixed-resolution base generation.
-3. `HSWQ Ultimate SD Upscale` with `tensor_boost = False` (default) → drop graphs before tiles; run Eager safely.
-4. On ≤16 GB or highly variable shapes, leave Sampler False as well.
-5. On ≥24 GB with single-resolution continuous sampling, prefer Sampler True.
+2. `HSWQ Sampler` with `tensor_boost = True` → speed fixed-resolution base generation (**several GB more VRAM**; sampler recommend **16 GB+**).
+3. `HSWQ Ultimate SD Upscale` with `tensor_boost = False` (default) → drop graphs before tiles; run Eager safely. Upscale / Tensor Boost headroom: **RTX 5090 32 GB+**.
+4. On highly variable shapes or tight VRAM, leave Sampler False as well.
+5. Prefer Sampler True when you have headroom for the Graph arenas (several GB) at a single fixed resolution.
 
 ---
 

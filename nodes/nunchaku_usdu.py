@@ -134,7 +134,7 @@ def USDU_base_inputs():
         ("force_uniform_tiles", ("BOOLEAN", {"default": True, "tooltip": "Force all tiles to be the same as the set tile size, even when tiles could be smaller. This can help prevent the model from working with irregular tile sizes."})),
         ("tiled_decode", ("BOOLEAN", {"default": False, "tooltip": "Whether to use tiled decoding when decoding tiles."})),
         ("batch_size", ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1, "tooltip": "The number of tiles to process in a batch. Higher values can reduce processing time but use more VRAM. If you get tensor size mismatch with FP8/FP4 (quantized) models, set this to 1."})),
-        ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling."})),
+        ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling. ON raises VRAM by several GB; RTX 5090 32GB+ recommended. Keep OFF for tiled upscale."})),
     ]
 
     optional = []
@@ -210,7 +210,7 @@ class HSWQUltimateSDUpscale:
                 ("force_uniform_tiles", ("BOOLEAN", {"default": True, "tooltip": "Force all tiles to be the same as the set tile size, even when tiles could be smaller. This can help prevent the model from working with irregular tile sizes."})),
                 ("tiled_decode", ("BOOLEAN", {"default": False, "tooltip": "Whether to use tiled decoding when decoding tiles."})),
                 ("batch_size", ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1, "tooltip": "The number of tiles to process in a batch. Higher values can reduce processing time but use more VRAM. If you get tensor size mismatch with FP8/FP4 (quantized) models, set this to 1."})),
-                ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling."})),
+                ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling. ON raises VRAM by several GB; RTX 5090 32GB+ recommended. Keep OFF for tiled upscale."})),
             ]
             optional = []
             return prepare_inputs(required, optional)

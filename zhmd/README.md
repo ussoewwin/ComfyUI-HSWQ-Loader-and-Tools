@@ -145,11 +145,11 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 #### Tensor Boost（`tensor_boost`）
 
-可选 **`tensor_boost`** 布尔开关（默认 **关闭**），面向 NVIDIA Blackwell（SM >= 100：B200 / GB200、RTX 5090 / SM120）上的 **SDXL ConvRot NVFP4**。**开启**时在 `nodes/nvfp4/` 内启用 Per-Weight CUDA Graph 加速；**关闭**时（分块放大推荐）通过 `clear_nvfp4_cudagraphs()` 清空 CUDA Graph 缓存并以 Eager Pooled 运行（**额外显存 0 MB**），避免 USDU 分块时显存暴涨 / 溢出到系统内存。
+可选 **`tensor_boost`** 布尔开关（默认 **关闭**），面向 NVIDIA Blackwell（SM >= 100：B200 / GB200、RTX 5090 / SM120）上的 **SDXL ConvRot NVFP4**。**开启**时在 `nodes/nvfp4/` 内启用 Per-Weight CUDA Graph 加速，**显存会增加数 GB**（CUDA Graph arena）。因此本放大路径推荐 **RTX 5090 且显存 32 GB 及以上**。**关闭**时（分块放大推荐）通过 `clear_nvfp4_cudagraphs()` 清空 CUDA Graph 缓存并以 Eager Pooled 运行，避免分块时不同 shape 堆叠 Graph / 显存暴涨 / 溢出到系统内存。
 
 与 **HSWQ Sampler** 的推荐搭配：底图采样可开 Tensor Boost，本放大节点保持 **关闭**。Loader 无此开关。详情：`md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`。
 
-**推荐：** 在此路径使用 Tensor Boost / 高分块放大时，建议 **RTX 5090 且显存 32 GB 及以上**。
+**推荐：** **RTX 5090 且显存 32 GB 及以上**（Tensor Boost 开启会增加数 GB 显存；高分块放大需要该余量）。
 
 #### FP8 (fp8e4m3) 与 torch.compile
 - **目的：** 将本节点与 FP8 量化模型（例如 HSWQ SDXL）和 torch.compile 一起使用。
@@ -228,7 +228,7 @@ GPL-3.0 基底与面向 HSWQ 兼容性的改良见上方来源说明（`nodes/hs
 
 #### Tensor Boost（`tensor_boost`）
 
-可选 **`tensor_boost`** 布尔开关（默认 **关闭**），面向 NVIDIA Blackwell（SM >= 100：B200 / GB200、RTX 5090 / SM120）上的 **SDXL ConvRot NVFP4**。**开启**时在 `nodes/nvfp4/` 内启用 Per-Weight CUDA Graph 自动分发，加速固定分辨率采样（例如 1024×1024）。**关闭**时清空 Graph 并走 Eager Pooled。由 `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH` 控制。**不影响** Z Image / INT8 / FP8 / 标准路径。Checkpoint Loader 无此开关 — 仅本采样器与 **HSWQ Ultimate SD Upscale**。详情：`md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`。
+可选 **`tensor_boost`** 布尔开关（默认 **关闭**），面向 NVIDIA Blackwell（SM >= 100：B200 / GB200、RTX 5090 / SM120）上的 **SDXL ConvRot NVFP4**。**开启**时在 `nodes/nvfp4/` 内启用 Per-Weight CUDA Graph 自动分发，加速固定分辨率采样（例如 1024×1024），且 **显存会增加数 GB**。**关闭**时清空 Graph 并走 Eager Pooled（避免 Graph arena 堆叠）。由 `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH` 控制。**不影响** Z Image / INT8 / FP8 / 标准路径。Checkpoint Loader 无此开关 — 仅本采样器与 **HSWQ Ultimate SD Upscale**。详情：`md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`。
 
 #### Krea2 文本编码器卸载（`clip_perfect_offload`）
 
@@ -248,7 +248,7 @@ GPL-3.0 基底与面向 HSWQ 兼容性的改良见上方来源说明（`nodes/hs
 - **分类**：`sampling`
 - **可扩展性**：作为轻量 UI 包装设计，以便将来可以在 `sample()` 中拦截 HSWQ / Z-Image 量化推理参数，而无需改动 ComfyUI 核心
 - **Krea2 TE 卸载**：对所有非 Krea2 模型请保持 `clip_perfect_offload (Krea2 only)` 关闭；对 Krea2 则打开以达到与基准一致的显存占用。旧工作流中原名 `clip_perfect_offload` 仍映射到同一开关。
-- **Tensor Boost**：Blackwell 上 SDXL ConvRot NVFP4 底图采样可优先 **开启**；**HSWQ Ultimate SD Upscale** 分块时请保持 **关闭**。本采样器推荐 **显存 16 GB 及以上**。
+- **Tensor Boost**：Blackwell 上 SDXL ConvRot NVFP4 底图采样可优先 **开启**（**显存多占数 GB**）；**HSWQ Ultimate SD Upscale** 分块时请保持 **关闭**。本采样器推荐 **显存 16 GB 及以上**。放大 / Tensor Boost 余量：**RTX 5090 32 GB+**。
 - **详情**：见 `md/hswq_sampler_technical_reference.md`、`md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md` 与 `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`
 
 ### HSWQ Torch Compile

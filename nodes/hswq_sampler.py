@@ -429,7 +429,7 @@ class HSWQSampler:
                 }),
                 "tensor_boost": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling.",
+                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling. ON raises VRAM by several GB (CUDA Graph arenas).",
                 }),
             },
         }

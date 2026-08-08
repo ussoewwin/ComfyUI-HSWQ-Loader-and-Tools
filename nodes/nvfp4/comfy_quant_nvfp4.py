@@ -422,7 +422,7 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(
         else:
             _console(
                 "[HSWQ NVFP4 Tensor Boost] Tensor Boost Toggle OFF: "
-                "Eager Pooled Path ACTIVE (0 MB extra VRAM)"
+                "Eager Pooled Path ACTIVE (Graph arenas cleared)"
             )
         sdxl_logger.info(
             "[SDXL NVFP4] Loading checkpoint via MixedPrecisionOps "

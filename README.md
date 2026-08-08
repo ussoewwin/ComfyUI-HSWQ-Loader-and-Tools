@@ -145,11 +145,11 @@ Example: input height 1080, `upscale_by = Auto`, `target_height = 4320` → scal
 
 #### Tensor Boost (`tensor_boost`)
 
-Optional **`tensor_boost`** BOOLEAN (default **OFF**) for **SDXL ConvRot NVFP4** on NVIDIA Blackwell (SM >= 100: B200 / GB200, RTX 5090 / SM120). When **ON**, enables Per-Weight CUDA Graph acceleration inside `nodes/nvfp4/`. When **OFF** (recommended for tiled upscale), clears the CUDA Graph cache via `clear_nvfp4_cudagraphs()` and runs Eager Pooled with **0 MB extra VRAM**, so USDU tiles do not blow VRAM / spill to system RAM.
+Optional **`tensor_boost`** BOOLEAN (default **OFF**) for **SDXL ConvRot NVFP4** on NVIDIA Blackwell (SM >= 100: B200 / GB200, RTX 5090 / SM120). When **ON**, enables Per-Weight CUDA Graph acceleration inside `nodes/nvfp4/` and **VRAM use rises by several GB** (CUDA Graph arenas). That headroom is why **RTX 5090 with 32 GB+** is recommended on this upscale path. When **OFF** (recommended for tiled upscale), clears the CUDA Graph cache via `clear_nvfp4_cudagraphs()` and runs Eager Pooled so per-tile shape changes do not stack Graph arenas / blow VRAM / spill to system RAM.
 
 Intended pairing with **HSWQ Sampler**: turn Tensor Boost **ON** for the fixed-resolution base pass, then keep it **OFF** on this upscaler. Loader has no toggle. Details: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.
 
-**Recommended:** **RTX 5090 with 32 GB VRAM or more** when using Tensor Boost / high-res tiled upscale on this path.
+**Recommended:** **RTX 5090 with 32 GB VRAM or more** (Tensor Boost ON adds several GB of VRAM; tiled high-res upscale needs that headroom).
 
 #### FP8 (fp8e4m3) and torch.compile
 - **Purpose:** Use this node with FP8 quantized models (e.g. HSWQ SDXL) and torch.compile together.
@@ -228,7 +228,7 @@ In Forge, RES4LYF's `beta/__init__.py` dynamically generates wrapper functions c
 
 #### Tensor Boost (`tensor_boost`)
 
-Optional **`tensor_boost`** BOOLEAN (default **OFF**) for **SDXL ConvRot NVFP4** on NVIDIA Blackwell (SM >= 100: B200 / GB200, RTX 5090 / SM120). When **ON**, enables Per-Weight CUDA Graph auto-dispatch inside `nodes/nvfp4/` for faster fixed-resolution sampling (e.g. 1024×1024). When **OFF**, clears graphs and uses Eager Pooled. Controlled via `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH`. Does **not** affect Z Image / INT8 / FP8 / stock paths. The Checkpoint Loader has no toggle — only this sampler and **HSWQ Ultimate SD Upscale**. Details: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.
+Optional **`tensor_boost`** BOOLEAN (default **OFF**) for **SDXL ConvRot NVFP4** on NVIDIA Blackwell (SM >= 100: B200 / GB200, RTX 5090 / SM120). When **ON**, enables Per-Weight CUDA Graph auto-dispatch inside `nodes/nvfp4/` for faster fixed-resolution sampling (e.g. 1024×1024) and **VRAM use rises by several GB**. When **OFF**, clears graphs and uses Eager Pooled (no Graph-arena stack). Controlled via `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH`. Does **not** affect Z Image / INT8 / FP8 / stock paths. The Checkpoint Loader has no toggle — only this sampler and **HSWQ Ultimate SD Upscale**. Details: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.
 
 #### Krea2 text-encoder offload (`clip_perfect_offload`)
 
@@ -248,7 +248,7 @@ The feature is deliberately narrow and safe:
 - **Category**: `sampling`
 - **Extensibility**: Designed as a thin UI wrapper so future HSWQ / Z-Image quantized-inference arguments can be intercepted in `sample()` without patching the ComfyUI core
 - **Krea2 TE offload**: Leave `clip_perfect_offload (Krea2 only)` off for every non-Krea2 model; turn it on for Krea2 to reach bench-parity VRAM. For old workflows the pre-rename key `clip_perfect_offload` still maps to the same toggle.
-- **Tensor Boost**: Prefer **ON** for the base SDXL ConvRot NVFP4 pass on Blackwell; keep **OFF** on **HSWQ Ultimate SD Upscale** during tiles. Requires **16 GB VRAM or more** (recommendation for this sampler).
+- **Tensor Boost**: Prefer **ON** for the base SDXL ConvRot NVFP4 pass on Blackwell (**several GB more VRAM**); keep **OFF** on **HSWQ Ultimate SD Upscale** during tiles. This sampler: **16 GB VRAM or more**. Upscale / Tensor Boost headroom: **RTX 5090 32 GB+**.
 - **Details**: See `md/hswq_sampler_technical_reference.md`, `md/HSWQ_KREA2_TE_OFFLOAD_GUIDE.md`, and `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`
 
 ### HSWQ Torch Compile

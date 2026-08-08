@@ -9,7 +9,7 @@
 
 ## Version 3.4.0
 
-- **新增**：**SDXL ConvRot NVFP4 Blackwell Tensor Boost** — 仅在 `nodes/nvfp4/` 内对 SM >= 100（B200 / GB200、RTX 5090 / SM120）启用 Per-Weight CUDA Graph 自动分发（不影响 Z Image / INT8 / FP8 / 标准路径）。回放时消除 shape-shared 的权重 `.copy_()`；自适应 `M` 上限 16384；捕获 / 命中控制台日志与 `nvfp4_forward_stats()`（`blackwell_graph_hits`、`blackwell_tensor_boost_active`）。**HSWQ Sampler** 与 **HSWQ Ultimate SD Upscale** 上独立的 **`tensor_boost` BOOLEAN**（默认 OFF；Loader 无开关），经 `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH` 控制，OFF 时调用 `clear_nvfp4_cudagraphs()`，避免 USDU 分块时显存暴涨。文档：`md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`。
+- **新增**：**SDXL ConvRot NVFP4 Blackwell Tensor Boost** — 仅在 `nodes/nvfp4/` 内对 SM >= 100（B200 / GB200、RTX 5090 / SM120）启用 Per-Weight CUDA Graph 自动分发（不影响 Z Image / INT8 / FP8 / 标准路径）。回放时消除 shape-shared 的权重 `.copy_()`；自适应 `M` 上限 16384；捕获 / 命中控制台日志与 `nvfp4_forward_stats()`（`blackwell_graph_hits`、`blackwell_tensor_boost_active`）。**HSWQ Sampler** 与 **HSWQ Ultimate SD Upscale** 上独立的 **`tensor_boost` BOOLEAN**（默认 OFF；Loader 无开关），经 `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH` 控制，OFF 时调用 `clear_nvfp4_cudagraphs()`，避免 USDU 分块时显存暴涨。**开启会使显存增加数 GB**（CUDA Graph arena）——放大 / Tensor Boost 余量推荐 **RTX 5090 32 GB+**；采样器路径 **16 GB+**。文档：`md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`。
 - 详情见 [发布说明 v3.4.0](v3.4.0.md)。
 
 ## Version 3.3.9
