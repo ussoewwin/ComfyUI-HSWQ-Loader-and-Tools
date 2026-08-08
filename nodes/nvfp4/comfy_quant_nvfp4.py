@@ -407,16 +407,28 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(ckpt_name, weight_dtype, device=None
         apply_comfy_quant_int8_patches()
         reset_int8_lora_log_counters()
         reset_nvfp4_lora_log_counters()
-        from .nvfp4_conf import is_blackwell_gpu
-        if is_blackwell_gpu():
+        from .nvfp4_conf import is_blackwell_gpu, is_nvfp4_cudagraph_enabled
+        _bw = is_blackwell_gpu()
+        _cg = is_nvfp4_cudagraph_enabled()
+        if _bw and _cg:
             _console(
                 "[HSWQ NVFP4 Tensor Boost] Blackwell GPU (SM >= 100) DETECTED: "
                 "Per-Weight CUDA Graph Tensor Boost ACTIVE"
             )
+        elif _bw and not _cg:
+            _console(
+                "[HSWQ NVFP4 Tensor Boost] Blackwell GPU DETECTED, but CUDA Graph / Tensor Boost "
+                "DISABLED via environment variable (HSWQ_NVFP4_CUDAGRAPH=0): Eager Pooled Path ACTIVE"
+            )
+        elif not _bw and _cg:
+            _console(
+                "[HSWQ NVFP4] Non-Blackwell GPU: "
+                "Shape-Shared CUDA Graph ACTIVE (via HSWQ_NVFP4_CUDAGRAPH=1)"
+            )
         else:
             sdxl_logger.info(
                 "[HSWQ NVFP4] Non-Blackwell GPU (SM < 100): "
-                "Standard SDXL NVFP4 Product path ACTIVE"
+                "Standard Eager Pooled Path ACTIVE"
             )
         sdxl_logger.info(
             "[SDXL NVFP4] Loading checkpoint via MixedPrecisionOps "

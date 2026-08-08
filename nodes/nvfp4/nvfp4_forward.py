@@ -26,7 +26,7 @@ from .nvfp4_hadamard import (
     rotate_weight_linear,
     unrotate_weight_linear,
 )
-from .nvfp4_conf import is_blackwell_gpu
+from .nvfp4_conf import is_blackwell_gpu, is_nvfp4_cudagraph_enabled
 from .nvfp4_runtime import (
     ensure_act_scale,
     clear_nvfp4_cudagraphs,
@@ -205,106 +205,94 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
         else:
             alpha = cached_alpha
 
-        # Blackwell per-weight CUDA Graph (auto-enabled, no env var needed).
-        # Weight tensor is used directly in the captured graph — no .copy_()
-        # per replay.  Only activations + scales are copied (much smaller).
-        # Guard: is_blackwell_gpu() is called only here, inside the SDXL-only
-        # _tc_forward_pooled.  Z Image never enters this function.
+        # CUDA Graph / Tensor Boost dispatch:
+        # Check user toggle / env vars via is_nvfp4_cudagraph_enabled().
+        # Setting HSWQ_NVFP4_CUDAGRAPH=0 or HSWQ_NVFP4_TENSORBOOST=0 completely
+        # disables CUDA Graph and falls back 100% to eager pooled execution.
+        _cg_enabled = is_nvfp4_cudagraph_enabled()
         _bw = is_blackwell_gpu()
-        if (
-            _bw
-            and orig_m <= _PER_WEIGHT_GRAPH_MAX_M
-            and not getattr(module, "_hswq_nvfp4_no_cudagraph", False)
-        ):
-            try:
-                result = nvfp4_quant_mm_cudagraph_perweight(
-                    input_2d,
-                    w_qdata=w_qdata,
-                    weight_scale=scale_b,
-                    block_scale_w=block_scale_b,
-                    scale_a=scale_a,
-                    bias=bias,
-                    out_dtype=out_dtype,
-                    alpha=alpha,
-                    pad_16x=needs_padding,
-                    orig_n=orig_n,
-                )
-                _TC_HITS += 1
-                _BLACKWELL_GRAPH_HITS += 1
-                if _BLACKWELL_GRAPH_HITS in (100, 500, 1000, 2000, 5000) or (
-                    _BLACKWELL_GRAPH_HITS > 0 and _BLACKWELL_GRAPH_HITS % 5000 == 0
-                ):
-                    _console(
-                        "[HSWQ NVFP4 Tensor Boost] Running CUDA Graph accelerated GEMM "
-                        f"({_BLACKWELL_GRAPH_HITS} hits active)"
-                    )
-                return result
-            except torch.cuda.OutOfMemoryError:
-                clear_nvfp4_cudagraphs()
-                torch.cuda.empty_cache()
-                logger.warning(
-                    "[HSWQ NVFP4 Blackwell] per-weight Graph OOM — "
-                    "cache cleared; eager pooled"
-                )
-            except (RuntimeError, TypeError, ValueError) as e:
-                if "out of memory" in str(e).lower():
-                    clear_nvfp4_cudagraphs()
-                    torch.cuda.empty_cache()
-                    logger.warning(
-                        "[HSWQ NVFP4 Blackwell] per-weight Graph OOM "
-                        "(%s); eager pooled", e
-                    )
-                else:
-                    module._hswq_nvfp4_no_cudagraph = True
-                    logger.warning(
-                        "[HSWQ NVFP4 Blackwell] per-weight Graph disabled "
-                        "for module (%s); eager pooled", e,
-                    )
 
-        # Non-Blackwell CUDA Graph: OFF by default (shape-shared replay copies
-        # full weight every call, slower than eager: 13.05s vs ~11.8s).
-        # Opt-in: HSWQ_NVFP4_CUDAGRAPH=1
-        use_cg = (
-            not _bw
-            and os.environ.get("HSWQ_NVFP4_CUDAGRAPH", "").strip() == "1"
-            and orig_m <= _GRAPH_MAX_M
-            and not getattr(module, "_hswq_nvfp4_no_cudagraph", False)
-        )
-        if use_cg:
-            try:
-                result = nvfp4_quant_mm_cudagraph(
-                    input_2d,
-                    w_qdata=w_qdata,
-                    weight_scale=scale_b,
-                    block_scale_w=block_scale_b,
-                    scale_a=scale_a,
-                    bias=bias,
-                    out_dtype=out_dtype,
-                    alpha=alpha,
-                    pad_16x=needs_padding,
-                    orig_n=orig_n,
-                )
-                _TC_HITS += 1
-                return result
-            except torch.cuda.OutOfMemoryError:
-                clear_nvfp4_cudagraphs()
-                torch.cuda.empty_cache()
-                logger.warning(
-                    "[HSWQ NVFP4] CUDA Graph OOM — cache cleared; eager pooled"
-                )
-            except (RuntimeError, TypeError, ValueError) as e:
-                if "out of memory" in str(e).lower():
+        if _cg_enabled and not getattr(module, "_hswq_nvfp4_no_cudagraph", False):
+            if _bw and orig_m <= _PER_WEIGHT_GRAPH_MAX_M:
+                try:
+                    result = nvfp4_quant_mm_cudagraph_perweight(
+                        input_2d,
+                        w_qdata=w_qdata,
+                        weight_scale=scale_b,
+                        block_scale_w=block_scale_b,
+                        scale_a=scale_a,
+                        bias=bias,
+                        out_dtype=out_dtype,
+                        alpha=alpha,
+                        pad_16x=needs_padding,
+                        orig_n=orig_n,
+                    )
+                    _TC_HITS += 1
+                    _BLACKWELL_GRAPH_HITS += 1
+                    if _BLACKWELL_GRAPH_HITS in (100, 500, 1000, 2000, 5000) or (
+                        _BLACKWELL_GRAPH_HITS > 0 and _BLACKWELL_GRAPH_HITS % 5000 == 0
+                    ):
+                        _console(
+                            "[HSWQ NVFP4 Tensor Boost] Running CUDA Graph accelerated GEMM "
+                            f"({_BLACKWELL_GRAPH_HITS} hits active)"
+                        )
+                    return result
+                except torch.cuda.OutOfMemoryError:
                     clear_nvfp4_cudagraphs()
                     torch.cuda.empty_cache()
                     logger.warning(
-                        "[HSWQ NVFP4] CUDA Graph OOM (%s); eager pooled", e
+                        "[HSWQ NVFP4 Blackwell] per-weight Graph OOM — "
+                        "cache cleared; eager pooled"
                     )
-                else:
-                    module._hswq_nvfp4_no_cudagraph = True
+                except (RuntimeError, TypeError, ValueError) as e:
+                    if "out of memory" in str(e).lower():
+                        clear_nvfp4_cudagraphs()
+                        torch.cuda.empty_cache()
+                        logger.warning(
+                            "[HSWQ NVFP4 Blackwell] per-weight Graph OOM "
+                            "(%s); eager pooled", e
+                        )
+                    else:
+                        module._hswq_nvfp4_no_cudagraph = True
+                        logger.warning(
+                            "[HSWQ NVFP4 Blackwell] per-weight Graph disabled "
+                            "for module (%s); eager pooled", e,
+                        )
+            elif not _bw and orig_m <= _GRAPH_MAX_M:
+                try:
+                    result = nvfp4_quant_mm_cudagraph(
+                        input_2d,
+                        w_qdata=w_qdata,
+                        weight_scale=scale_b,
+                        block_scale_w=block_scale_b,
+                        scale_a=scale_a,
+                        bias=bias,
+                        out_dtype=out_dtype,
+                        alpha=alpha,
+                        pad_16x=needs_padding,
+                        orig_n=orig_n,
+                    )
+                    _TC_HITS += 1
+                    return result
+                except torch.cuda.OutOfMemoryError:
+                    clear_nvfp4_cudagraphs()
+                    torch.cuda.empty_cache()
                     logger.warning(
-                        "[HSWQ NVFP4] CUDA Graph disabled for module (%s); eager pooled",
-                        e,
+                        "[HSWQ NVFP4] CUDA Graph OOM — cache cleared; eager pooled"
                     )
+                except (RuntimeError, TypeError, ValueError) as e:
+                    if "out of memory" in str(e).lower():
+                        clear_nvfp4_cudagraphs()
+                        torch.cuda.empty_cache()
+                        logger.warning(
+                            "[HSWQ NVFP4] CUDA Graph OOM (%s); eager pooled", e
+                        )
+                    else:
+                        module._hswq_nvfp4_no_cudagraph = True
+                        logger.warning(
+                            "[HSWQ NVFP4] CUDA Graph disabled for module (%s); eager pooled",
+                            e,
+                        )
 
         a_qdata, block_scale_a, _pr, _pc = quantize_nvfp4_act_pooled(
             input_2d, scale_a, pad_16x=needs_padding

@@ -195,3 +195,30 @@ def is_blackwell_consumer() -> bool:
     major, _ = _get_gpu_cc()
     return major == 12
 
+
+def is_nvfp4_cudagraph_enabled() -> bool:
+    """Return whether CUDA Graph / Tensor Boost execution is active.
+
+    Allows full user control via environment variables:
+      - HSWQ_NVFP4_CUDAGRAPH (1/0/true/false/on/off)
+      - HSWQ_NVFP4_TENSORBOOST (1/0/true/false/on/off)
+
+    Setting either env var to 0 / false / off / disable completely disables CUDA
+    Graph execution on ALL GPUs, restoring standard eager pooled mode.
+
+    If environment variables are unset:
+      - Blackwell GPUs (SM >= 100): Per-weight CUDA Graph active by default.
+      - Non-Blackwell GPUs (SM < 100): Eager pooled mode active by default.
+    """
+    import os
+
+    for env_key in ("HSWQ_NVFP4_CUDAGRAPH", "HSWQ_NVFP4_TENSORBOOST"):
+        val = os.environ.get(env_key, "").strip().lower()
+        if val in ("0", "false", "off", "disable", "disabled"):
+            return False
+        if val in ("1", "true", "on", "enable", "enabled"):
+            return True
+
+    return is_blackwell_gpu()
+
+

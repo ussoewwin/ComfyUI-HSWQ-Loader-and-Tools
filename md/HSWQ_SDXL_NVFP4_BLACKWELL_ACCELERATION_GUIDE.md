@@ -8,6 +8,20 @@ NVIDIA Blackwell アーキテクチャ (SM >= 100: B200 / GB200, RTX 5090 / SM12
 
 ---
 
+## ユーザー制御・環境変数スイッチ (ON / OFF 切替)
+
+Tensor Boost (CUDA Graph) はユーザー側で自由かつ完全に制御可能であり、固定・強制変更ではありません。
+
+### 環境変数による切り替え
+
+| 環境変数 | 値 | 動作 |
+|:---|:---|:---|
+| `HSWQ_NVFP4_CUDAGRAPH=0`<br>または `HSWQ_NVFP4_TENSORBOOST=0` | `0`, `false`, `off`, `disabled` | **Tensor Boost / CUDA Graph を完全に無効化**。<br>従来の Eager Pooled パス（VRAM 追加消費 0 MB）で 100% 実行。 |
+| `HSWQ_NVFP4_CUDAGRAPH=1`<br>または `HSWQ_NVFP4_TENSORBOOST=1` | `1`, `true`, `on`, `enabled` | **全 GPU で CUDA Graph を明示的に有効化**。<br>(Blackwell では Per-Weight Graph、非 Blackwell では Shape-Shared Graph) |
+| **未設定 (デフォルト)** | 未指定 | **Blackwell (SM >= 100)**: Per-Weight CUDA Graph 有効<br>**非 Blackwell (SM < 100)**: Eager Pooled パス（無効） |
+
+---
+
 ## ログ出力・状態確認 (Tensor Boost ログ)
 
 Tensor Boost (Blackwell Per-Weight CUDA Graph) の動作状況は、コンソールおよびログ出力で確認可能。
@@ -17,17 +31,17 @@ Tensor Boost (Blackwell Per-Weight CUDA Graph) の動作状況は、コンソー
 ```text
 [HSWQ NVFP4 Tensor Boost] Blackwell GPU (SM >= 100) DETECTED: Per-Weight CUDA Graph Tensor Boost ACTIVE
 ```
-（※ 非 Blackwell 環境の場合は `Standard SDXL NVFP4 Product path ACTIVE` が出力される）
+（※ 無効化設定時: `[HSWQ NVFP4 Tensor Boost] Blackwell GPU DETECTED, but CUDA Graph / Tensor Boost DISABLED via environment variable (HSWQ_NVFP4_CUDAGRAPH=0): Eager Pooled Path ACTIVE`）
 
 ### 2. キャプチャ実行時 (初回の順伝播時)
 各 Linear レイヤーの重み用 CUDA Graph がキャプチャされる際に、レイヤー形状とともにインフォメーションログが出力される:
 ```text
-[HSWQ NVFP4 Tensor Boost] Captured Blackwell per-weight CUDA Graph #1 (shape M=512 K=2048 N=2048, w_ptr=0x..., device=cuda:0)
+[HSWQ NVFP4 Tensor Boost] Captured Blackwell per-weight CUDA Graph #1 (shape M=8192 K=2048 N=2048, w_ptr=0x..., device=cuda:0)
 ```
 
 ### 3. ベンチマーク・統計情報 (`nvfp4_forward_stats()`)
 `nvfp4_forward_stats()` の戻り値辞書に以下のフィールドが追加され、Blackwell のヒット数およびアクティブ状態を確認可能:
-- `"blackwell_graph_hits"`: Blackwell Per-Weight CUDA Graph リプレイヒット回数
+- `"blackwell_graph_hits"`: Blackwell Per-Weight CUDA Graph リプレイ実行回数
 - `"blackwell_tensor_boost_active"`: Blackwell Tensor Boost の有効判定フラグ (`True` / `False`)
 
 ---
@@ -46,31 +60,23 @@ Blackwell では FP4 (E2M1) Tensor Core の演算能力（RTX 5090 で約 3,352 
 
 ## 実装仕様
 
-### 1. Blackwell GPU 自動検出 (`nodes/nvfp4/nvfp4_conf.py`)
+### 1. Blackwell GPU 自動検出および制御判定 (`nodes/nvfp4/nvfp4_conf.py`)
 
 ```python
-_GPU_CC: tuple | None = None
-
-def _get_gpu_cc() -> tuple:
-    global _GPU_CC
-    if _GPU_CC is None:
-        import torch
-        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-            _GPU_CC = torch.cuda.get_device_capability()
-        else:
-            _GPU_CC = (0, 0)
-    return _GPU_CC
-
 def is_blackwell_gpu() -> bool:
     """True if GPU is Blackwell class (SM >= 100): B200, RTX 5090, etc."""
     major, _ = _get_gpu_cc()
     return major >= 10
+
+def is_nvfp4_cudagraph_enabled() -> bool:
+    """Return whether CUDA Graph / Tensor Boost execution is active."""
+    ...
 ```
 
 ### 2. Per-Weight CUDA Graph 機構 (`nodes/nvfp4/nvfp4_runtime.py`)
 
 - **キャッシュキー**: `(w_ptr, m, k, n, str(out_dtype), bool(pad_16x), has_bias, int(orig_n))`
-  - 重みの `data_ptr()` をキーに含めることで、重みごとのグラフエントリを個別保持 (`_PER_WEIGHT_GRAPH_CACHE_MAX = 160`)。
+  - 重みの `data_ptr()` をキーに含めることで、重みごとのグラフエントリを個別保持 (`_PER_WEIGHT_GRAPH_CACHE_MAX = 500`)。
 - **キャプチャ動作**:
   - `w_qdata` をコピーせず、キャプチャ内から直接参照。
 - **リプレイ動作**:
@@ -83,35 +89,13 @@ def nvfp4_quant_mm_cudagraph_perweight(
     ...
 ```
 
-### 3. 自動ディスパッチガード (`nodes/nvfp4/nvfp4_forward.py`)
-
-`_tc_forward_pooled` 内において、Blackwell 環境検出時に自動で Per-Weight CUDA Graph パスへ分岐する。
-
-```python
-_bw = is_blackwell_gpu()
-if (
-    _bw
-    and orig_m <= _GRAPH_MAX_M
-    and not getattr(module, "_hswq_nvfp4_no_cudagraph", False)
-):
-    try:
-        result = nvfp4_quant_mm_cudagraph_perweight(...)
-        _TC_HITS += 1
-        _BLACKWELL_GRAPH_HITS += 1
-        return result
-    except torch.cuda.OutOfMemoryError:
-        clear_nvfp4_cudagraphs()
-        torch.cuda.empty_cache()
-    ...
-```
-
 ---
 
 ## パス分離と安全性の担保
 
 | パス | モジュールフラグ | Blackwell 最適化の適用 |
 |:---|:---|:---|
-| **SDXL ConvRot NVFP4** | `module._hswq_nvfp4 = True` | ✅ 自動適用 |
+| **SDXL ConvRot NVFP4** | `module._hswq_nvfp4 = True` | ✅ 自動適用（スイッチ制御可） |
 | **Z Image ConvRot NVFP4** | `module._hswq_nvfp4_parity = True` (`_hswq_nvfp4 = False`) | ❌ 完全非適用 (Comfy Parity パス) |
 | **SDXL ConvRot INT8** | ComfyUI MixedPrecision / INT8 Ops | ❌ 完全非適用 |
 | **FP8 / Native FP16** | Stock ComfyUI Ops | ❌ 完全非適用 |
