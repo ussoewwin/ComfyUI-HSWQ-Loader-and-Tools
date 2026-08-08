@@ -427,6 +427,10 @@ class HSWQSampler:
                     "tooltip": "Krea2 only. Frees the Krea2 text encoder before sampling. "
                                "Ignored for every other architecture.",
                 }),
+                "tensor_boost": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling.",
+                }),
             },
         }
 
@@ -437,6 +441,25 @@ class HSWQSampler:
 
     def sample(self, model, seed, steps, cfg, sampler_name, scheduler,
                positive, negative, latent_image, denoise=1.0, **kwargs):
+        # Configure Tensor Boost toggle for sampling
+        tensor_boost = kwargs.get("tensor_boost", False)
+        import os
+        if isinstance(tensor_boost, bool):
+            tb_enabled = tensor_boost
+        else:
+            tb_str = str(tensor_boost).strip().lower() if tensor_boost is not None else ""
+            tb_enabled = tb_str in ("1", "true", "on", "enable", "enabled")
+
+        if tb_enabled:
+            os.environ["HSWQ_NVFP4_TENSORBOOST"] = "1"
+        else:
+            os.environ["HSWQ_NVFP4_TENSORBOOST"] = "0"
+            try:
+                from .nvfp4.nvfp4_runtime import clear_nvfp4_cudagraphs
+                clear_nvfp4_cudagraphs()
+            except Exception:
+                pass
+
         # New label name, plus the pre-rename key so older workflow JSON still maps.
         clip_perfect_offload = kwargs.get(
             "clip_perfect_offload (Krea2 only)",

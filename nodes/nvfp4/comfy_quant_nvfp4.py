@@ -376,11 +376,10 @@ NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"
 
 
 def load_checkpoint_sdxl_nvfp4_weight_dtype(
-    ckpt_name, weight_dtype, device=None, tensor_boost=False
+    ckpt_name, weight_dtype, device=None
 ):
     """Load SDXL checkpoint with HSWQ NVFP4 Linear (+ INT8 Conv2d ConvRot) stack."""
     import sys
-    import os
 
     import folder_paths
     import comfy.sd
@@ -397,17 +396,6 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(
         reset_int8_lora_log_counters,
         summarize_int8_lora_capability,
     )
-
-    if isinstance(tensor_boost, bool):
-        tb_enabled = tensor_boost
-    else:
-        tb_str = str(tensor_boost).strip().lower() if tensor_boost is not None else ""
-        tb_enabled = tb_str in ("1", "true", "on", "enable", "enabled")
-
-    if tb_enabled:
-        os.environ["HSWQ_NVFP4_TENSORBOOST"] = "1"
-    else:
-        os.environ["HSWQ_NVFP4_TENSORBOOST"] = "0"
 
     original_device = get_current_device()
     if device is not None:
@@ -476,12 +464,12 @@ def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
 
     _prev_load_checkpoint = sdxl_cls.load_checkpoint
 
-    def load_checkpoint(self, ckpt_name, weight_dtype, device=None, tensor_boost=False, **kwargs):
+    def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
         if weight_dtype in _FP8_WEIGHT_DTYPES:
-            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost, **kwargs)
+            return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
         if weight_dtype == NVFP4_WEIGHT_DTYPE:
             return load_checkpoint_sdxl_nvfp4_weight_dtype(
-                ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost
+                ckpt_name, weight_dtype, device=device
             )
         import folder_paths
 
@@ -491,9 +479,9 @@ def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
             ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
             if checkpoint_looks_like_comfy_quant_nvfp4(ckpt_path):
                 return load_checkpoint_sdxl_nvfp4_weight_dtype(
-                    ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost
+                    ckpt_name, weight_dtype, device=device
                 )
-        return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device, tensor_boost=tensor_boost, **kwargs)
+        return _prev_load_checkpoint(self, ckpt_name, weight_dtype, device=device)
 
     sdxl_cls.load_checkpoint = load_checkpoint
     _console(
