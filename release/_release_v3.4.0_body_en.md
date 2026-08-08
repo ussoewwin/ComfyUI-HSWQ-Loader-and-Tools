@@ -11,7 +11,7 @@ To maximize HSWQ SDXL ConvRot NVFP4 inference performance on NVIDIA Blackwell (S
 
 The feature is a **closed, protected design inside `nodes/nvfp4/` only** (SDXL Product Tensor Core path). It does not affect Z Image ConvRot NVFP4 (`nodes/zimage_nvfp4/` comfy-parity path), SDXL ConvRot INT8, FP8, or stock FP16/BF16 paths — a fully separated architecture.
 
-To balance sampling speed with VRAM saturation / system-RAM spill during upscale (USDU: Ultimate SD Upscale), independent **BOOLEAN toggle switches** are provided on the sampler (`HSWQSampler`) and the upscale node (`HSWQUltimateSDUpscale`).
+To balance sampling speed with VRAM cost (**Tensor Boost ON adds several GB**) and system-RAM spill during upscale (USDU: Ultimate SD Upscale), independent **BOOLEAN toggle switches** are provided on the sampler (`HSWQSampler`) and the upscale node (`HSWQUltimateSDUpscale`). **RTX 5090 with 32 GB+** is recommended when using Tensor Boost / high-res tiled upscale.
 
 ---
 
@@ -811,7 +811,7 @@ Z Image comfy-parity uses `_hswq_nvfp4_comfy_only` / `_hswq_nvfp4_convrot_parity
 ```python
                 "tensor_boost": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling.",
+                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling. ON raises VRAM by several GB (CUDA Graph arenas).",
                 }),
 ```
 
@@ -851,7 +851,7 @@ Z Image comfy-parity uses `_hswq_nvfp4_comfy_only` / `_hswq_nvfp4_convrot_parity
 #### Full code (input definition and start of `upscale`)
 
 ```python
-        ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling."})),
+        ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling. ON raises VRAM by several GB; RTX 5090 32GB+ recommended. Keep OFF for tiled upscale."})),
 ```
 
 ```python

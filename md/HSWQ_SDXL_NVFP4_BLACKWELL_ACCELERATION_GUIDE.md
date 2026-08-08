@@ -806,7 +806,7 @@ Z Image comfy-parity uses `_hswq_nvfp4_comfy_only` / `_hswq_nvfp4_convrot_parity
 ```python
                 "tensor_boost": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling.",
+                    "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during sampling. ON raises VRAM by several GB (CUDA Graph arenas).",
                 }),
 ```
 
@@ -846,7 +846,7 @@ Z Image comfy-parity uses `_hswq_nvfp4_comfy_only` / `_hswq_nvfp4_convrot_parity
 #### Full code (input definition and start of `upscale`)
 
 ```python
-        ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling."})),
+        ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling. ON raises VRAM by several GB; RTX 5090 32GB+ recommended. Keep OFF for tiled upscale."})),
 ```
 
 ```python
