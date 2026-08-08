@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.0
+
+- **Added**: **SDXL ConvRot NVFP4 Blackwell Tensor Boost** — Per-Weight CUDA Graph auto-dispatch on SM >= 100 (B200 / GB200, RTX 5090 / SM120) inside `nodes/nvfp4/` only (Z Image / INT8 / FP8 / stock paths untouched). Eliminates shape-shared weight `.copy_()` on replay; adaptive `M` cap 16384; capture / hit console logs and `nvfp4_forward_stats()` (`blackwell_graph_hits`, `blackwell_tensor_boost_active`). Independent **`tensor_boost` BOOLEAN** on **HSWQ Sampler** and **HSWQ Ultimate SD Upscale** (default OFF; Loader has no toggle) via `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH`, with `clear_nvfp4_cudagraphs()` on OFF so USDU tiles avoid VRAM blow-up. Docs: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.
+- See [Release Notes v3.4.0](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.0) for details.
+
 ## Version 3.3.9
 
 - **ComfyUI 0.30.2 compatibility & Krea2 parity contamination** (commits `21792a8`..`ecd6bc0`):
