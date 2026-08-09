@@ -821,20 +821,32 @@ def _model_has_int8_quantized_weights(model) -> bool:
 def _load_native_convert_int8_helpers():
     """Lazy-load Hadamard / rotate helpers from sibling native_convert_int8.py."""
     import importlib.util
+    import sys
 
     global _NATIVE_CONVERT_INT8_MOD
     if _NATIVE_CONVERT_INT8_MOD is not None:
         return _NATIVE_CONVERT_INT8_MOD
+    name = "native_convert_int8_for_hswq_conv2d"
+    # torch.compile / Dynamo re-imports helpers by this module name (LOAD_GLOBAL).
+    # Without sys.modules registration, Dynamo raises ModuleNotFoundError.
+    existing = sys.modules.get(name)
+    if existing is not None:
+        _NATIVE_CONVERT_INT8_MOD = existing
+        return existing
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(root, "native_convert_int8.py")
     if not os.path.isfile(path):
         raise FileNotFoundError(f"native_convert_int8.py not found: {path}")
-    name = "native_convert_int8_for_hswq_conv2d"
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load module spec for {path}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop(name, None)
+        raise
     _NATIVE_CONVERT_INT8_MOD = mod
     return mod
 
