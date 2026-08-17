@@ -34,6 +34,7 @@ HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作
 **已发布的 HSWQ SDXL 模型（ConvRot INT8）：** [Hugging Face — Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-INT8](https://huggingface.co/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-INT8)
 
 **已发布的 HSWQ SDXL 模型（ConvRot NVFP4）：** [Hugging Face — Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4](https://huggingface.co/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4)
+**已发布的 HSWQ Z Image / ZIT 模型（ConvRot NVFP4）：** [Hugging Face — Hybrid-Sensitivity-Weighted-Quantization-Z-Image-Hybrid-ConvRot-NVFP4](https://huggingface.co/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization-Z-Image-Hybrid-ConvRot-NVFP4)
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/main/logo.png" width="400">
