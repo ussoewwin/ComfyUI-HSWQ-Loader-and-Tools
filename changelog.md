@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.1
+
+- **Added / Published**: **Z Image / ZIT Hybrid ConvRot NVFP4** quantization method and published models. Hybrid packs combine **Linear NVFP4 (Tensor Core `scaled_mm_nvfp4`)** with **INT8-protected (Conv2d / sensitivity-selected) layers**, loaded through the **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `ConvRot NVFP4`) on the bench-matched **Comfy parity** path (stock GEMM + online act rotate), separate from the SDXL Tensor Core product path. Published models: `Hybrid-Sensitivity-Weighted-Quantization-Z-Image-Hybrid-ConvRot-NVFP4`. README now lists all published HSWQ packs (SDXL ConvRot INT8 / SDXL ConvRot NVFP4 / Z Image ConvRot NVFP4).
+- See [Release Notes v3.4.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.1) for details.
+
 ## Version 3.4.0
 
 - **Added**: **SDXL ConvRot NVFP4 Blackwell Tensor Boost** — Per-Weight CUDA Graph auto-dispatch on SM >= 100 (B200 / GB200, RTX 5090 / SM120) inside `nodes/nvfp4/` only (Z Image / INT8 / FP8 / stock paths untouched). Eliminates shape-shared weight `.copy_()` on replay; adaptive `M` cap 16384; capture / hit console logs and `nvfp4_forward_stats()` (`blackwell_graph_hits`, `blackwell_tensor_boost_active`). Independent **`tensor_boost` BOOLEAN** on **HSWQ Sampler** and **HSWQ Ultimate SD Upscale** (default OFF; Loader has no toggle) via `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH`, with `clear_nvfp4_cudagraphs()` on OFF so USDU tiles avoid VRAM blow-up. **ON raises VRAM by several GB** (CUDA Graph arenas) — **RTX 5090 32 GB+** recommended for upscale / Tensor Boost headroom; sampler path **16 GB+**. Docs: `md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`.

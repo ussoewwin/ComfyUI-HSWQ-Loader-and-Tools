@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.1
+
+- **新增 / 发布**：**Z Image / ZIT Hybrid ConvRot NVFP4** 量化方法与已发布模型。混合包将 **Linear NVFP4（Tensor Core `scaled_mm_nvfp4`）** 与 **INT8 protect（Conv2d / 敏感度选择）层** 结合，通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（`weight_dtype`：`ConvRot NVFP4`）走与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock GEMM + online act rotate），与 SDXL 的 Tensor Core 产品路径分离。已发布模型：`Hybrid-Sensitivity-Weighted-Quantization-Z-Image-Hybrid-ConvRot-NVFP4`。README 现已列出全部已发布的 HSWQ 包（SDXL ConvRot INT8 / SDXL ConvRot NVFP4 / Z Image ConvRot NVFP4）。
+- 详情见 [发布说明 v3.4.1](v3.4.1.md)。
+
 ## Version 3.4.0
 
 - **新增**：**SDXL ConvRot NVFP4 Blackwell Tensor Boost** — 仅在 `nodes/nvfp4/` 内对 SM >= 100（B200 / GB200、RTX 5090 / SM120）启用 Per-Weight CUDA Graph 自动分发（不影响 Z Image / INT8 / FP8 / 标准路径）。回放时消除 shape-shared 的权重 `.copy_()`；自适应 `M` 上限 16384；捕获 / 命中控制台日志与 `nvfp4_forward_stats()`（`blackwell_graph_hits`、`blackwell_tensor_boost_active`）。**HSWQ Sampler** 与 **HSWQ Ultimate SD Upscale** 上独立的 **`tensor_boost` BOOLEAN**（默认 OFF；Loader 无开关），经 `HSWQ_NVFP4_TENSORBOOST` / `HSWQ_NVFP4_CUDAGRAPH` 控制，OFF 时调用 `clear_nvfp4_cudagraphs()`，避免 USDU 分块时显存暴涨。**开启会使显存增加数 GB**（CUDA Graph arena）——放大 / Tensor Boost 余量推荐 **RTX 5090 32 GB+**；采样器路径 **16 GB+**。文档：`md/HSWQ_SDXL_NVFP4_BLACKWELL_ACCELERATION_GUIDE.md`。
