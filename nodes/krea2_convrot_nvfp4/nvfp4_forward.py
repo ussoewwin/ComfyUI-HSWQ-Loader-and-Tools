@@ -396,6 +396,41 @@ def make_nvfp4_linear_forward(stock_forward):
                 b_f = b_f.dequantize()
             out_2d = F.linear(input_2d, w_f, b_f)
 
+        # 4.5) LoRA residual (rank-decomposed float): plain NVFP4 4-bit
+        #      requantize rounds away small deltas, so keep them as a low-rank
+        #      additive term on top of the packed weight (VRAM stays packed).
+        lora_res = getattr(self, "_hswq_krea2_lora_res", None)
+        if lora_res is not None and out_2d is not None:
+            cache = getattr(self, "_hswq_krea2_lora_res_gpu", None)
+            if (
+                cache is None
+                or cache[0] != input_2d.device
+                or cache[1] != compute_dtype
+            ):
+                cache = (
+                    input_2d.device,
+                    compute_dtype,
+                    [
+                        (
+                            md.to(device=input_2d.device, dtype=compute_dtype),
+                            mu.to(device=input_2d.device, dtype=compute_dtype),
+                            sc,
+                        )
+                        for md, mu, sc in lora_res
+                    ],
+                )
+                self._hswq_krea2_lora_res_gpu = cache
+            acc = None
+            for md, mu, sc in cache[2]:
+                if sc == 0.0:
+                    continue
+                term = torch.matmul(torch.matmul(input_2d, md.t()), mu.t())
+                if sc != 1.0:
+                    term = term * sc
+                acc = term if acc is None else acc + term
+            if acc is not None:
+                out_2d = out_2d + acc
+
         # 5) Restore rank with logical out_features (never QT storage shape[0])
         if reshaped_nd:
             out = out_2d.reshape((*input_shape[:-1], int(self.out_features)))

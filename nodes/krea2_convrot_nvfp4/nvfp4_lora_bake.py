@@ -170,6 +170,98 @@ def _bake_keys_on_module(patcher, module, keys_to_bake, device_to, already) -> i
     return baked
 
 
+def _extract_nvfp4_lora_residual(patcher, key):
+    """Extract rank-decomposed LoRA (A=down, B=up, scale) from a patch list.
+
+    Plain NVFP4 4-bit requantize rounds away small LoRA deltas (style LoRA
+    deltas are ~0.1-0.8% of weight amax vs ~4-8% NVFP4 step), so instead of
+    baking into the packed weight we keep the packed QT and store the low-rank
+    additive term. VRAM stays packed; the residual is rank x (in+out), ~4% of
+    the packed weight. Returns None when any patch is not a simple
+    rank-decomposed LoRA (caller falls back to the requantize bake).
+    """
+    try:
+        from comfy.weight_adapter.base import WeightAdapterBase
+    except ImportError:
+        return None
+    patches = getattr(patcher, "patches", {}).get(key)
+    if not patches:
+        return None
+    residual = []
+    for p in patches:
+        strength = p[0]
+        v = p[1]
+        strength_model = p[2]
+        offset = p[3]
+        function = p[4]
+        if offset is not None or function is not None:
+            return None
+        if float(strength_model) != 1.0:
+            # strength_model scales the BASE weight; residual path keeps the
+            # base packed (unscaled), so fall back to the requantize bake.
+            return None
+        if not isinstance(v, WeightAdapterBase):
+            return None
+        weights = getattr(v, "weights", None)
+        if weights is None or len(weights) < 3:
+            return None
+        mat_up = weights[0]  # lora_B (up)   [out, rank]
+        mat_dn = weights[1]  # lora_A (down) [rank, in]
+        alpha = weights[2]
+        mid = weights[3] if len(weights) > 3 else None
+        dora_scale = weights[4] if len(weights) > 4 else None
+        reshape = weights[5] if len(weights) > 5 else None
+        if mid is not None or dora_scale is not None or reshape is not None:
+            return None
+        if alpha is not None:
+            try:
+                alpha = alpha / mat_dn.shape[0]
+            except Exception:
+                alpha = 1.0
+        else:
+            alpha = 1.0
+        scale = float(strength) * float(alpha)
+        residual.append((mat_dn, mat_up, scale))
+    return residual or None
+
+
+def _bake_nvfp4_residual_keys_on_module(patcher, module, keys_to_bake, device_to, already):
+    """Plain NVFP4 keys: keep the packed QT, store the low-rank LoRA residual.
+
+    Returns (baked, n_residual, n_requant_fallback).
+    """
+    baked = 0
+    n_residual = 0
+    n_requant = 0
+    for param_key, _key in keys_to_bake:
+        if hasattr(module, param_key + "_lowvram_function"):
+            setattr(module, param_key + "_lowvram_function", None)
+    for param_key, key in keys_to_bake:
+        res = None
+        if param_key == "weight":
+            res = _extract_nvfp4_lora_residual(patcher, key)
+        if res is not None:
+            module._hswq_krea2_lora_res = res
+            if hasattr(module, "_hswq_krea2_lora_res_gpu"):
+                delattr(module, "_hswq_krea2_lora_res_gpu")
+            n_residual += 1
+        else:
+            patcher.patch_weight_to_device(key, device_to=device_to)
+            n_requant += 1
+        if key in patcher.backup:
+            try:
+                del patcher.backup[key]
+            except KeyError:
+                pass
+        try:
+            del patcher.patches[key]
+        except KeyError:
+            pass
+        already.add(key)
+        baked += 1
+    return baked, n_residual, n_requant
+
+
 def _iter_patch_weight_keys(patcher):
     """Yield (key, module_path, param_key, module) for weight/bias patches."""
     patches = getattr(patcher, "patches", None) or {}
@@ -294,6 +386,8 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         "skipped_not_qt": 0,
         "cleared_already": 0,
         "sample_int8_keys": [],
+        "baked_residual": 0,
+        "baked_requant_fallback": 0,
     }
     if not getattr(patcher, "patches", None):
         return stats
@@ -346,10 +440,10 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         modules[module_path] = module
 
     for module_path, keys_to_bake in by_module.items():
-        n = _bake_keys_on_module(
-            patcher, modules[module_path], keys_to_bake, device_to, already
-        )
         if kinds.get(module_path) == "int8":
+            n = _bake_keys_on_module(
+                patcher, modules[module_path], keys_to_bake, device_to, already
+            )
             stats["baked_int8"] += n
             if len(stats["sample_int8_keys"]) < 3:
                 for _pk, full_key in keys_to_bake:
@@ -358,7 +452,14 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
                     if len(stats["sample_int8_keys"]) >= 3:
                         break
         else:
+            n, n_res, n_rq = _bake_nvfp4_residual_keys_on_module(
+                patcher, modules[module_path], keys_to_bake, device_to, already
+            )
             stats["baked_other_qt"] += n
+            stats["baked_residual"] = stats.get("baked_residual", 0) + n_res
+            stats["baked_requant_fallback"] = (
+                stats.get("baked_requant_fallback", 0) + n_rq
+            )
 
     if stats["baked_int8"] > 0 or stats["baked_other_qt"] > 0:
         patcher.model._hswq_krea2_nvfp4_baked_uuid = uuid
@@ -393,6 +494,8 @@ def _dump_bake_status(
         f"nvfp4_baked={nv_n} "
         f"int8_baked={i8} "
         f"other_qt_baked={rem_stats.get('baked_other_qt', 0)} "
+        f"residual_baked={rem_stats.get('baked_residual', 0)} "
+        f"requant_fallback={rem_stats.get('baked_requant_fallback', 0)} "
         f"nv_candidates={nv_stats.get('candidates', 0)} "
         f"rem_candidates={rem_stats.get('candidates', 0)} "
         f"nv_pass_skip_int8_rem={skip_i8_in_nv_pass} "
