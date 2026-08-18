@@ -42,6 +42,20 @@ def _zimage_load_module():
     )
 
 
+def _krea2_load_module():
+    """Resolve krea2 load only via the already-imported HSWQ package prefix."""
+    for name in list(sys.modules):
+        if not name.endswith("nodes.nvfp4.comfy_quant_nvfp4"):
+            continue
+        pkg = name[: -len(".nodes.nvfp4.comfy_quant_nvfp4")]
+        if not pkg:
+            continue
+        return importlib.import_module(f"{pkg}.nodes.krea2_convrot_nvfp4.load_unet")
+    raise ImportError(
+        "comfy_quant_nvfp4 not in sys.modules yet "
+        "(cannot import nodes.krea2_convrot_nvfp4 without shadowing ComfyUI nodes)"
+    )
+
 def _try_patch() -> bool:
     global _PATCHED, _PRODUCT_LOAD_UNET
     if _PATCHED:
@@ -51,6 +65,10 @@ def _try_patch() -> bool:
     except Exception as e:
         print(f"[HSWQ NVFP4] Z Image load import deferred: {e}", flush=True)
         return False
+    try:
+        _krea2_load_module()
+    except Exception as e:
+        print(f"[HSWQ NVFP4] Krea2 load import deferred: {e}", flush=True)
     for name, mod in list(sys.modules.items()):
         if not (
             name.endswith("nodes.nvfp4.comfy_quant_nvfp4")
