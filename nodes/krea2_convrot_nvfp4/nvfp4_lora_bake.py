@@ -387,6 +387,7 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         "cleared_already": 0,
         "sample_int8_keys": [],
         "baked_residual": 0,
+        "int8_residual": 0,
         "baked_requant_fallback": 0,
     }
     if not getattr(patcher, "patches", None):
@@ -440,11 +441,16 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         modules[module_path] = module
 
     for module_path, keys_to_bake in by_module.items():
+        # INT8 8-bit requant ALSO rounds away small LoRA deltas
+        # (per-channel step ~amax/127 vs delta ~0.1-0.8% amax), so INT8
+        # ConvRot keys take the same low-rank residual path. Non-LoRA /
+        # strength_model-scaled patches fall back to requant inside.
+        n, n_res, n_rq = _bake_nvfp4_residual_keys_on_module(
+            patcher, modules[module_path], keys_to_bake, device_to, already
+        )
         if kinds.get(module_path) == "int8":
-            n = _bake_keys_on_module(
-                patcher, modules[module_path], keys_to_bake, device_to, already
-            )
             stats["baked_int8"] += n
+            stats["int8_residual"] = stats.get("int8_residual", 0) + n_res
             if len(stats["sample_int8_keys"]) < 3:
                 for _pk, full_key in keys_to_bake:
                     if full_key not in stats["sample_int8_keys"]:
@@ -452,14 +458,11 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
                     if len(stats["sample_int8_keys"]) >= 3:
                         break
         else:
-            n, n_res, n_rq = _bake_nvfp4_residual_keys_on_module(
-                patcher, modules[module_path], keys_to_bake, device_to, already
-            )
             stats["baked_other_qt"] += n
             stats["baked_residual"] = stats.get("baked_residual", 0) + n_res
-            stats["baked_requant_fallback"] = (
-                stats.get("baked_requant_fallback", 0) + n_rq
-            )
+        stats["baked_requant_fallback"] = (
+            stats.get("baked_requant_fallback", 0) + n_rq
+        )
 
     if stats["baked_int8"] > 0 or stats["baked_other_qt"] > 0:
         patcher.model._hswq_krea2_nvfp4_baked_uuid = uuid
@@ -495,6 +498,7 @@ def _dump_bake_status(
         f"int8_baked={i8} "
         f"other_qt_baked={rem_stats.get('baked_other_qt', 0)} "
         f"residual_baked={rem_stats.get('baked_residual', 0)} "
+        f"int8_residual={rem_stats.get('int8_residual', 0)} "
         f"requant_fallback={rem_stats.get('baked_requant_fallback', 0)} "
         f"nv_candidates={nv_stats.get('candidates', 0)} "
         f"rem_candidates={rem_stats.get('candidates', 0)} "
@@ -525,6 +529,46 @@ def _patcher_is_krea2_nvfp4_pack(patcher) -> bool:
     return bool(getattr(model, "_hswq_krea2_nvfp4_pack", False))
 
 
+def _clear_stale_lora_residuals(patcher, keep_keys) -> int:
+    """Drop residuals from a previous bake that this run no longer wants.
+
+    Dynamic VRAM clones share the inner model: a bake from an earlier queue
+    leaves ``_hswq_krea2_lora_res`` on module objects. If the new patcher has
+    no patches for those keys (LoRA removed / swapped), the stale residual
+    would keep applying forever. Clear everything not in ``keep_keys``.
+    """
+    model = getattr(patcher, "model", None)
+    if model is None:
+        return 0
+    cleared = 0
+    for name, module in model.named_modules():
+        if not hasattr(module, "_hswq_krea2_lora_res"):
+            continue
+        key = f"{name}.weight"
+        if key in keep_keys:
+            continue
+        try:
+            delattr(module, "_hswq_krea2_lora_res")
+        except Exception:
+            pass
+        if hasattr(module, "_hswq_krea2_lora_res_gpu"):
+            try:
+                delattr(module, "_hswq_krea2_lora_res_gpu")
+            except Exception:
+                pass
+        cleared += 1
+    if cleared:
+        _console(
+            f"[HSWQ Krea2 NVFP4 LoRA] cleared {cleared} stale LoRA residual(s) "
+            f"({reason_keep(keep_keys)})"
+        )
+    return cleared
+
+
+def reason_keep(keep_keys) -> str:
+    return "no patches this run" if not keep_keys else "not in current patches"
+
+
 def run_krea2_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str = "wrap") -> bool:
     """Bake NVFP4 ConvRot + leftover QT if this patcher is a Krea2 NVFP4 pack with LoRA."""
     model = getattr(patcher, "model", None)
@@ -535,9 +579,23 @@ def run_krea2_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str = 
     diag = _nvfp4_convrot_diag(model)
     has_flag = bool(diag["has"])
     has_baked = bool(getattr(model, "_hswq_krea2_nvfp4_baked_keys", None))
-    n_patches = len(getattr(patcher, "patches", None) or {})
-    if n_patches == 0 and not has_baked:
+    patches = getattr(patcher, "patches", None) or {}
+    n_patches = len(patches)
+    if n_patches == 0:
+        # LoRA removed (or none): wipe residuals left by any previous bake on
+        # this shared inner model so "LoRA off" really turns it off.
+        if has_baked or any(
+            hasattr(m, "_hswq_krea2_lora_res")
+            for _n, m in model.named_modules()
+        ):
+            _clear_stale_lora_residuals(patcher, set())
+            try:
+                model._hswq_krea2_nvfp4_baked_keys = set()
+            except Exception:
+                pass
         return False
+    # Keep only keys this patcher still patches; clear stale residuals first.
+    _clear_stale_lora_residuals(patcher, set(patches.keys()))
     if device_to is None:
         device_to = getattr(patcher, "load_device", None)
     nv_stats = bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to=device_to)

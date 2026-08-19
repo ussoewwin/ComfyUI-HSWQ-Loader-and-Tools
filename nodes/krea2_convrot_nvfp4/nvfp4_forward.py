@@ -266,6 +266,54 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
         return None
 
 
+def _add_krea2_lora_residual(module, inp, out):
+    """Add the baked low-rank LoRA residual to a stock-path output.
+
+    Residual terms are stored in the ORIGINAL weight basis (LoRA file basis).
+    Layer output is always in the original basis (ConvRot rotation is internal
+    and Hadamard-orthogonal), so the add is valid on every path (stock forward,
+    full_precision_mm, TC GEMM). Cheap: ~2*rank/out_features extra FLOPs.
+    """
+    import torch
+
+    res = getattr(module, "_hswq_krea2_lora_res", None)
+    if res is None or out is None:
+        return out
+    dev = inp.device
+    dt = getattr(inp, "dtype", None)
+    if dt is None:
+        return out
+    cache = getattr(module, "_hswq_krea2_lora_res_gpu", None)
+    if cache is None or cache[0] != dev or cache[1] != dt:
+        cache = (
+            dev,
+            dt,
+            [
+                (
+                    md.to(device=dev, dtype=dt),
+                    mu.to(device=dev, dtype=dt),
+                    sc,
+                )
+                for md, mu, sc in res
+            ],
+        )
+        module._hswq_krea2_lora_res_gpu = cache
+    acc = None
+    for md, mu, sc in cache[2]:
+        if sc == 0.0:
+            continue
+        term = torch.matmul(torch.matmul(inp, md.t()), mu.t())
+        if sc != 1.0:
+            term = term * sc
+        acc = term if acc is None else acc + term
+    if acc is None:
+        return out
+    if acc.shape != out.shape:
+        # rank-safe: ND input produced (..., out); 2D produced (m, out)
+        acc = acc.reshape(out.shape)
+    return out + acc
+
+
 def make_nvfp4_linear_forward(stock_forward):
     """
     Return a Linear.forward replacement.
@@ -279,26 +327,38 @@ def make_nvfp4_linear_forward(stock_forward):
 
     def forward_nvfp4(self, input, *args, **kwargs):
         global _CONVROT_ACT_ROTATES
+        _orig_input = input
 
         if not getattr(self, "_hswq_nvfp4", False):
-            return stock_forward(self, input, *args, **kwargs)
+            # INT8 / plain-float layers on stock forward still carry a baked
+            # low-rank LoRA residual (INT8 8-bit requant also rounds away
+            # small deltas: step ~amax/127 vs delta ~0.1-0.8% amax).
+            return _add_krea2_lora_residual(
+                self, input, stock_forward(self, input, *args, **kwargs)
+            )
 
         # Training / forced cast: fall back to stock.
         # ConvRot + full_precision_mm still needs act rotation before stock dequant.
         if input.requires_grad or getattr(self, "comfy_force_cast_weights", False):
-            return stock_forward(self, input, *args, **kwargs)
+            return _add_krea2_lora_residual(
+                self, input, stock_forward(self, input, *args, **kwargs)
+            )
         # LoRA weight_function: stay on HSWQ path (act ConvRot + cast_bias_weight
         # with want_requant). Stock forward would skip act rotate -> ConvRot break.
 
         # GPU lacks NVFP4 TC: stock dequant mm, but MUST rotate acts if ConvRot.
         if getattr(self, "_full_precision_mm", False):
             if not getattr(self, "_hswq_nvfp4_convrot", False):
-                return stock_forward(self, input, *args, **kwargs)
+                return _add_krea2_lora_residual(
+                    self, input, stock_forward(self, input, *args, **kwargs)
+                )
             input_shape = input.shape
             reshaped_nd = input.ndim >= 3
             input_2d = input.reshape(-1, input_shape[-1]) if reshaped_nd else input
             if input_2d.ndim != 2:
-                return stock_forward(self, input, *args, **kwargs)
+                return _add_krea2_lora_residual(
+                    self, input, stock_forward(self, input, *args, **kwargs)
+                )
             gs = int(getattr(self, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
             h = getattr(self, "_hswq_nvfp4_H", None)
             if h is None or h.device != input_2d.device or h.dtype != input_2d.dtype:
@@ -310,7 +370,13 @@ def make_nvfp4_linear_forward(stock_forward):
                 input = input_2d.reshape((*input_shape[:-1], input_shape[-1]))
             else:
                 input = input_2d
-            return stock_forward(self, input, *args, **kwargs)
+            # NOTE: rotated-domain input feeds stock dequant (rotated weights);
+            # the residual add must use the ORIGINAL input, so re-rotate back
+            # is wrong — instead apply residual on the original pre-rotation
+            # tensor captured before this branch.
+            return _add_krea2_lora_residual(
+                self, _orig_input, stock_forward(self, input, *args, **kwargs)
+            )
 
         run_every_op()
         input_shape = input.shape
@@ -320,7 +386,9 @@ def make_nvfp4_linear_forward(stock_forward):
         reshaped_nd = input.ndim >= 3
         input_2d = input.reshape(-1, input_shape[-1]) if reshaped_nd else input
         if input_2d.ndim != 2:
-            return stock_forward(self, input, *args, **kwargs)
+            return _add_krea2_lora_residual(
+                self, input, stock_forward(self, input, *args, **kwargs)
+            )
 
         # 2) FULL ConvRot: dense Hadamard GEMM act rotation (fp32 accumulation).
         #    rotate_last_dim_pooled rotates in fp32 like the butterfly did, but a
@@ -367,7 +435,11 @@ def make_nvfp4_linear_forward(stock_forward):
         if layout is None:
             if offload_stream is not None:
                 uncast_bias_weight(self, weight, bias, offload_stream)
-            return stock_forward(self, input, *args, **kwargs)
+            # input may already be rotated (ConvRot step 2): stock dequant
+            # expects the rotated basis; residual uses the original input.
+            return _add_krea2_lora_residual(
+                self, _orig_input, stock_forward(self, input, *args, **kwargs)
+            )
 
         # 4) packed-NVFP4 FP4 TC GEMM (weight stays packed); bake+F.linear only
         #    as fallback inside _tc_forward_pooled / below.
@@ -399,37 +471,8 @@ def make_nvfp4_linear_forward(stock_forward):
         # 4.5) LoRA residual (rank-decomposed float): plain NVFP4 4-bit
         #      requantize rounds away small deltas, so keep them as a low-rank
         #      additive term on top of the packed weight (VRAM stays packed).
-        lora_res = getattr(self, "_hswq_krea2_lora_res", None)
-        if lora_res is not None and out_2d is not None:
-            cache = getattr(self, "_hswq_krea2_lora_res_gpu", None)
-            if (
-                cache is None
-                or cache[0] != input_2d.device
-                or cache[1] != compute_dtype
-            ):
-                cache = (
-                    input_2d.device,
-                    compute_dtype,
-                    [
-                        (
-                            md.to(device=input_2d.device, dtype=compute_dtype),
-                            mu.to(device=input_2d.device, dtype=compute_dtype),
-                            sc,
-                        )
-                        for md, mu, sc in lora_res
-                    ],
-                )
-                self._hswq_krea2_lora_res_gpu = cache
-            acc = None
-            for md, mu, sc in cache[2]:
-                if sc == 0.0:
-                    continue
-                term = torch.matmul(torch.matmul(input_2d, md.t()), mu.t())
-                if sc != 1.0:
-                    term = term * sc
-                acc = term if acc is None else acc + term
-            if acc is not None:
-                out_2d = out_2d + acc
+        #      Applied on the ORIGINAL input after rank restore (step 5) so the
+        #      math is basis-correct even for ConvRot layers.
 
         # 5) Restore rank with logical out_features (never QT storage shape[0])
         if reshaped_nd:
@@ -439,7 +482,7 @@ def make_nvfp4_linear_forward(stock_forward):
 
         if offload_stream is not None:
             uncast_bias_weight(self, weight, bias, offload_stream)
-        return out
+        return _add_krea2_lora_residual(self, _orig_input, out)
 
     forward_nvfp4._hswq_nvfp4_full_forward = True  # type: ignore[attr-defined]
     forward_nvfp4._hswq_krea2_tc = True  # type: ignore[attr-defined]
