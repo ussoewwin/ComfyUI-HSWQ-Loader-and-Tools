@@ -198,34 +198,55 @@ def fix_unet_config_packed_dims(unet_config: dict, state_dict: dict, key_prefix:
             except Exception as e:
                 logger.warning("[HSWQ NVFP4] context_dim fix skipped: %s", e)
 
-    # Krea2: stock detect sets txtlayers = projector.weight.shape[1] (packed K
-    # after hybrid NVFP4). Restore logical in_features from comfy_quant
-    # orig_shape, else KREA2_TAP_LAYERS length (matches CLIP fused width).
-    if unet_config.get("txtlayers") is not None:
-        proj = f"{key_prefix}txtfusion.projector.weight"
-        if proj in state_dict:
-            try:
-                logical = _nvfp4_logical_linear_shape(state_dict, proj)
-                if logical is not None and logical[1] is not None:
-                    unet_config["txtlayers"] = int(logical[1])
-                else:
-                    cq = decode_comfy_quant_conf(
-                        state_dict.get(comfy_quant_key_for_weight(proj))
-                    )
-                    base = proj[: -len(".weight")]
-                    is_proj_nvfp4 = is_nvfp4_conf(cq) or (
-                        f"{base}.weight_scale_2" in state_dict
-                    )
-                    if is_proj_nvfp4:
-                        from comfy.text_encoders.krea2 import KREA2_TAP_LAYERS
+    # Krea2: correct txtlayers misread from packed projector K. Delegated to
+    # the standalone fix so it can also run when SDXL/ZI own the shared
+    # detect_unet_config stamp (their fix_unet_config_packed_dims lacks it).
+    fix_krea2_txtlayers(unet_config, state_dict, key_prefix)
 
-                        unet_config["txtlayers"] = len(KREA2_TAP_LAYERS)
-                        logger.info(
-                            "[HSWQ NVFP4] txtlayers <- len(KREA2_TAP_LAYERS)=%s "
-                            "(no orig_shape on projector)",
-                            unet_config["txtlayers"],
-                        )
-            except Exception as e:
-                logger.warning("[HSWQ NVFP4] txtlayers fix skipped: %s", e)
+    return unet_config
 
+
+def fix_krea2_txtlayers(unet_config: dict, state_dict: dict, key_prefix: str) -> dict:
+    """Krea2-only: restore txtlayers from the packed projector's logical in_features.
+
+    Stock comfy.model_detection sets ``txtlayers = projector.weight.shape[1]``,
+    which for an NVFP4-packed projector is K'//2 (e.g. 8) instead of the true
+    txtlayers (12). Correct it from comfy_quant orig_shape/in_features, else
+    from KREA2_TAP_LAYERS length (matches the CLIP fused width). Idempotent and
+    safe to run even when ``fix_unet_config_packed_dims`` already ran.
+    """
+    if not isinstance(unet_config, dict) or unet_config.get("txtlayers") is None:
+        return unet_config
+    proj = f"{key_prefix}txtfusion.projector.weight"
+    if proj not in state_dict:
+        return unet_config
+    try:
+        logical = _nvfp4_logical_linear_shape(state_dict, proj)
+        if logical is not None and logical[1] is not None:
+            if int(logical[1]) != int(unet_config["txtlayers"]):
+                logger.info(
+                    "[HSWQ NVFP4] txtlayers <- logical in_features=%s (was %s)",
+                    int(logical[1]),
+                    unet_config["txtlayers"],
+                )
+            unet_config["txtlayers"] = int(logical[1])
+        else:
+            cq = decode_comfy_quant_conf(
+                state_dict.get(comfy_quant_key_for_weight(proj))
+            )
+            base = proj[: -len(".weight")]
+            is_proj_nvfp4 = is_nvfp4_conf(cq) or (
+                f"{base}.weight_scale_2" in state_dict
+            )
+            if is_proj_nvfp4:
+                from comfy.text_encoders.krea2 import KREA2_TAP_LAYERS
+
+                unet_config["txtlayers"] = len(KREA2_TAP_LAYERS)
+                logger.info(
+                    "[HSWQ NVFP4] txtlayers <- len(KREA2_TAP_LAYERS)=%s "
+                    "(no orig_shape on projector)",
+                    unet_config["txtlayers"],
+                )
+    except Exception as e:
+        logger.warning("[HSWQ NVFP4] txtlayers fix skipped: %s", e)
     return unet_config

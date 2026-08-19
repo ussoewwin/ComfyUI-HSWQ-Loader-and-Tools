@@ -29,6 +29,7 @@ import logging
 from .nvfp4_conf import (
     checkpoint_looks_like_comfy_quant_nvfp4,
     decode_comfy_quant_conf,
+    fix_krea2_txtlayers,
     fix_unet_config_packed_dims,
     is_nvfp4_conf,
     logical_linear_in_features,
@@ -438,6 +439,33 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         detect_unet_config_patched._hswq_nvfp4_packed_dims = True  # type: ignore[attr-defined]
         calculate_transformer_depth_patched._hswq_nvfp4_packed_dims = True  # type: ignore[attr-defined]
         model_config_from_unet_patched._hswq_nvfp4_packed_dims = True  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------------
+    # 3b) Krea2 txtlayers fix (independent of the shared packed-dims stamp).
+    #     SDXL/ZI fix_unet_config_packed_dims rewrites adm_in_channels and
+    #     context_dim but NOT Krea2 txtlayers; when they own detect_unet_config
+    #     (shared _hswq_nvfp4_packed_dims stamp), the NVFP4-packed projector's
+    #     K'//2 leaks as txtlayers=8 and Krea2 rejects the 12-layer CLIP
+    #     conditioning at _unpack_context. Chain a Krea2-only correction with
+    #     its own stamp (carrying the shared stamp too) so it applies regardless
+    #     of which stack owns detect_unet_config, without growing the chain.
+    # ------------------------------------------------------------------
+    if not getattr(model_detection.detect_unet_config, "_hswq_krea2_txtlayers_fix", False):
+        _prev_detect_txt = model_detection.detect_unet_config
+
+        def detect_unet_config_krea2_txtlayers(state_dict, key_prefix, metadata=None):
+            cfg = _prev_detect_txt(state_dict, key_prefix, metadata=metadata)
+            if cfg is None:
+                return None
+            return fix_krea2_txtlayers(cfg, state_dict, key_prefix)
+
+        detect_unet_config_krea2_txtlayers._hswq_krea2_txtlayers_fix = True  # type: ignore[attr-defined]
+        detect_unet_config_krea2_txtlayers._hswq_nvfp4_packed_dims = True  # type: ignore[attr-defined]
+        model_detection.detect_unet_config = detect_unet_config_krea2_txtlayers
+        _console(
+            "[HSWQ NVFP4] krea2 txtlayers fix installed "
+            "(chains onto detect_unet_config; projector packed-K corrected)"
+        )
 
     # convert_old_quants: own marker (nobody else wraps it) - no chain growth.
     if not getattr(comfy_utils.convert_old_quants, "_hswq_krea2_oldquants", False):
