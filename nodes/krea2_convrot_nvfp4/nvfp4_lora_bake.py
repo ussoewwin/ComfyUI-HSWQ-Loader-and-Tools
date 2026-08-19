@@ -878,10 +878,15 @@ def install_load_models_gpu_bake_hook(force: bool = False) -> bool:
                 patcher = getattr(loaded, "model", None)
                 if patcher is None:
                     continue
-                # Fast skip: no patches AND no baked keys = not our model
+                # Only bake patchers that still carry un-consumed patches. The
+                # Dynamic.load bake consumes the patches (patches_left=0), so a
+                # patcher with no patches here is either already-baked (keep the
+                # residuals!) or LoRA-removed (already cleared by Dynamic.load).
+                # Re-entering run_krea2_nvfp4_lora_bake_on_patcher here with
+                # n_patches==0 would hit its stale-clear branch and wipe the
+                # residuals Dynamic.load just baked.
                 has_patches = bool(getattr(patcher, "patches", None))
-                has_baked = bool(getattr(getattr(patcher, "model", None), "_hswq_krea2_nvfp4_baked_keys", None))
-                if not has_patches and not has_baked:
+                if not has_patches:
                     continue
                 # Skip non-dynamic models
                 try:
