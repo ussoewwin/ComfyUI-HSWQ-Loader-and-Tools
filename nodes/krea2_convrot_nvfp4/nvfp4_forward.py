@@ -34,7 +34,9 @@ _TC_HITS = 0
 _DEQUANT_FALLBACKS = 0
 _CONVROT_ACT_ROTATES = 0
 _RESIDUAL_APPLIED = 0
-_RESIDUAL_LOG_DONE = False
+_RESIDUAL_LOGGED_NAMES = set()
+_RESIDUAL_LOG_MAX = 6
+_RESIDUAL_COUNT_LOGGED = 0
 _LORA_CONVERT_LOGS = 0
 _LORA_SET_LOGS = 0
 _LORA_LOG_MAX = 8
@@ -49,12 +51,13 @@ def reset_nvfp4_lora_log_counters() -> None:
 
 
 def reset_nvfp4_forward_stats() -> None:
-    global _TC_HITS, _DEQUANT_FALLBACKS, _CONVROT_ACT_ROTATES, _RESIDUAL_APPLIED, _RESIDUAL_LOG_DONE
+    global _TC_HITS, _DEQUANT_FALLBACKS, _CONVROT_ACT_ROTATES, _RESIDUAL_APPLIED, _RESIDUAL_LOGGED_NAMES, _RESIDUAL_COUNT_LOGGED
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
     _CONVROT_ACT_ROTATES = 0
     _RESIDUAL_APPLIED = 0
-    _RESIDUAL_LOG_DONE = False
+    _RESIDUAL_LOGGED_NAMES = set()
+    _RESIDUAL_COUNT_LOGGED = 0
 
 
 def nvfp4_forward_stats() -> dict:
@@ -281,7 +284,7 @@ def _add_krea2_lora_residual(module, inp, out):
     """
     import torch
 
-    global _RESIDUAL_APPLIED, _RESIDUAL_LOG_DONE
+    global _RESIDUAL_APPLIED, _RESIDUAL_LOGGED_NAMES, _RESIDUAL_COUNT_LOGGED
     res = getattr(module, "_hswq_krea2_lora_res", None)
     if res is None or out is None:
         return out
@@ -315,13 +318,13 @@ def _add_krea2_lora_residual(module, inp, out):
         acc = term if acc is None else acc + term
     if acc is None:
         return out
-    if not _RESIDUAL_LOG_DONE:
-        _RESIDUAL_LOG_DONE = True
+    _name = getattr(module, "_hswq_nvfp4_name", None) or "?"
+    if len(_RESIDUAL_LOGGED_NAMES) < _RESIDUAL_LOG_MAX and _name not in _RESIDUAL_LOGGED_NAMES:
+        _RESIDUAL_LOGGED_NAMES.add(_name)
         try:
             _rn = float(acc.float().norm())
             _on = float(out.float().norm())
             _ratio = (_rn / _on) if _on > 0.0 else -1.0
-            _name = getattr(module, "_hswq_nvfp4_name", None) or "?"
             _sc = cache[2][0][2] if cache[2] else -1.0
             print(
                 f"[HSWQ Krea2 NVFP4 LoRA] RESIDUAL FORWARD-APPLIED "
@@ -331,6 +334,13 @@ def _add_krea2_lora_residual(module, inp, out):
             )
         except Exception as _e:
             print(f"[HSWQ Krea2 NVFP4 LoRA] RESIDUAL log error: {_e!r}", flush=True)
+    if _RESIDUAL_APPLIED >= _RESIDUAL_COUNT_LOGGED + 256:
+        _RESIDUAL_COUNT_LOGGED = _RESIDUAL_APPLIED
+        print(
+            f"[HSWQ Krea2 NVFP4 LoRA] RESIDUAL count={_RESIDUAL_APPLIED} "
+            f"(distinct_layers_so_far={len(_RESIDUAL_LOGGED_NAMES)})",
+            flush=True,
+        )
     if acc.shape != out.shape:
         # rank-safe: ND input produced (..., out); 2D produced (m, out)
         acc = acc.reshape(out.shape)
