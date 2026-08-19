@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 _TC_HITS = 0
 _DEQUANT_FALLBACKS = 0
 _CONVROT_ACT_ROTATES = 0
+_RESIDUAL_APPLIED = 0
+_RESIDUAL_LOG_DONE = False
 _LORA_CONVERT_LOGS = 0
 _LORA_SET_LOGS = 0
 _LORA_LOG_MAX = 8
@@ -47,10 +49,12 @@ def reset_nvfp4_lora_log_counters() -> None:
 
 
 def reset_nvfp4_forward_stats() -> None:
-    global _TC_HITS, _DEQUANT_FALLBACKS, _CONVROT_ACT_ROTATES
+    global _TC_HITS, _DEQUANT_FALLBACKS, _CONVROT_ACT_ROTATES, _RESIDUAL_APPLIED, _RESIDUAL_LOG_DONE
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
     _CONVROT_ACT_ROTATES = 0
+    _RESIDUAL_APPLIED = 0
+    _RESIDUAL_LOG_DONE = False
 
 
 def nvfp4_forward_stats() -> dict:
@@ -58,6 +62,7 @@ def nvfp4_forward_stats() -> dict:
         "scaled_mm_hits": _TC_HITS,
         "dequant_fallbacks": _DEQUANT_FALLBACKS,
         "convrot_act_rotates": _CONVROT_ACT_ROTATES,
+        "residual_applied": _RESIDUAL_APPLIED,
     }
 
 
@@ -276,9 +281,11 @@ def _add_krea2_lora_residual(module, inp, out):
     """
     import torch
 
+    global _RESIDUAL_APPLIED, _RESIDUAL_LOG_DONE
     res = getattr(module, "_hswq_krea2_lora_res", None)
     if res is None or out is None:
         return out
+    _RESIDUAL_APPLIED += 1
     dev = inp.device
     dt = getattr(inp, "dtype", None)
     if dt is None:
@@ -308,6 +315,22 @@ def _add_krea2_lora_residual(module, inp, out):
         acc = term if acc is None else acc + term
     if acc is None:
         return out
+    if not _RESIDUAL_LOG_DONE:
+        _RESIDUAL_LOG_DONE = True
+        try:
+            _rn = float(acc.float().norm())
+            _on = float(out.float().norm())
+            _ratio = (_rn / _on) if _on > 0.0 else -1.0
+            _name = getattr(module, "_hswq_nvfp4_name", None) or "?"
+            _sc = cache[2][0][2] if cache[2] else -1.0
+            print(
+                f"[HSWQ Krea2 NVFP4 LoRA] RESIDUAL FORWARD-APPLIED "
+                f"name={_name} terms={len(cache[2])} scale={_sc} "
+                f"|res|/|out|={_ratio:.6f}",
+                flush=True,
+            )
+        except Exception as _e:
+            print(f"[HSWQ Krea2 NVFP4 LoRA] RESIDUAL log error: {_e!r}", flush=True)
     if acc.shape != out.shape:
         # rank-safe: ND input produced (..., out); 2D produced (m, out)
         acc = acc.reshape(out.shape)
