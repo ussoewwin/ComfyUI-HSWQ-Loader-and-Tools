@@ -546,40 +546,6 @@ def _probe_path_needs_hswq_int8_conv2d(path: str) -> bool:
         return True
 
 
-def checkpoint_is_krea2(state_dict_or_path) -> bool:
-    """True if checkpoint is Krea2 (DiT carrying the txtfusion projector).
-
-    Krea2's state dict carries ``{prefix}txtfusion.projector.weight``; the
-    txtfusion projector is Krea2-specific. Keyed off that marker (not filename
-    / image_model) so a rename or substring collision cannot flip the answer.
-    """
-    if isinstance(state_dict_or_path, (str, os.PathLike)):
-        return _probe_path_is_krea2(str(state_dict_or_path))
-
-    state_dict = state_dict_or_path
-    keys = getattr(state_dict, "keys", None)
-    if keys is None:
-        return False
-    try:
-        return any(k.endswith("txtfusion.projector.weight") for k in keys())
-    except Exception:
-        return False
-
-
-def _probe_path_is_krea2(path: str) -> bool:
-    """Lightweight safetensors probe for the Krea2 txtfusion projector."""
-    try:
-        from safetensors import safe_open
-    except ImportError:
-        return "krea" in os.path.basename(path).lower()
-    try:
-        with safe_open(path, framework="pt", device="cpu") as f:
-            return any(k.endswith("txtfusion.projector.weight") for k in f.keys())
-    except Exception as e:
-        logger.debug("[HSWQ INT8] krea2 probe failed for %s: %s", path, e)
-        return "krea" in os.path.basename(path).lower()
-
-
 def _probe_path_comfy_quant_convrot(path: str) -> bool:
     """Lightweight safetensors probe for comfy_quant.convrot=true."""
     try:
@@ -2454,48 +2420,6 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
                 "[HSWQ INT8] clear Z Image NVFP4 contamination for Krea2 failed: %s", e
             )
         model_options = {}
-        # Krea2 ConvRot INT8 needs the SAME low-rank residual LoRA bake +
-        # forward as Krea2 ConvRot NVFP4 (INT8 8-bit requant rounds away small
-        # style-LoRA deltas just like 4-bit). Gate on the Krea2 txtfusion
-        # projector only - never other DiT (FLUX), SDXL, or Z Image ConvRot INT8.
-        is_krea2 = checkpoint_is_krea2(unet_path)
-        krea2_bake_ok = False
-        if is_krea2:
-            try:
-                from ..nodes.krea2_convrot_nvfp4.comfy_quant_nvfp4 import (
-                    apply_comfy_quant_nvfp4_patches,
-                )
-                from ..nodes.krea2_convrot_nvfp4.nvfp4_lora_bake import (
-                    install_krea2_nvfp4_lora_bake,
-                    reset_krea2_nvfp4_lora_bake_log_counters,
-                )
-                from ..nodes.krea2_convrot_nvfp4.nvfp4_forward import (
-                    reset_nvfp4_forward_stats,
-                    reset_nvfp4_lora_log_counters,
-                )
-
-                if apply_comfy_quant_nvfp4_patches():
-                    krea2_bake_ok = install_krea2_nvfp4_lora_bake(force=True)
-                reset_nvfp4_forward_stats()
-                reset_nvfp4_lora_log_counters()
-                reset_krea2_nvfp4_lora_bake_log_counters()
-                if krea2_bake_ok:
-                    logging.info(
-                        "[HSWQ INT8] Krea2 ConvRot INT8 residual LoRA bake+forward "
-                        "installed: %s",
-                        unet_name,
-                    )
-                else:
-                    logging.warning(
-                        "[HSWQ INT8] Krea2 ConvRot INT8 residual LoRA install "
-                        "failed; LoRA stays stock (requant): %s",
-                        unet_name,
-                    )
-            except Exception as e:
-                logging.warning(
-                    "[HSWQ INT8] Krea2 ConvRot INT8 LoRA install failed: %s", e
-                )
-
         logging.info(
             "[HSWQ INT8] DiT/Krea2 ConvRot — stock-equivalent load "
             "(no INT8 Conv2d patches): %s",
@@ -2506,14 +2430,6 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
             flush=True,
         )
         model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
-        if krea2_bake_ok:
-            # Stamp for the Krea2 bake hook (mirrors the NVFP4 loader stamp; the
-            # inner-model stamp survives ModelPatcher clones made by LoRA nodes).
-            model._hswq_krea2_nvfp4_pack = True
-            inner_model = getattr(model, "model", None)
-            if inner_model is not None:
-                inner_model._hswq_krea2_nvfp4_pack = True
-
     elif is_int8:
         apply_comfy_quant_int8_patches()
         model_options = {}
