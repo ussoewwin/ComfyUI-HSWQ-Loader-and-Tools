@@ -595,6 +595,17 @@ def run_krea2_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str = 
                 pass
         return False
     # Keep only keys this patcher still patches; clear stale residuals first.
+    # Idempotency: if this patcher's LoRA run was already baked (same
+    # patches_uuid), the only patches left are non-QT (float) layers that the
+    # bake intentionally leaves for the stock path. Re-entering here (the
+    # load_models_gpu hook fires after Dynamic.load) would clear the residuals
+    # we just baked, because _clear_stale_lora_residuals only keeps the
+    # leftover patch keys. Skip instead.
+    _uuid = getattr(patcher, "patches_uuid", None)
+    if _uuid is not None and getattr(
+        model, "_hswq_krea2_nvfp4_baked_uuid", None
+    ) == _uuid:
+        return True
     _clear_stale_lora_residuals(patcher, set(patches.keys()))
     if device_to is None:
         device_to = getattr(patcher, "load_device", None)
