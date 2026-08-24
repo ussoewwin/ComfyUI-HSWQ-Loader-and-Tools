@@ -7,6 +7,13 @@
   </tr>
 </table>
 
+## Version 3.4.2
+
+- **修复**：**HSWQ Torch Compile** 在日语 Windows 上的崩溃 — `BackendCompilerFailed`（`AssertionError: Mixing fake modes NYI`，backend=`inductor`），发生于 USDU + Lumina2 NVFP4 + HSWQ Torch Compile，修复了两个根本原因：
+  - **`Mixing fake modes NYI`**：NVFP4 FP4 反量化 LUT（`F.embedding`）在 inductor AOT fake tracing 下重新进入分派。`hswq::dequantize_nvfp4` 现在是带有 `register_fake` 元内核的 `torch.library.custom_op`（数值一致）。
+  - **cp932 `UnicodeDecodeError`**：torch inductor 的 `load_template` 通过裸 `open()` 在 Windows ANSI 代码页上读取 `*.py.jinja`。新增幂等的 `win_utf8_patch.py`（从 `prestartup_script.py` 和 `__init__.py` 加载）强制 UTF-8，使 `torch.compile(backend="inductor")` 现在无需 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` 即可运行。
+- 详情见 [发布说明 v3.4.2](v3.4.2.md)。
+
 ## Version 3.4.1
 
 - **新增 / 发布**：**Z Image / ZIT Hybrid ConvRot NVFP4** 量化方法与已发布模型。混合包将 **Linear NVFP4（Tensor Core `scaled_mm_nvfp4`）** 与 **INT8 protect（Conv2d / 敏感度选择）层** 结合，通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（`weight_dtype`：`ConvRot NVFP4`）走与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock GEMM + online act rotate），与 SDXL 的 Tensor Core 产品路径分离。已发布模型：`Hybrid-Sensitivity-Weighted-Quantization-Z-Image-Hybrid-ConvRot-NVFP4`。README 现已列出全部已发布的 HSWQ 包（SDXL ConvRot INT8 / SDXL ConvRot NVFP4 / Z Image ConvRot NVFP4）。
