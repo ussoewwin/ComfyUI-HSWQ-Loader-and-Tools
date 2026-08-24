@@ -70,8 +70,59 @@ def zi_use_tensorcore(unet_path) -> bool:
     return checkpoint_has_input_scale(unet_path)
 
 
+def _patch_load_model_weights_warnings() -> None:
+    """Filter expected missing/unexpected keys out of BaseModel.load_model_weights.
+
+    ComfyUI standard load (load_diffusion_model_state_dict -> get_model ->
+    BaseModel.load_model_weights) reports with strict=False:
+    - missing `*input_scale`: NVFP4 packs use dynamic quantization
+      (zi_nvfp4_forward reads getattr(self, "input_scale", None)); optional.
+    - unexpected `*.comfy_quant`: quantization markers consumed by the
+      quant-load patches, not model parameters.
+
+    Both are by-design; keep the warning only for truly unexpected keys.
+    ComfyUI-master files are NEVER modified (runtime patch only).
+    """
+    import logging
+
+    import comfy.model_base as mb
+
+    if getattr(mb.BaseModel.load_model_weights, "_hswq_warn_filter", False):
+        return
+    prev = mb.BaseModel.load_model_weights
+
+    def _filtered(self, sd, unet_prefix="", assign=False):
+        to_load = {}
+        keys = list(sd.keys())
+        for k in keys:
+            if k.startswith(unet_prefix):
+                to_load[k[len(unet_prefix):]] = sd.pop(k)
+        to_load = self.model_config.process_unet_state_dict(to_load)
+        m, u = self.diffusion_model.load_state_dict(to_load, strict=False, assign=assign)
+        n_m, n_u = len(m), len(u)
+        m = [x for x in m if not x.endswith("input_scale")]
+        u = [x for x in u if ".comfy_quant" not in x]
+        n_filt = (n_m - len(m)) + (n_u - len(u))
+        if n_filt:
+            print(
+                f"  [HSWQ NVFP4] load warnings filtered: {n_filt} expected keys "
+                "(input_scale missing / comfy_quant markers)",
+                flush=True,
+            )
+        if len(m) > 0:
+            logging.warning("unet missing: {}".format(m))
+        if len(u) > 0:
+            logging.warning("unet unexpected: {}".format(u))
+        del to_load
+        return self
+
+    _filtered._hswq_warn_filter = True
+    mb.BaseModel.load_model_weights = _filtered
+
+
 def apply_nvfp4_patches(unet_path=None) -> None:
     """Arm Z Image ConvRot NVFP4 (TC if calibrated, else parity) + INT8 load."""
+    _patch_load_model_weights_warnings()
     from .zi_comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
     from ...patches.comfy_quant_int8 import apply_comfy_quant_int8_patches
     from .nvfp4_comfy_parity import (
@@ -157,6 +208,7 @@ def _ensure_dynamic_load_bake_wrap() -> None:
 
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     """Load Z Image / ZIT UNet with ConvRot NVFP4 (TC if calibrated, else parity)."""
+    _patch_load_model_weights_warnings()
     import folder_paths
     import comfy.sd
 
