@@ -59,11 +59,14 @@ def zi_use_tensorcore(unet_path) -> bool:
     them the W4A4 path quantizes activations against placeholder ones(1) ->
     SSIM collapse, so we keep parity in that case.
 
-    Override (highest priority escape hatch): HSWQ_ZI_FORCE_PARITY=1 forces
-    parity even on calibrated checkpoints.
+    Overrides (priority order):
+      HSWQ_ZI_FORCE_PARITY=1  -> always parity (escape hatch).
+      HSWQ_ZI_FORCE_TC=1      -> always TC (bench A/B; assumes calibrated scale).
     """
     if os.environ.get("HSWQ_ZI_FORCE_PARITY", "").strip() == "1":
         return False
+    if os.environ.get("HSWQ_ZI_FORCE_TC", "").strip() == "1":
+        return True
     return checkpoint_has_input_scale(unet_path)
 
 
