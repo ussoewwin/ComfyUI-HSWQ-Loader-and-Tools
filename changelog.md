@@ -7,6 +7,13 @@
   </tr>
 </table>
 
+## Version 3.4.2
+
+- **Fixed**: **HSWQ Torch Compile** crash on Japanese Windows — `BackendCompilerFailed` (`AssertionError: Mixing fake modes NYI`, backend=`inductor`) during USDU + Lumina2 NVFP4 + HSWQ Torch Compile, with two root causes fixed:
+  - **`Mixing fake modes NYI`**: the NVFP4 FP4 dequant LUT (`F.embedding`) re-entered the dispatcher under inductor AOT fake tracing. `hswq::dequantize_nvfp4` is now a `torch.library.custom_op` with a `register_fake` meta kernel (numerics identical).
+  - **cp932 `UnicodeDecodeError`**: torch inductor's `load_template` reads `*.py.jinja` via a bare `open()` on the Windows ANSI code page. A new idempotent `win_utf8_patch.py` (loaded from `prestartup_script.py` and `__init__.py`) forces UTF-8, so `torch.compile(backend="inductor")` now runs without `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`.
+- See [Release Notes v3.4.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.2) for details.
+
 ## Version 3.4.1
 
 - **Added / Published**: **Z Image / ZIT Hybrid ConvRot NVFP4** quantization method and published models. Hybrid packs combine **Linear NVFP4 (Tensor Core `scaled_mm_nvfp4`)** with **INT8-protected (Conv2d / sensitivity-selected) layers**, loaded through the **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `ConvRot NVFP4`) on the bench-matched **Comfy parity** path (stock GEMM + online act rotate), separate from the SDXL Tensor Core product path. Published models: `Hybrid-Sensitivity-Weighted-Quantization-Z-Image-Hybrid-ConvRot-NVFP4`. README now lists all published HSWQ packs (SDXL ConvRot INT8 / SDXL ConvRot NVFP4 / Z Image ConvRot NVFP4).
