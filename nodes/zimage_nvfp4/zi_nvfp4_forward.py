@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 # Counters for bench / diagnostics (reset per run if needed)
 _TC_HITS = 0
 _DEQUANT_FALLBACKS = 0
+_TC_FLOPS = 0
 # Per-kind totals (always incremented) + per-kind sample log caps.
 # Shared max of 8 hid all int8_protect samples (nvfp4 filled the quota first).
 _LORA_CONVERT_TOTAL = {"nvfp4": 0, "int8_protect": 0}
@@ -66,9 +67,10 @@ def reset_nvfp4_lora_log_counters() -> None:
 
 
 def reset_nvfp4_forward_stats() -> None:
-    global _TC_HITS, _DEQUANT_FALLBACKS
+    global _TC_HITS, _DEQUANT_FALLBACKS, _TC_FLOPS
     _TC_HITS = 0
     _DEQUANT_FALLBACKS = 0
+    _TC_FLOPS = 0
 
 
 def _lora_bake_kind(module) -> str:
@@ -246,7 +248,11 @@ def _linear_convrot_lora_groupsize(module) -> int | None:
 
 
 def nvfp4_forward_stats() -> dict:
-    return {"scaled_mm_hits": _TC_HITS, "dequant_fallbacks": _DEQUANT_FALLBACKS}
+    return {
+        "scaled_mm_hits": _TC_HITS,
+        "dequant_fallbacks": _DEQUANT_FALLBACKS,
+        "tc_flops": _TC_FLOPS,
+    }
 
 
 def _slice_nvfp4_mm_out(result, orig_m: int, orig_n: int):
@@ -333,7 +339,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
     Prefers CUDA Graph (quantize+mm) after first capture per shape/weight; falls
     back to eager pooled kernels if capture/replay fails.
     """
-    global _TC_HITS, _DEQUANT_FALLBACKS
+    global _TC_HITS, _DEQUANT_FALLBACKS, _TC_FLOPS
     import torch
     from comfy_kitchen.tensor.base import QuantizedTensor
     from comfy_kitchen.tensor.nvfp4 import TensorCoreNVFP4Layout
@@ -360,6 +366,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
     scale_a = ensure_act_scale(input_2d, act_scale)
     try:
         w_qdata, scale_b, block_scale_b, orig_n = _plain_weight_cached(module, weight_qt)
+        flops = orig_m * orig_k * orig_n * 2
 
         # Calib input_scale and placeholder ones are static — always cache
         # alpha. Recomputing scale_a*scale_b every Linear (~18k/sample) was
@@ -398,6 +405,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
                     orig_n=orig_n,
                 )
                 _TC_HITS += 1
+                _TC_FLOPS += flops
                 return result
             except torch.cuda.OutOfMemoryError:
                 clear_nvfp4_cudagraphs()
@@ -436,6 +444,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
             orig_n=orig_n,
         )
         _TC_HITS += 1
+        _TC_FLOPS += flops
         return result
     except (RuntimeError, TypeError, ValueError) as e:
         logger.warning("[HSWQ NVFP4] pooled TC path failed: %s", e)
