@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.4.3
+
+- **新增**：**Z Image Hybrid ConvRot NVFP4 — Tensor Core（TC / W4A4）opt-in 路径**。Z Image 的 Linear 热路径现在可以以 **W4A4 TC**（NVFP4 权重 × 4-bit 旋转激活，走原始 `cublas_gemm_blockwise_fp4` GEMM）运行，取代之前的 **Comfy parity W4A16**（NVFP4 权重 × fp16 激活）。由 **轨迹保真度验证** 把关 — 最终 cos ≈ parity（0.951 vs 0.952，0 分叉）— 因此 TC 不会带来系统性质量损失，同时解锁 Tensor Core 加速。
+  - **`input_scale` 校准**：TC 需要每层校准过的 `input_scale`（在旋转域中测得 `amax / 2688`，独立的 `calib_input_scale_nvfp4.py` 步骤 — 非直方图搜索）。把未校准的 checkpoint 强制走 TC 会导致质量崩溃。
+  - **Loader opt-in 优先级**：`HSWQ_ZI_FORCE_PARITY=1` > `HSWQ_ZI_FORCE_TC=1` > 自动检测 `*.input_scale`；`checkpoint_has_input_scale()` / `zi_use_tensorcore()` 控制该路径。
+  - **GEMM 模式明确化**：addmm（`scaled_mm` 命中 vs 反量化回退）与 parity/TC 前向计数器使日志中的激活模式一目了然。
+- 详情见 [发布说明 v3.4.3](v3.4.3.md)。
+
 ## Version 3.4.2
 
 - **修复**：**HSWQ Torch Compile** 在日语 Windows 上的崩溃 — `BackendCompilerFailed`（`AssertionError: Mixing fake modes NYI`，backend=`inductor`），发生于 USDU + Lumina2 NVFP4 + HSWQ Torch Compile，修复了两个根本原因：

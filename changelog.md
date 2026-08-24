@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.4.3
+
+- **Added**: **Z Image Hybrid ConvRot NVFP4 — Tensor Core (TC / W4A4) opt-in path**. The Z Image Linear hot path can now run as **W4A4 TC** (NVFP4 weights × 4-bit rotated activations on the raw `cublas_gemm_blockwise_fp4` GEMM) instead of the previous **Comfy parity W4A16** (NVFP4 weights × fp16 activations). Gated by **trajectory-fidelity validation** — final-cos ≈ parity (0.951 vs 0.952, 0 bifurcation) — so TC adds no systematic quality loss while unlocking the Tensor Core speedup.
+  - **`input_scale` calibration**: TC requires a per-layer calibrated `input_scale` (measured `amax / 2688` in the rotated domain, standalone `calib_input_scale_nvfp4.py` step — not histogram-searched). Forcing TC on an uncalibrated checkpoint collapses quality.
+  - **Loader opt-in priority**: `HSWQ_ZI_FORCE_PARITY=1` > `HSWQ_ZI_FORCE_TC=1` > auto-detect `*.input_scale`; `checkpoint_has_input_scale()` / `zi_use_tensorcore()` gate the path.
+  - **GEMM-mode clarity**: addmm (`scaled_mm` hits vs dequant fallbacks) + parity/TC forward counters make the active mode unambiguous in logs.
+- See [Release Notes v3.4.3](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.3) for details.
+
 ## Version 3.4.2
 
 - **Fixed**: **HSWQ Torch Compile** crash on Japanese Windows — `BackendCompilerFailed` (`AssertionError: Mixing fake modes NYI`, backend=`inductor`) during USDU + Lumina2 NVFP4 + HSWQ Torch Compile, with two root causes fixed:
