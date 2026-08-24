@@ -15,6 +15,7 @@ All logic under ``nodes/zimage_nvfp4``. Does not edit ``nodes/nvfp4`` (SDXL TC).
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 # ZI/Krea UNet dropdown ONLY — never share the SDXL Checkpoint Loader string.
@@ -27,8 +28,47 @@ _INSTALL_HOOKED = False
 logger = logging.getLogger(__name__)
 
 
-def apply_nvfp4_patches() -> None:
-    """Arm Z Image ConvRot NVFP4 (parity) + INT8 load (core ConvRot)."""
+def checkpoint_has_input_scale(unet_path) -> bool:
+    """True if the checkpoint carries >=1 calibrated ``*.input_scale`` key.
+
+    Peek the safetensors header only (no tensor data). Returns False on any
+    error so an unreadable / uncalibrated checkpoint stays on the safe parity
+    path (stock GEMM + online act rotate).
+    """
+    if not unet_path or not isinstance(unet_path, str):
+        return False
+    try:
+        from safetensors import safe_open
+
+        with safe_open(unet_path, framework="pt", device="cpu") as f:
+            for k in f.keys():
+                if k.endswith(".input_scale"):
+                    return True
+        return False
+    except Exception as e:  # noqa: BLE001 - probe must never raise
+        logger.warning(
+            "[HSWQ NVFP4] input_scale probe failed (%s); assume parity", e
+        )
+        return False
+
+
+def zi_use_tensorcore(unet_path) -> bool:
+    """Decide TC (W4A4) vs parity (stock GEMM) for a Z Image NVFP4 pack.
+
+    TC requires calibrated ``.input_scale`` keys in the checkpoint. Without
+    them the W4A4 path quantizes activations against placeholder ones(1) ->
+    SSIM collapse, so we keep parity in that case.
+
+    Override (highest priority escape hatch): HSWQ_ZI_FORCE_PARITY=1 forces
+    parity even on calibrated checkpoints.
+    """
+    if os.environ.get("HSWQ_ZI_FORCE_PARITY", "").strip() == "1":
+        return False
+    return checkpoint_has_input_scale(unet_path)
+
+
+def apply_nvfp4_patches(unet_path=None) -> None:
+    """Arm Z Image ConvRot NVFP4 (TC if calibrated, else parity) + INT8 load."""
     from .zi_comfy_quant_nvfp4 import apply_comfy_quant_nvfp4_patches
     from ...patches.comfy_quant_int8 import apply_comfy_quant_int8_patches
     from .nvfp4_comfy_parity import (
@@ -42,13 +82,25 @@ def apply_nvfp4_patches() -> None:
             "[HSWQ NVFP4] Z Image: apply_comfy_quant_nvfp4_patches failed "
             "(detect/load/LoRA bake required; see nodes/zimage_nvfp4/zi_comfy_quant_nvfp4)"
         )
-    # Replace TC Linear.forward with stock GEMM + act rotate (not double-rotate).
-    if not apply_nvfp4_comfy_parity():
-        raise RuntimeError(
-            "[HSWQ NVFP4] Z Image: apply_nvfp4_comfy_parity failed "
-            "(stock GEMM + act rotate required; TC destroys SSIM)"
+    if zi_use_tensorcore(unet_path):
+        # Keep HSWQ TC (W4A4) Linear.forward: checkpoint has calibrated input_scale.
+        # Register NVFP4 aten.addmm (F.linear fallback of the pooled TC path).
+        from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
+
+        register_nvfp4_addmm_handler()
+        print(
+            "  [HSWQ NVFP4] Z Image: TC (W4A4) forward kept "
+            "(calibrated input_scale detected)",
+            flush=True,
         )
-    require_convrot_parity_forward()
+    else:
+        # Replace TC Linear.forward with stock GEMM + act rotate (not double-rotate).
+        if not apply_nvfp4_comfy_parity():
+            raise RuntimeError(
+                "[HSWQ NVFP4] Z Image: apply_nvfp4_comfy_parity failed "
+                "(stock GEMM + act rotate required; TC destroys SSIM)"
+            )
+        require_convrot_parity_forward()
     # INT8 tensorwise load only — ConvRot INT8 remains ComfyUI core / kitchen.
     apply_comfy_quant_int8_patches()
     # After INT8 Dynamic bake wrap: force ConvRot NVFP4 LoRA bake outermost.
@@ -58,7 +110,7 @@ def apply_nvfp4_patches() -> None:
             "(Dynamic ConvRot NVFP4 LoRA bake required)"
         )
     print(
-        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 (comfy_parity) + INT8 ConvRot "
+        "  [HSWQ NVFP4] Z Image: ConvRot NVFP4 + INT8 ConvRot "
         "+ Dynamic NVFP4 LoRA bake",
         flush=True,
     )
@@ -101,7 +153,7 @@ def _ensure_dynamic_load_bake_wrap() -> None:
 
 
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
-    """Load Z Image / ZIT UNet with ConvRot NVFP4 parity (not SDXL TC forward)."""
+    """Load Z Image / ZIT UNet with ConvRot NVFP4 (TC if calibrated, else parity)."""
     import folder_paths
     import comfy.sd
 
@@ -128,12 +180,23 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
             "[HSWQ NVFP4] Z Image UNet requires NVFP4 detect/load/LoRA bake "
             "(zi_comfy_quant_nvfp4.apply_comfy_quant_nvfp4_patches)"
         )
-    if not apply_nvfp4_comfy_parity():
-        raise RuntimeError(
-            "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
-            "(stock GEMM + act rotate; not HSWQ TC Linear.forward)"
+    if zi_use_tensorcore(unet_path):
+        # Keep HSWQ TC (W4A4) forward: calibrated input_scale present.
+        from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
+
+        register_nvfp4_addmm_handler()
+        print(
+            "  [HSWQ NVFP4] Z Image: TC (W4A4) forward kept "
+            "(calibrated input_scale detected)",
+            flush=True,
         )
-    require_convrot_parity_forward()
+    else:
+        if not apply_nvfp4_comfy_parity():
+            raise RuntimeError(
+                "[HSWQ NVFP4] Z Image UNet requires comfy_parity "
+                "(stock GEMM + act rotate; not HSWQ TC Linear.forward)"
+            )
+        require_convrot_parity_forward()
     # Mixed pack: Linear=nvfp4 parity, INT8 = ComfyUI core ConvRot path.
     apply_comfy_quant_int8_patches()
     if not install_zimage_nvfp4_lora_bake(force=True):
@@ -151,7 +214,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
         weight_dtype,
     )
     print(
-        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / comfy_parity): {unet_name}",
+        f"[HSWQ NVFP4] Loading UNet (ConvRot NVFP4): {unet_name}",
         flush=True,
     )
     with _int8_quant_conv_scope():
