@@ -20,6 +20,18 @@ import importlib
 import os
 import sys
 
+# --- cp932 → UTF-8: apply before any file is read with the locale encoding ---
+import importlib.util as _ilu
+import os as _os
+
+_utf8_patch_spec = _ilu.spec_from_file_location(
+    "win_utf8_patch",
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "win_utf8_patch.py"),
+)
+_utf8_patch_mod = _ilu.module_from_spec(_utf8_patch_spec)
+_utf8_patch_spec.loader.exec_module(_utf8_patch_mod)
+del _ilu, _os, _utf8_patch_spec, _utf8_patch_mod
+
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _PATCHED = False

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import torch
+
 # FP4 E2M1 decode LUT (same values as kitchen float_utils / eager dequant).
 _E2M1_VALUES = (
     0.0,
@@ -38,6 +40,15 @@ _E2M1_VALUES = (
     -6.0,
 )
 _E2M1_LUT_CACHE: dict = {}
+
+# dtype ↔ int code for the ``hswq::dequantize_nvfp4`` custom-op schema.
+_DTYPE_TO_CODE = {
+    torch.float32: 0,
+    torch.float16: 1,
+    torch.bfloat16: 2,
+    torch.float64: 3,
+}
+_CODE_TO_DTYPE = {v: k for k, v in _DTYPE_TO_CODE.items()}
 
 
 def _ceil_div(a: int, b: int) -> int:
@@ -62,8 +73,6 @@ def from_blocked(blocked_matrix, num_rows: int, num_cols: int):
 
 def clear_cuda_sticky_error() -> None:
     try:
-        import torch
-
         if not torch.cuda.is_available():
             return
         try:
@@ -74,19 +83,15 @@ def clear_cuda_sticky_error() -> None:
         pass
 
 
-def dequantize_nvfp4(
-    qx,
-    per_tensor_scale,
-    block_scales,
-    output_type=None,
-    *,
-    hi_first: bool = True,
-):
-    """Unpack NVFP4 uint8×2 + block scales → dense float tensor (HSWQ-owned)."""
-    import torch
-
-    if output_type is None:
-        output_type = torch.bfloat16
+def _dequantize_nvfp4_op_impl(
+    qx: torch.Tensor,
+    per_tensor_scale: torch.Tensor,
+    block_scales: torch.Tensor,
+    output_dtype_code: int,
+    hi_first: bool,
+) -> torch.Tensor:
+    """Real (eager) NVFP4 dequant body — same math as the pre-compile LUT path."""
+    output_type = _CODE_TO_DTYPE[output_dtype_code]
 
     key = (str(qx.device), output_type)
     lut = _E2M1_LUT_CACHE.get(key)
@@ -111,15 +116,79 @@ def dequantize_nvfp4(
     block_scales_unswizzled = from_blocked(
         block_scales, num_rows=orig_shape[0], num_cols=num_blocks_per_row
     )
-    if not isinstance(per_tensor_scale, torch.Tensor):
-        per_tensor_scale = torch.tensor(
-            per_tensor_scale, device=qx.device, dtype=torch.float32
-        )
     if per_tensor_scale.device != qx.device or per_tensor_scale.dtype != output_type:
         per_tensor_scale = per_tensor_scale.to(device=qx.device, dtype=output_type)
     total_scale = per_tensor_scale * block_scales_unswizzled.to(output_type)
     data_dequantized = out * total_scale.unsqueeze(-1)
     return data_dequantized.view(orig_shape).to(output_type)
+
+
+@torch.library.custom_op("hswq::dequantize_nvfp4", mutates_args=())
+def _dequantize_nvfp4_op(  # noqa: F811  (op impl is decorated below)
+    qx: torch.Tensor,
+    per_tensor_scale: torch.Tensor,
+    block_scales: torch.Tensor,
+    output_dtype_code: int,
+    hi_first: bool,
+) -> torch.Tensor:
+    """Registered custom op wrapping the HSWQ LUT dequant.
+
+    Why an op at all: the raw LUT body uses ``F.embedding``, which PyTorch
+    wraps in ``torch._compile.disable``. When the addmm/linear dispatch handler
+    runs under inductor's AOT metadata pass (FX interpreter with FakeTensor
+    args from two FakeTensorModes), that disabled-but-fake-executed embedding
+    re-enters dispatch and raises ``AssertionError: Mixing fake modes NYI`` →
+    ``BackendCompilerFailed``. Wrapping the decode as a custom op with a
+    ``register_fake`` meta kernel makes it opaque to the tracer: fake tracing
+    only runs the shape-only fake impl below, and the eager body runs only on
+    real tensors. Identical numerics to the pre-compile path.
+    """
+    return _dequantize_nvfp4_op_impl(
+        qx, per_tensor_scale, block_scales, output_dtype_code, hi_first
+    )
+
+
+@_dequantize_nvfp4_op.register_fake
+def _dequantize_nvfp4_op_fake(
+    qx, per_tensor_scale, block_scales, output_dtype_code, hi_first
+):
+    output_type = _CODE_TO_DTYPE[output_dtype_code]
+    return torch.empty(
+        (*qx.shape[:-1], qx.shape[-1] * 2),
+        dtype=output_type,
+        device=qx.device,
+    )
+
+
+def dequantize_nvfp4(
+    qx,
+    per_tensor_scale,
+    block_scales,
+    output_type=None,
+    *,
+    hi_first: bool = True,
+):
+    """Unpack NVFP4 uint8×2 + block scales → dense float tensor (HSWQ-owned).
+
+    Thin wrapper over the ``hswq::dequantize_nvfp4`` custom op (compile-safe).
+    """
+    if output_type is None:
+        output_type = torch.bfloat16
+
+    if not isinstance(per_tensor_scale, torch.Tensor):
+        per_tensor_scale = torch.tensor(
+            per_tensor_scale, device=qx.device, dtype=torch.float32
+        )
+    if per_tensor_scale.device != qx.device:
+        per_tensor_scale = per_tensor_scale.to(device=qx.device)
+
+    return _dequantize_nvfp4_op(
+        qx,
+        per_tensor_scale,
+        block_scales,
+        _DTYPE_TO_CODE[output_type],
+        bool(hi_first),
+    )
 
 
 def hswq_scaled_mm_nvfp4(
