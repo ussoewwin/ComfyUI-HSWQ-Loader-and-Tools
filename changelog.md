@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.4
+
+- **Added**: **HSWQ Load ConvRot INT8 ControlNet Model** (`HSWQLoadConvRotINT8ControlNet`) — Loads ConvRot / TensorWise INT8-quantized ControlNet checkpoints (e.g., Qwen Image Fun ControlNet) keeping weights INT8 in VRAM with `comfy_kitchen` `int8_linear` execution. Resolves stock ComfyUI `controlnet_load_state_dict` INT8 initialization crashes by forcing BF16 module graph construction with explicit `int8_tensorwise` MixedPrecisionOps injection.
+- See [Release Notes v3.4.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.4) for details.
+
 ## Version 3.4.3
 
 - **Added**: **Z Image Hybrid ConvRot NVFP4 — Tensor Core (TC / W4A4) opt-in path**. The Z Image Linear hot path can now run as **W4A4 TC** (NVFP4 weights × 4-bit rotated activations on the raw `cublas_gemm_blockwise_fp4` GEMM) instead of the previous **Comfy parity W4A16** (NVFP4 weights × fp16 activations). Gated by **trajectory-fidelity validation** — final-cos ≈ parity (0.951 vs 0.952, 0 bifurcation) — so TC adds no systematic quality loss while unlocking the Tensor Core speedup.

@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.4
+
+- **新增**：**HSWQ Load ConvRot INT8 ControlNet Model**（`HSWQLoadConvRotINT8ControlNet`）节点 —— 支持在 ComfyUI 中直接加载 ConvRot / TensorWise INT8 量化 ControlNet（如 Qwen Image Fun ControlNet 等），权重在显存中保持 INT8 并走 `comfy_kitchen` 的 `int8_linear` 执行；通过强制 BF16 模块图构建与显式注入 `int8_tensorwise` MixedPrecisionOps，解决 ComfyUI 原生 `controlnet_load_state_dict` 的 INT8 梯度初始化崩溃问题。
+- 详情见 [发布说明 v3.4.4](v3.4.4.md)。
+
 ## Version 3.4.3
 
 - **新增**：**Z Image Hybrid ConvRot NVFP4 — Tensor Core（TC / W4A4）opt-in 路径**。Z Image 的 Linear 热路径现在可以以 **W4A4 TC**（NVFP4 权重 × 4-bit 旋转激活，走原始 `cublas_gemm_blockwise_fp4` GEMM）运行，取代之前的 **Comfy parity W4A16**（NVFP4 权重 × fp16 激活）。由 **轨迹保真度验证** 把关 — 最终 cos ≈ parity（0.951 vs 0.952，0 分叉）— 因此 TC 不会带来系统性质量损失，同时解锁 Tensor Core 加速。
