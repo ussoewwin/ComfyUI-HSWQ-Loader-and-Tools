@@ -1,77 +1,77 @@
-# HSWQ tcon NVFP4 2回目ノイズ問題 完全解説書
+# HSWQ tcon NVFP4 2nd-Generation Noise Issue — Complete Guide
 
-**日付:** 2026-08-27
-**基準コミット:** `1156f00`（ComfyUI-HSWQ-Loader-and-Tools / docs: add v3.4.4 Chinese release notes）
-**対象リポジトリ:**
-- ComfyUI-HSWQ-Loader-and-Tools（`1156f00` → `fdc60bc`）
-- ComfyUI-DistorchMemoryManager（`62c7cbd` → `9854848`）
+**Date:** 2026-08-27
+**Baseline commit:** `1156f00` (ComfyUI-HSWQ-Loader-and-Tools / docs: add v3.4.4 Chinese release notes)
+**Repositories covered:**
+- ComfyUI-HSWQ-Loader-and-Tools (`1156f00` → `fdc60bc`)
+- ComfyUI-DistorchMemoryManager (`62c7cbd` → `9854848`)
 
 ---
 
-## ① 何が問題だったのか
+## ① What Was the Problem
 
-### 症状
+### Symptom
 
-tcon（Z Image TC/W4A4）NVFP4 モデルを使用したワークフローで、**1回目の生成は正常**だが、**DisTorch の HSWQ パージ実行後の2回目生成が完全にノイズ化**する。
+In workflows using tcon (Z Image TC/W4A4) NVFP4 models, **the 1st generation is normal**, but **the 2nd generation after a DisTorch HSWQ purge is completely noise-corrupted**.
 
-### ログでの確証（ベイク結果の対比）
+### Log Evidence (bake result comparison)
 
-| 世代 | ベイク結果 | 状態 |
+| Generation | Bake result | State |
 |------|-----------|------|
-| 1回目 | `nvfp4_baked=86 int8_baked=94` / `NVFP4_LORA_BAKE_OK` | 正常 |
-| 2回目 | `nvfp4_baked=0 other_qt_baked=83` / `NVFP4_LORA_BAKE_N/A` | NVFP4 レイヤーが `other_qt` に誤分類され、ConvRot なしで誤ベイク → ノイズ |
+| 1st | `nvfp4_baked=86 int8_baked=94` / `NVFP4_LORA_BAKE_OK` | Normal |
+| 2nd | `nvfp4_baked=0 other_qt_baked=83` / `NVFP4_LORA_BAKE_N/A` | NVFP4 layers misclassified as `other_qt`, baked without ConvRot → noise |
 
-2回目のログで `nvfp4_baked=0` は、**NVFP4 ConvRot レイヤーが1つも LoRA ベイクされなかった**ことを意味する。NVFP4 レイヤーは重みが Hadamard 回転（ConvRot）された状態で保存されており、LoRA をベイクする際は「逆回転（unrotate）→ LoRA 適用 → 再回転（re-rotate）」の手順が必要。これが実行されないと、回転済み重みに生の LoRA 差分が加算され、重みが壊れてノイズになる。
-
----
-
-## ② 本質的な原因
-
-### 原因の連鎖（4ステップ）
-
-1. **パージが HSWQ のロードラップを剥がす**
-   DisTorch の HSWQ パージは `uninstall_zimage_nvfp4_lora_bake()` を呼び、`ops._load_quantized_module` のラップ（HSWQ が量子化モジュールをロードする際に NVFP4 フラグを武装する処理）を剥がす。このとき `_hswq_nvfp4_full_load` スタンプが失われる。
-
-2. **`apply_comfy_quant_nvfp4_patches()` が早期リターンする**
-   この関数は `_PATCHES_APPLIED` フラグと `stack_ver` だけで「適用済み」と判断し、`_load_quantized_module` のラップが**実際に剥がれているか**を確認していなかった。そのためパージ後も「適用済み」のまま早期リターンし、ラップを再適用しなかった。
-
-3. **再ロード時に NVFP4 フラグが武装されない**
-   `_load_quantized_module` ラップがないと、モデル再ロード時に `arm_nvfp4_module()` が呼ばれず、各 Linear モジュールに `_hswq_nvfp4_convrot` フラグが設定されない。
-
-4. **ベイク関数が NVFP4 を検出できず誤ベイク**
-   LoRA ベイクの際、`_module_is_nvfp4_convrot()` がフラグを確認するが、フラグがないため NVFP4 レイヤーを検出できない。結果として `other_qt`（その他量子化）として処理され、ConvRot の unrotate/re-rotate が実行されず重みが壊れる → ノイズ。
-
-### さらに踏み込んだ背景
-
-- **ComfyUI はローダーノードの出力（MODEL オブジェクト）をキャッシュする**。パージで `current_loaded_models` からモデルが除去されても、ローダーノード自体は再実行されない。そのため「パージ → 次生成」で `load_unet` が走らず、フックの再インストールも起こらなかった。
-- パージの `uninstall_zimage_nvfp4_lora_bake()` は `Dynamic.load` のラップを剥がすが、これは「SDXL に切り替える前に ZI のフックを掃除する」という正しい設計。問題は**剥がした後の再アーム手段がなかった**こと。
+`nvfp4_baked=0` in the 2nd-generation log means **not a single NVFP4 ConvRot layer was LoRA-baked**. NVFP4 layers are stored with weights rotated by a Hadamard transform (ConvRot); baking a LoRA requires the sequence "unrotate → apply LoRA → re-rotate". When that sequence is skipped, raw LoRA deltas are added onto rotated weights, corrupting them and producing noise.
 
 ---
 
-## ③ 追加・修正したファイル名
+## ② Root Cause
 
-### ComfyUI-HSWQ-Loader-and-Tools（`1156f00` → `fdc60bc`）
+### Causal Chain (4 steps)
 
-| ファイル | コミット | 内容 |
+1. **The purge peels HSWQ's load wrap**
+   DisTorch's HSWQ purge calls `uninstall_zimage_nvfp4_lora_bake()`, which peels the wrap on `ops._load_quantized_module` (the wrapper that arms NVFP4 flags when HSWQ loads a quantized module). This drops the `_hswq_nvfp4_full_load` stamp.
+
+2. **`apply_comfy_quant_nvfp4_patches()` early-returns**
+   This function decided "already applied" from `_PATCHES_APPLIED` and `stack_ver` alone, without checking whether the `_load_quantized_module` wrap was **actually still in place**. After a purge it therefore kept early-returning and never re-applied the wrap.
+
+3. **NVFP4 flags are never armed on reload**
+   Without the `_load_quantized_module` wrap, `arm_nvfp4_module()` is not called when the model reloads, so the `_hswq_nvfp4_convrot` flag is never set on the individual Linear modules.
+
+4. **The bake function cannot detect NVFP4 and mis-bakes**
+   During LoRA bake, `_module_is_nvfp4_convrot()` checks the flag. With the flag missing, NVFP4 layers are not detected, so they are handled as `other_qt` (other quantization); the ConvRot unrotate/re-rotate is skipped, the weights are corrupted → noise.
+
+### Deeper Background
+
+- **ComfyUI caches the loader node's output (the MODEL object).** Even though the purge removes the model from `current_loaded_models`, the loader node itself is not re-executed. As a result, `load_unet` never runs between "purge → next generation", so the hooks were never re-installed.
+- The purge's `uninstall_zimage_nvfp4_lora_bake()` peels the `Dynamic.load` wrap — this is correct design ("clean up ZI hooks before switching to SDXL"). The real problem was that **there was no re-arm mechanism after peeling**.
+
+---
+
+## ③ Files Added / Modified
+
+### ComfyUI-HSWQ-Loader-and-Tools (`1156f00` → `fdc60bc`)
+
+| File | Commit | Content |
 |---------|---------|------|
-| `nodes/zimage_nvfp4/load_unet.py` | `d97bb5b` | `_install_permanent_dynamic_load_guard()` を追加。パージで剥がされない恒久ガードで `Dynamic.load` のベイクフックを自動再アーム |
-| `nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py` | `fdc60bc` | `apply_comfy_quant_nvfp4_patches()` の早期リターンに `_load_wrap_ok` 条件を追加。パージでロードラップが剥がれていたら完全再適用 |
+| `nodes/zimage_nvfp4/load_unet.py` | `d97bb5b` | Added `_install_permanent_dynamic_load_guard()` — a permanent guard the purge cannot peel, auto-re-arming the `Dynamic.load` bake hook |
+| `nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py` | `fdc60bc` | Added the `_load_wrap_ok` condition to the early-return in `apply_comfy_quant_nvfp4_patches()` — if the purge peeled the load wrap, fall through to a full re-apply |
 
-### ComfyUI-DistorchMemoryManager（`62c7cbd` → `9854848`）
+### ComfyUI-DistorchMemoryManager (`62c7cbd` → `9854848`)
 
-| ファイル | コミット | 内容 |
+| File | Commit | Content |
 |---------|---------|------|
-| `nodes/purge_vram.py`（本流。`__init__.py` が優先ロード） | `9854848` | HSWQ パージ完了後に `unload_models` + `free_memory` キューフラグを設定し、ComfyUI のローダーノード出力キャッシュを破棄 → 次生成でローダーが再実行され TC スタックが再構築される |
+| `nodes/purge_vram.py` (primary — `__init__.py` prefers this one) | `9854848` | After the HSWQ purge completes, set the `unload_models` + `free_memory` queue flags so ComfyUI drops the cached loader-node output → the loader re-runs on the next prompt and the TC stack is rebuilt |
 
-※ `purge_vram.py`（ルート、レガシーフォールバック）にも `2936341` で同様の修正が入っているが、`__init__.py` は `nodes/purge_vram.py` を優先するため、本流はそちら。
+Note: `purge_vram.py` (root, legacy fallback) received the same fix in `2936341`, but `__init__.py` prefers `nodes/purge_vram.py`, so that is the primary file.
 
 ---
 
-## ④ 追加・修正したコードの全文
+## ④ Full Code Added / Modified (no omissions)
 
-### 4-1. `nodes/zimage_nvfp4/load_unet.py`（`d97bb5b` で追加）
+### 4-1. `nodes/zimage_nvfp4/load_unet.py` (added in `d97bb5b`)
 
-`_ensure_dynamic_load_bake_wrap()` の直後に追加された関数:
+Function added immediately after `_ensure_dynamic_load_bake_wrap()`:
 
 ```python
 def _install_permanent_dynamic_load_guard() -> None:
@@ -111,29 +111,29 @@ def _install_permanent_dynamic_load_guard() -> None:
     Dynamic.load = _guarded_load
 ```
 
-呼び出し追加（2箇所）:
+Call sites added (2 places):
 
 ```python
-# load_unet_nvfp4_weight_dtype() 内（install_zimage_nvfp4_lora_bake の直後）
+# Inside load_unet_nvfp4_weight_dtype() (right after install_zimage_nvfp4_lora_bake)
     _ensure_dynamic_load_bake_wrap()
-    _install_permanent_dynamic_load_guard()   # ← 追加
+    _install_permanent_dynamic_load_guard()   # ← added
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
     reset_zimage_nvfp4_lora_bake_log_counters()
 ```
 
 ```python
-# install_zimage_nvfp4_unet_dispatch() 内の load_unet ラッパー
+# Inside the load_unet wrapper in install_zimage_nvfp4_unet_dispatch()
     def load_unet(self, unet_name, weight_dtype):
         _ensure_dynamic_load_bake_wrap()
-        _install_permanent_dynamic_load_guard()   # ← 追加
+        _install_permanent_dynamic_load_guard()   # ← added
         if weight_dtype in _fp8:
             return _prev(self, unet_name, weight_dtype)
         if weight_dtype == ZI_NVFP4_WEIGHT_DTYPE:
             return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
 ```
 
-### 4-2. `nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py`（`fdc60bc` で修正）
+### 4-2. `nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py` (fixed in `fdc60bc`)
 
 ```python
     mp_fn = getattr(ops, "mixed_precision_ops", None)
@@ -205,11 +205,11 @@ def _install_permanent_dynamic_load_guard() -> None:
         return True
 ```
 
-※ 変更点は「`_load_wrap_ok` の定義追加」「1つ目の `if` に `and _load_wrap_ok` 追加」「2つ目の `if` の先頭に `_load_wrap_ok and ` 追加」の3点。以降の完全再適用パス（`_orig_detect` 以降）は変更なし。
+Note: the changes are exactly 3 points — "added the `_load_wrap_ok` definition", "added `and _load_wrap_ok` to the first `if`", "prepended `_load_wrap_ok and ` to the second `if`". The full re-apply path below (`_orig_detect` and beyond) is unchanged.
 
-### 4-3. `nodes/purge_vram.py`（`9854848` で追加）
+### 4-3. `nodes/purge_vram.py` (added in `9854848`)
 
-`HSWQ INT8/NVFP4: Done ? cleared ...` の print 直後（`except Exception as e:` の直前）に追加:
+Inserted right after the `HSWQ INT8/NVFP4: Done ? cleared ...` print (just before `except Exception as e:`):
 
 ```python
                 # tcon NVFP4 support: after the full HSWQ reset, force ComfyUI to re-run
@@ -234,44 +234,44 @@ def _install_permanent_dynamic_load_guard() -> None:
 
 ---
 
-## ⑤ コードの意味
+## ⑤ What the Code Means
 
-### 5-1. `_install_permanent_dynamic_load_guard()`（load_unet.py）
+### 5-1. `_install_permanent_dynamic_load_guard()` (load_unet.py)
 
-**目的:** パージが剥がせない「最後の砦」のガードを `ModelPatcherDynamic.load` の外側に設置する。
+**Purpose:** install a "last line of defense" guard on the outside of `ModelPatcherDynamic.load` that the purge cannot peel.
 
-- `_hswq_zi_rearm_guard` スタンプを付けるが、**`_hswq_zi_nvfp4_lora_bake` スタンプは付けない**。パージの `_deep_clean_dynamic_load()` は `_hswq_zi_nvfp4_lora_bake` スタンプを持つラップだけを辿って剥がすため、このガードは素通りする。
-- `_guarded_load` は `Dynamic.load` が呼ばれるたびに、まず `_ensure_dynamic_load_bake_wrap()` を実行する。これは「ベイクフックが既にアーム済みなら no-op、剥がれていれば再インストール」という関数なので、毎回呼んでもコストはほぼゼロ。
-- その後、元の `cur`（剥がされた後の素の `Dynamic.load`）を呼ぶ。つまり「ガード → 再アーム確認 → 実際のロード」という順序になり、**ベイクフックが剥がれた状態で Dynamic.load が走ることは二度とない**。
-- `_guarded_load._hswq_zi_rearm_guard_prev = cur` は、将来のデバッグ用に元の関数を保持しているだけ。
+- It is stamped `_hswq_zi_rearm_guard`, but **NOT stamped `_hswq_zi_nvfp4_lora_bake`**. The purge's `_deep_clean_dynamic_load()` walks only wraps stamped `_hswq_zi_nvfp4_lora_bake` and peels those, so this guard passes through untouched.
+- `_guarded_load` runs `_ensure_dynamic_load_bake_wrap()` first on every `Dynamic.load` call. That function is "no-op if the bake hook is already armed, re-install if it was peeled", so calling it every time costs almost nothing.
+- Then it calls the original `cur` (the bare `Dynamic.load` after peeling). The order is "guard → re-arm check → actual load", so **Dynamic.load can never run with the bake hook peeled**.
+- `_guarded_load._hswq_zi_rearm_guard_prev = cur` merely keeps the original function around for future debugging.
 
-### 5-2. `_load_wrap_ok` ガード（zi_comfy_quant_nvfp4.py）
+### 5-2. `_load_wrap_ok` guard (zi_comfy_quant_nvfp4.py)
 
-**目的:** 「パッチ適用済み」の判定を、フラグだけでなく**実際にラップが生きているか**で行う。
+**Purpose:** decide "patches applied" not from a flag alone, but from whether the wrap is **actually alive**.
 
-- `_load_wrap_ok = bool(getattr(ops._load_quantized_module, "_hswq_nvfp4_full_load", False))` は、`_load_quantized_module` が HSWQ のラップ（`_hswq_nvfp4_full_load` スタンプ付き）のままかを確認する。
-- パージがラップを剥がすと `_hswq_nvfp4_full_load` が消え、`_load_wrap_ok = False` になる。
-- 1つ目の `if`（早期リターン）に `and _load_wrap_ok` を追加したことで、**ラップが剥がれていたら早期リターンしない**。完全再適用パス（`_orig_detect` 以降）に進み、`_load_quantized_module` を再ラップする。
-- 2つ目の `if`（`stack_ver < _NVFP4_STACK_VER` の再ラップパス）にも `_load_wrap_ok` を追加。ここは `mixed_precision_ops` のみ再ラップして早期リターンするパスで、`_load_quantized_module` は再ラップしないため、ラップが剥がれている場合はこのパスもスキップして完全再適用に進む必要がある。
-- 結果: 2回目のロードで `arm_nvfp4_module()` が再実行され、`_hswq_nvfp4_convrot` フラグが全モジュールに再設定される → ベイク関数が NVFP4 レイヤーを正しく検出 → `nvfp4_baked=86` が復活。
+- `_load_wrap_ok = bool(getattr(ops._load_quantized_module, "_hswq_nvfp4_full_load", False))` checks whether `_load_quantized_module` is still HSWQ's wrap (stamped `_hswq_nvfp4_full_load`).
+- When the purge peels the wrap, `_hswq_nvfp4_full_load` disappears and `_load_wrap_ok` becomes `False`.
+- Adding `and _load_wrap_ok` to the first `if` (the early return) means **no early return when the wrap was peeled** — execution falls through to the full re-apply path (`_orig_detect` and beyond), which re-wraps `_load_quantized_module`.
+- `_load_wrap_ok` was also added to the second `if` (the `stack_ver < _NVFP4_STACK_VER` re-wrap path). That path re-wraps only `mixed_precision_ops` and then early-returns, without re-wrapping `_load_quantized_module`; so when the wrap is peeled, this path must also be skipped and the full re-apply must run.
+- Result: on the 2nd load, `arm_nvfp4_module()` runs again and `_hswq_nvfp4_convrot` is re-set on all modules → the bake function correctly detects the NVFP4 layers → `nvfp4_baked=86` is restored.
 
-### 5-3. パージ後のキャッシュリセット（nodes/purge_vram.py）
+### 5-3. Post-purge cache reset (nodes/purge_vram.py)
 
-**目的:** パージ後、ComfyUI に「ローダーノードを再実行しろ」と伝える。
+**Purpose:** tell ComfyUI "re-run the loader node" after a purge.
 
-- パージは `current_loaded_models` から全モデルを除去するが、ComfyUI の**ローダーノード出力キャッシュには MODEL オブジェクトが残る**。このまま次生成すると、キャッシュされた MODEL が再利用され、`load_unet` が再実行されない（＝TC スタック再構築が起きない）。
-- `prompt_queue.set_flag("unload_models", True)` と `set_flag("free_memory", True)` は、ComfyUI の executor に「次プロンプト前に全モデルをアンロードし、ノード出力キャッシュを破棄せよ」というフラグを立てる。
-- これにより次生成でローダーノードが再実行され、`load_unet_nvfp4_weight_dtype()` → `apply_comfy_quant_nvfp4_patches()` → `install_zimage_nvfp4_lora_bake()` → `_install_permanent_dynamic_load_guard()` の一連の再構築が走り、TC (W4A4) スタックが完全に再武装される。
-- `currently_running` チェックは、実行中（プロンプト処理中）にフラグを立てて誤動作するのを防ぐ。`except` はサーバー未初期化などの環境差を吸収する。
+- The purge removes every model from `current_loaded_models`, but the **MODEL object stays in ComfyUI's loader-node output cache**. If nothing is done, the next generation reuses the cached MODEL and `load_unet` never runs again (i.e. the TC stack is never rebuilt).
+- `prompt_queue.set_flag("unload_models", True)` and `set_flag("free_memory", True)` set flags telling the ComfyUI executor to "unload all models before the next prompt and drop cached node outputs".
+- This makes the loader node re-execute on the next generation, running the full chain `load_unet_nvfp4_weight_dtype()` → `apply_comfy_quant_nvfp4_patches()` → `install_zimage_nvfp4_lora_bake()` → `_install_permanent_dynamic_load_guard()`, which fully re-arms the TC (W4A4) stack.
+- The `currently_running` check prevents setting the flags mid-prompt and causing misbehavior. The `except` absorbs environment differences such as a not-yet-initialized server.
 
 ---
 
-## 修正の全体像（3層防御）
+## Overall Picture (3-layer defense)
 
-| 層 | ファイル | 役割 |
+| Layer | File | Role |
 |----|---------|------|
-| 1 | `nodes/purge_vram.py` | パージ後に ComfyUI キャッシュをリセットし、**ローダー再実行を保証** |
-| 2 | `zi_comfy_quant_nvfp4.py` | 再実行されたローダーが**確実に完全再適用**（ラップ剥がれを検出） |
-| 3 | `load_unet.py` | 以後、**Dynamic.load が走るたびにベイクフックを自動再アーム** |
+| 1 | `nodes/purge_vram.py` | Reset the ComfyUI cache after purge, **guaranteeing the loader re-runs** |
+| 2 | `zi_comfy_quant_nvfp4.py` | The re-run loader **always performs a full re-apply** (detects peeled wrap) |
+| 3 | `load_unet.py` | From then on, **auto re-arms the bake hook on every Dynamic.load** |
 
-1回目の生成は従来どおり正常。パージ後の2回目以降も、この3層で常に正しい NVFP4 ConvRot LoRA ベイクが保証される。
+The 1st generation remains normal as before. With these 3 layers, the 2nd and later generations after a purge are also guaranteed to perform the correct NVFP4 ConvRot LoRA bake.
