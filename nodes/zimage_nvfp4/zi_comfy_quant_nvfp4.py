@@ -85,15 +85,25 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
 
     mp_fn = getattr(ops, "mixed_precision_ops", None)
     stack_ver = _effective_nvfp4_stack_ver(mp_fn)
+    # The HSWQ purge peels the ops._load_quantized_module wrap (drops the
+    # _hswq_nvfp4_full_load stamp) while leaving _PATCHES_APPLIED and the
+    # detect_unet_config stamp intact. If the load wrap is gone, the arming
+    # (arm_nvfp4_module -> _hswq_nvfp4_convrot) never fires on reload, so the
+    # 2nd generation bakes NVFP4 layers as other_qt -> noise. Only early-return
+    # when the load wrap is still armed; otherwise fall through to re-apply.
+    _load_wrap_ok = bool(
+        getattr(ops._load_quantized_module, "_hswq_nvfp4_full_load", False)
+    )
     if (
         _PATCHES_APPLIED
+        and _load_wrap_ok
         and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False)
         and stack_ver >= _NVFP4_STACK_VER
     ):
         return True
 
     # Already patched detect/load but LoRA bake missing: re-wrap mixed_precision_ops only.
-    if getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False) and stack_ver < _NVFP4_STACK_VER:
+    if _load_wrap_ok and getattr(model_detection.detect_unet_config, "_hswq_nvfp4_packed_dims", False) and stack_ver < _NVFP4_STACK_VER:
         # Z Image: INT8 wrap used to drop _hswq_nvfp4_stack_ver → false "upgrade"
         # that wrapped TC over ConvRot parity → double online rotate after refresh.
         if _mp_chain_has_comfy_only(mp_fn) or (
