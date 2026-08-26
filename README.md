@@ -127,13 +127,14 @@ Standard ComfyUI `controlnet_load_state_dict` sets architecture dtype to `weight
 - **Native INT8 VRAM Retention**: Keeps weights in 8-bit precision in VRAM with `TensorWiseINT8Layout`, significantly reducing memory consumption
 - **Fast Execution**: Uses `comfy_kitchen` `int8_linear` GEMM kernel with online activation rotation for ConvRot layers
 - **ComfyUI Standard Integration**: Produces a standard `CONTROL_NET` output compatible with stock `Apply ControlNet` nodes
-- **Automatic Fallback**: Automatically falls back to standard loading if no INT8 `comfy_quant` layers are detected
+- **Seamless FP16 / BF16 / FP8 Compatibility (Drop-in Replacement)**: Fully backwards-compatible with conventional non-quantized and FP8 ControlNet models. When loading checkpoints without INT8 `comfy_quant` layers, it automatically delegates directly to stock ComfyUI `load_controlnet_state_dict`, so you can use this single loader node for all ControlNet formats without workflow changes
 
 #### Usage Notes
 
 - **Inputs**: `control_net_name` (safetensors ControlNet model from the `models/controlnet` directory)
 - **Outputs**: `CONTROL_NET`
 - **Category**: `HSWQ-ussoewwin`
+- **Drop-in replacement**: Can replace ComfyUI's built-in "Load ControlNet Model" node entirely — automatically handles ConvRot INT8, FP8, BF16, and FP16 checkpoints without manual switching
 
 ### HSWQ Ultimate SD Upscale
 

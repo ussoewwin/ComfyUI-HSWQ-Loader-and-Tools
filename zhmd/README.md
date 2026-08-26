@@ -127,13 +127,14 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 - **原生 INT8 显存保持**：权重在显存中以 `TensorWiseINT8Layout` 保持 8-bit 精度，显著降低显存占用
 - **高速执行**：前向计算调用 `comfy_kitchen` 的 `int8_linear` GEMM 内核，并对 ConvRot 层执行在线激活旋转
 - **ComfyUI 原生兼容**：输出标准 `CONTROL_NET` 对象，完全兼容原生 `Apply ControlNet` 等下游节点
-- **自动回退**：若未检测到 INT8 `comfy_quant` 层，则自动以标准方式加载
+- **无缝兼容传统 FP16 / BF16 / FP8（完全上位替代）**：与传统的未量化及 FP8 ControlNet 模型完全向后兼容。当加载不含 INT8 `comfy_quant` 层的检查点时，自动直接调用 ComfyUI 原生 `load_controlnet_state_dict`，无需在工作流中针对不同格式切换加载器节点
 
 #### 使用说明
 
 - **输入**：`control_net_name`（来自 `models/controlnet` 目录的 safetensors ControlNet 模型）
 - **输出**：`CONTROL_NET`
 - **分类**：`HSWQ-ussoewwin`
+- **上位替代**：可完全替代 ComfyUI 内置的 “Load ControlNet Model” 节点 —— 自动识别 ConvRot INT8、FP8、BF16 与 FP16 检查点，无需手动切换
 
 ### HSWQ Ultimate SD Upscale
 
