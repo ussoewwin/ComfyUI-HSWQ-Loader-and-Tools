@@ -206,6 +206,42 @@ def _ensure_dynamic_load_bake_wrap() -> None:
         install_load_models_gpu_bake_hook(force=False)
 
 
+def _install_permanent_dynamic_load_guard() -> None:
+    """Install an outer ModelPatcherDynamic.load guard the purge cannot peel.
+
+    The purge uninstall_zimage_nvfp4_lora_bake walks the chain of wraps stamped
+    ``_hswq_zi_nvfp4_lora_bake`` and restores the unwrapped Dynamic.load. After that,
+    nothing re-installs the bake hook because ComfyUI caches the loader-node output
+    and never re-runs load_unet. The 2nd generation then runs without the NVFP4
+    ConvRot LoRA bake and produces noise.
+
+    This guard is a separate, permanent wrap (NOT stamped ``_hswq_zi_nvfp4_lora_bake``),
+    so the purge deep-clean walks past it. On every Dynamic.load it ensures the bake
+    hook is installed via ``_ensure_dynamic_load_bake_wrap()`` (a no-op when the hook
+    is already armed at the current version).
+    """
+    try:
+        import comfy.model_patcher as mp
+    except ImportError:
+        return
+    Dynamic = getattr(mp, "ModelPatcherDynamic", None)
+    if Dynamic is None:
+        return
+    cur = getattr(Dynamic, "load", None)
+    if cur is None or getattr(cur, "_hswq_zi_rearm_guard", False):
+        return
+
+    def _guarded_load(self, *args, **kwargs):
+        try:
+            _ensure_dynamic_load_bake_wrap()
+        except Exception:
+            pass
+        return cur(self, *args, **kwargs)
+
+    _guarded_load._hswq_zi_rearm_guard = True  # type: ignore[attr-defined]
+    _guarded_load._hswq_zi_rearm_guard_prev = cur  # type: ignore[attr-defined]
+    Dynamic.load = _guarded_load
+
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     """Load Z Image / ZIT UNet with ConvRot NVFP4 (TC if calibrated, else parity)."""
     _patch_load_model_weights_warnings()
@@ -259,6 +295,7 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
             "[HSWQ NVFP4] Z Image UNet requires Dynamic ConvRot NVFP4 LoRA bake"
         )
     _ensure_dynamic_load_bake_wrap()
+    _install_permanent_dynamic_load_guard()
     reset_int8_lora_log_counters()
     reset_nvfp4_lora_log_counters()
     reset_zimage_nvfp4_lora_bake_log_counters()
@@ -325,6 +362,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
 
     def load_unet(self, unet_name, weight_dtype):
         _ensure_dynamic_load_bake_wrap()
+        _install_permanent_dynamic_load_guard()
         if weight_dtype in _fp8:
             return _prev(self, unet_name, weight_dtype)
         if weight_dtype == ZI_NVFP4_WEIGHT_DTYPE:
