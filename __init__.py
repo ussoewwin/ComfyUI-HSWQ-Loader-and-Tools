@@ -14,7 +14,7 @@ import logging
 import os
 from pathlib import Path
 
-__version__ = "3.4.4"
+__version__ = "3.4.5"
 
 import torch
 from packaging.version import InvalidVersion, Version
@@ -680,3 +680,4 @@ NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader
 WEB_DIRECTORY = "js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 logger.info("=" * (80 + len(" ComfyUI-nunchaku Initialization ")))
+

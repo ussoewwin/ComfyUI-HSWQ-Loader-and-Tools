@@ -7,6 +7,13 @@
   </tr>
 </table>
 
+## Version 3.4.5
+
+- **Fixed**: **Z Image tcon (TC/W4A4) NVFP4 2nd-generation noise after DisTorch HSWQ purge** — after a full HSWQ purge, the 2nd generation of tcon NVFP4 models baked with `nvfp4_baked=0 other_qt_baked=83` (NVFP4 layers misclassified as `other_qt`, ConvRot unrotate/re-rotate skipped) and produced noise. Two-part root fix:
+  - **`_load_wrap_ok` gate** in `apply_comfy_quant_nvfp4_patches()` (`nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py`): the early-return now also verifies the purge-peelable `ops._load_quantized_module` wrap is still armed (`_hswq_nvfp4_full_load` stamp). If the purge peeled it, execution falls through to the full re-apply (re-wrap + `arm_nvfp4_module`) instead of trusting the stale `_PATCHES_APPLIED` flag, so `_hswq_nvfp4_convrot` is re-armed on reload and NVFP4 layers bake correctly again.
+  - **`_install_permanent_dynamic_load_guard()`** (`nodes/zimage_nvfp4/load_unet.py`): a permanent outer `ModelPatcherDynamic.load` guard that is **not** stamped `_hswq_zi_nvfp4_lora_bake`, so the purge deep-clean walks past it; on every `Dynamic.load` it re-arms the ConvRot NVFP4 LoRA bake hook via `_ensure_dynamic_load_bake_wrap()` (no-op when already armed).
+  - **Docs**: `md/HSWQ_TCON_NVFP4_SECOND_GEN_NOISE_FIX.md` — complete guide (problem, root cause, files, full code, code meaning) against baseline `1156f00`.
+- See [Release Notes v3.4.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.5) for details.
 ## Version 3.4.4
 
 - **Added**: **HSWQ Load ConvRot INT8 ControlNet Model** (`HSWQLoadConvRotINT8ControlNet`) — Loads ConvRot / TensorWise INT8-quantized ControlNet checkpoints (e.g., Qwen Image Fun ControlNet) keeping weights INT8 in VRAM with `comfy_kitchen` `int8_linear` execution. Resolves stock ComfyUI `controlnet_load_state_dict` INT8 initialization crashes by forcing BF16 module graph construction with explicit `int8_tensorwise` MixedPrecisionOps injection.
@@ -286,3 +293,4 @@
 ## 2025-12-25
 
 - Fixed import error for `NunchakuZImageDiTLoader` node by improving alternative import method with better path resolution (see [Issue #1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/issues/1))
+

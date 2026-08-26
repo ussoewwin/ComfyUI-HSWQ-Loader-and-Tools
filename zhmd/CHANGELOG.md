@@ -7,6 +7,13 @@
   </tr>
 </table>
 
+## Version 3.4.5
+
+- **修复**：**Z Image tcon（TC/W4A4）NVFP4 在 DisTorch HSWQ 完整 purge 后的第 2 次生成噪声** —— purge 后第 2 次生成时 bake 结果为 `nvfp4_baked=0 other_qt_baked=83`（NVFP4 层被误判为 `other_qt`，跳过 ConvRot 逆旋转/再旋转），产生噪声。两部分根治：
+  - **`_load_wrap_ok` 门控**（`nodes/zimage_nvfp4/zi_comfy_quant_nvfp4.py` 的 `apply_comfy_quant_nvfp4_patches()`）：early-return 现在还会校验可被 purge 剥离的 `ops._load_quantized_module` 包装是否仍处于武装状态（`_hswq_nvfp4_full_load` 标记）。若 purge 已剥离包装，则不再信任过期的 `_PATCHES_APPLIED` 标记，而是落入完整重新应用路径（重新包装 + `arm_nvfp4_module`），使重载时 `_hswq_nvfp4_convrot` 重新武装，NVFP4 层恢复正确 bake。
+  - **`_install_permanent_dynamic_load_guard()`**（`nodes/zimage_nvfp4/load_unet.py`）：一个永久的 `ModelPatcherDynamic.load` 外层守卫，**不带** `_hswq_zi_nvfp4_lora_bake` 标记，因此 purge 深度清理会绕过它；每次 `Dynamic.load` 都会通过 `_ensure_dynamic_load_bake_wrap()` 重新武装 ConvRot NVFP4 LoRA bake 钩子（已武装时为 no-op）。
+  - **文档**：`md/HSWQ_TCON_NVFP4_SECOND_GEN_NOISE_FIX.md` —— 以 `1156f00` 为基线的完整指南（问题、根本原因、文件、完整代码、代码含义）。
+- 详情见 [发布说明 v3.4.5](v3.4.5.md)。
 ## Version 3.4.4
 
 - **新增**：**HSWQ Load ConvRot INT8 ControlNet Model**（`HSWQLoadConvRotINT8ControlNet`）节点 —— 支持在 ComfyUI 中直接加载 ConvRot / TensorWise INT8 量化 ControlNet（如 Qwen Image Fun ControlNet 等），权重在显存中保持 INT8 并走 `comfy_kitchen` 的 `int8_linear` 执行；通过强制 BF16 模块图构建与显式注入 `int8_tensorwise` MixedPrecisionOps，解决 ComfyUI 原生 `controlnet_load_state_dict` 的 INT8 梯度初始化崩溃问题。
@@ -286,3 +293,4 @@
 ## 2025-12-25
 
 - 通过改进带更好路径解析的替代导入方式，修复 `NunchakuZImageDiTLoader` 节点的导入错误（见 [Issue #1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/issues/1)）
+
