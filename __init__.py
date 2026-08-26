@@ -123,35 +123,6 @@ mm.get_torch_device = get_torch_device_patched
 mm.text_encoder_device = text_encoder_device_patched
 mm.unet_offload_device = unet_offload_device_patched
 
-# HSWQ: Re-arm ZI NVFP4 LoRA bake hooks after purge / model reload.
-# load_models_gpu runs on every generation that (re)loads models, so wrapping it
-# guarantees the ZI NVFP4 Dynamic.load bake hooks are re-installed even after a
-# purge uninstalled them (2nd-generation noise fix).
-def _hswq_wrap_load_models_gpu_for_zi_rearm():
-    try:
-        from .nodes.zimage_nvfp4.load_unet import _ensure_dynamic_load_bake_wrap
-
-        _orig = mm.load_models_gpu
-        if getattr(_orig, "_hswq_zi_rearm_wrapped", False):
-            return
-
-        def _wrapped_load_models_gpu(*args, **kwargs):
-            result = _orig(*args, **kwargs)
-            try:
-                _ensure_dynamic_load_bake_wrap()
-            except Exception:
-                pass
-            return result
-
-        _wrapped_load_models_gpu._hswq_zi_rearm_wrapped = True
-        _wrapped_load_models_gpu._hswq_orig_load_models_gpu = _orig
-        mm.load_models_gpu = _wrapped_load_models_gpu
-        logger.info("[HSWQ] load_models_gpu wrapped: ZI NVFP4 LoRA bake re-arm armed")
-    except Exception as e:
-        logger.debug("[HSWQ] load_models_gpu ZI re-arm wrap skipped: %s", e)
-
-_hswq_wrap_load_models_gpu_for_zi_rearm()
-
 from .utils import get_package_version, get_plugin_version
 
 # PinCache / PinDebug must NOT install (removed; ComfyUI hostbuf handles pin).
