@@ -114,6 +114,27 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 **VRAM purge**: For **ConvRot NVFP4** (and HSWQ INT8) UNet loads, place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the end of the workflow with **`HSWQ`** on — same reason as the SDXL Checkpoint Loader section.
 
+### HSWQ Load ConvRot INT8 ControlNet Model
+
+<img src="png/convrot_int8_controlnet.png" alt="HSWQ Load ConvRot INT8 ControlNet Model" width="400">
+
+ComfyUI loader node for **ConvRot / TensorWise INT8-quantized ControlNet checkpoints** (e.g. Qwen Image Fun ControlNet). Loads the ControlNet directly into VRAM in 8-bit precision (`QuantizedTensor` / `TensorWiseINT8Layout`) and executes via `comfy_kitchen`'s high-speed `int8_linear` kernel with online activation rotation (`convrot`).
+
+Standard ComfyUI `controlnet_load_state_dict` sets architecture dtype to `weight_dtype(sd)` (which is `torch.int8` for quantized models), triggering PyTorch gradient creation errors (`Only Tensors of floating point and complex dtype can require gradients`) and ignoring `comfy_quant` metadata. This node solves both issues by forcing the module graph construction to `torch.bfloat16` and explicitly injecting `MixedPrecisionOps` configured for `int8_tensorwise`.
+
+#### Features
+
+- **Native INT8 VRAM Retention**: Keeps weights in 8-bit precision in VRAM with `TensorWiseINT8Layout`, significantly reducing memory consumption
+- **Fast Execution**: Uses `comfy_kitchen` `int8_linear` GEMM kernel with online activation rotation for ConvRot layers
+- **ComfyUI Standard Integration**: Produces a standard `CONTROL_NET` output compatible with stock `Apply ControlNet` nodes
+- **Automatic Fallback**: Automatically falls back to standard loading if no INT8 `comfy_quant` layers are detected
+
+#### Usage Notes
+
+- **Inputs**: `control_net_name` (safetensors ControlNet model from the `models/controlnet` directory)
+- **Outputs**: `CONTROL_NET`
+- **Category**: `HSWQ-ussoewwin`
+
 ### HSWQ Ultimate SD Upscale
 
 <img src="png/usdu_auto_workflow.png" alt="HSWQ Ultimate SD Upscale" width="400">

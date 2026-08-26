@@ -114,6 +114,27 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 **VRAM 清理**：加载 **ConvRot NVFP4**（以及 HSWQ INT8）UNet 时，请在工作流末尾放置 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并打开 **`HSWQ`**——原因与 SDXL Checkpoint Loader 一节相同。
 
+### HSWQ Load ConvRot INT8 ControlNet Model
+
+<img src="../png/convrot_int8_controlnet.png" alt="HSWQ Load ConvRot INT8 ControlNet Model" width="400">
+
+用于加载 **ConvRot / TensorWise INT8 量化 ControlNet 检查点**（如 Qwen Image Fun ControlNet）的 ComfyUI 加载器节点。将 ControlNet 权重以 8-bit 精度（`QuantizedTensor` / `TensorWiseINT8Layout`）直接保持在显存（VRAM）中，并通过 `comfy_kitchen` 的高速 `int8_linear` 内核与在线激活旋转（`convrot`）执行推理。
+
+ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `weight_dtype(sd)`（对于量化模型为 `torch.int8`），从而触发 PyTorch 梯度创建错误（`Only Tensors of floating point and complex dtype can require gradients`）且忽略 `comfy_quant` 元数据。本节点通过强制以 `torch.bfloat16` 构建模块图并显式注入适配 `int8_tensorwise` 的 `MixedPrecisionOps`，彻底解决了这两个问题。
+
+#### 特性
+
+- **原生 INT8 显存保持**：权重在显存中以 `TensorWiseINT8Layout` 保持 8-bit 精度，显著降低显存占用
+- **高速执行**：前向计算调用 `comfy_kitchen` 的 `int8_linear` GEMM 内核，并对 ConvRot 层执行在线激活旋转
+- **ComfyUI 原生兼容**：输出标准 `CONTROL_NET` 对象，完全兼容原生 `Apply ControlNet` 等下游节点
+- **自动回退**：若未检测到 INT8 `comfy_quant` 层，则自动以标准方式加载
+
+#### 使用说明
+
+- **输入**：`control_net_name`（来自 `models/controlnet` 目录的 safetensors ControlNet 模型）
+- **输出**：`CONTROL_NET`
+- **分类**：`HSWQ-ussoewwin`
+
 ### HSWQ Ultimate SD Upscale
 
 <img src="../png/usdu_auto_workflow.png" alt="HSWQ Ultimate SD Upscale" width="400">
