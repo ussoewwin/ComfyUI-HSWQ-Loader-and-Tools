@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.4.6
+
+- **修复**：**SDXL anytest LoRA 型 ControlNet（ControlLora）在 ConvRot INT8 / Hybrid ConvRot NVFP4 基座上的失效与不染色问题** —— 两阶段根治（症状：先是控制完全无效，之后输出被锁定为线稿 —— 黑白、不染色、强度滑块失效）：
+  - **ControlLora 借用权重反量化 v3**（`c60bb0b`，`patches/comfy_quant_int8.py` + `__init__.py`）：`ControlLora.pre_run` 会将基座 UNet 的 state_dict 借入浮点 control model；量化基座下这些权重是坏的 —— comfy-kitchen 的 ConvRot 反量化仅支持 2D（4D Conv2d 抛 `NoCapableBackendError` → 回退为原始 ±127 qdata），且 HSWQ 武装的 Conv2d 权重处于旋转基（`qt.dequantize()` 成功但得到 W_rot）。v3 wrapper 现在按模块反量化（qdata × scale）并对 4D Conv2d 做逆旋转，并在启动时无条件安装。
+  - **`HSWQCheckpointLoaderSDXL` INT8 路由**（`152c1dc`，`__init__.py`）：节点此前直接调用 `load_checkpoint_guess_config` 并忽略 `weight_dtype="int8_tensorwise"`。ConvRot INT8 checkpoint 的 Conv2d 量化层以原始 int8 qdata + `weight_scale` + `comfy_quant` sidecar（groupsize 64）存储；未走 INT8 Conv2d 加载作用域时保持为原始 ±127 —— 基座 UNet 前向崩溃（NaN），ControlLora 控制输出爆炸 `[731, 123352, 183752, NaN]` → 输出被锁定为线稿。节点现在将 int8_tensorwise（或自动检测的 comfy_quant INT8）委托给 INT8 感知的 `load_checkpoint_sdxl_hswq_weight_dtype`；同时修复 `_unrotate_conv2d` 中 Hadamard 矩阵的设备不匹配（采样时 `ControlLora.pre_run` 内的 CPU/CUDA 崩溃）。
+  - **文档**：`md/HSWQ_SDXL_ANYTEST_CONTROLLORA_CONVROT_INT8_NVFP4_FIX_GUIDE.md` 重写为 v2（根本原因、代码、验证：控制范数正常 `[720, 1229, 1415, 1553]`、端到端彩色生成 sat 73.5、结构 L1 0.299）。
+- **变更**：HSWQ ControlNet Loader 更名为 `HSWQControlNetLoader`，带别名（`HSWQLoadConvRotINT8ControlNet`）并归入 `loaders` 分类（`d208c58`）。
+- 详情见 [发布说明 v3.4.6](v3.4.6.md)。
+
 ## Version 3.4.5
 
 - **修复**：**Z Image tcon（TC/W4A4）NVFP4 在 DisTorch HSWQ 完整 purge 后的第 2 次生成噪声** —— purge 后第 2 次生成时 bake 结果为 `nvfp4_baked=0 other_qt_baked=83`（NVFP4 层被误判为 `other_qt`，跳过 ConvRot 逆旋转/再旋转），产生噪声。两部分根治：

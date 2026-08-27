@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.4.6
+
+- **Fixed**: **SDXL anytest LoRA-type ControlNet (ControlLora) on ConvRot INT8 / Hybrid ConvRot NVFP4 bases** - two-stage root fix (symptom: control first had no effect, then locked the output onto the lineart - B&W, no coloring, dead strength slider):
+  - **ControlLora borrowed-weight dequant v3** (`c60bb0b`, `patches/comfy_quant_int8.py` + `__init__.py`): `ControlLora.pre_run` borrows the base UNet's state_dict into a float control model; with quantized bases those weights were garbage - comfy-kitchen's ConvRot dequant is 2D-only (4D Conv2d -> `NoCapableBackendError` -> raw +-127 qdata fallback) and HSWQ-armed Conv2d weights live in the rotated basis (`qt.dequantize()` returns W_rot). The v3 wrapper now dequantizes per-module (qdata x scale) and un-rotates 4D Conv2d weights, and is installed unconditionally at startup.
+  - **`HSWQCheckpointLoaderSDXL` INT8 routing** (`152c1dc`, `__init__.py`): the node called `load_checkpoint_guess_config` directly and ignored `weight_dtype="int8_tensorwise"`. ConvRot INT8 checkpoints store Conv2d quant layers as raw int8 qdata + `weight_scale` + `comfy_quant` sidecars (groupsize 64); without the INT8 Conv2d load scope they stayed RAW (+-127) - the base UNet forward broke (NaN) and the ControlLora control output exploded `[731, 123352, 183752, NaN]` -> output locked onto the lineart. The node now delegates int8_tensorwise (or auto-detected comfy_quant INT8) to the INT8-aware `load_checkpoint_sdxl_hswq_weight_dtype`. Also fixed the Hadamard device mismatch in `_unrotate_conv2d` (CPU/CUDA crash inside `ControlLora.pre_run` during sampling).
+  - **Docs**: `md/HSWQ_SDXL_ANYTEST_CONTROLLORA_CONVROT_INT8_NVFP4_FIX_GUIDE.md` rewritten (v2): root cause, code, verification (control norms sane `[720, 1229, 1415, 1553]`, end-to-end colored generation sat 73.5, structure L1 0.299).
+- **Changed**: HSWQ ControlNet Loader renamed to `HSWQControlNetLoader` with aliases (`HSWQLoadConvRotINT8ControlNet`) and `loaders` category (`d208c58`).
+- See [Release Notes v3.4.6](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.6) for details.
+
 ## Version 3.4.5
 
 - **Fixed**: **Z Image tcon (TC/W4A4) NVFP4 2nd-generation noise after DisTorch HSWQ purge** — after a full HSWQ purge, the 2nd generation of tcon NVFP4 models baked with `nvfp4_baked=0 other_qt_baked=83` (NVFP4 layers misclassified as `other_qt`, ConvRot unrotate/re-rotate skipped) and produced noise. Two-part root fix:
