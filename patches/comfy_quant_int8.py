@@ -2234,10 +2234,11 @@ def _patch_controllora_int8_dequant() -> bool:
 
         import torch as _torch
 
-        def _regular_hadamard(size):
+        def _regular_hadamard(size, device=None):
             h4 = _torch.tensor(
                 [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
                 dtype=_torch.float32,
+                device=device,
             )
             h = h4
             while h.shape[0] < size:
@@ -2249,7 +2250,7 @@ def _patch_controllora_int8_dequant() -> bool:
             o, i, kh, kw = w.shape
             if i % gs != 0 or i // gs <= 0:
                 return w
-            h = _regular_hadamard(gs)
+            h = _regular_hadamard(gs, w.device)
             flat = w.float().permute(0, 2, 3, 1).contiguous().view(-1, i)
             flat = (flat.view(-1, i // gs, gs) @ h).view(-1, i)
             return flat.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()

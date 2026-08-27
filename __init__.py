@@ -558,6 +558,14 @@ try:
         sdxl_logger.warning("[SDXL] UNETLoader not found in GLOBAL_NODE_CLASS_MAPPINGS")
     else:
 
+        def _checkpoint_looks_int8(ckpt_path):
+            try:
+                from .patches.comfy_quant_int8 import checkpoint_looks_like_comfy_quant_int8
+                return bool(checkpoint_looks_like_comfy_quant_int8(ckpt_path))
+            except Exception:
+                return False
+
+
         class HSWQCheckpointLoaderSDXL(_UNETLoaderBase):
             """HSWQ Checkpoint Loader (SDXL) with device selection. Ref: CheckpointLoaderSimple."""
 
@@ -595,6 +603,18 @@ try:
                     set_current_device(device)
                 try:
                     ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
+                    # INT8 (incl. ConvRot) checkpoints MUST go through the INT8-aware
+                    # loader: plain load_checkpoint_guess_config leaves Conv2d
+                    # comfy_quant layers as RAW int8 qdata (absmax ~127, scale
+                    # dropped), which breaks the base forward (NaN) and poisons the
+                    # ControlLora borrowed weights (control output explodes ->
+                    # lineart lock / no coloring / strength dead). Auto-detect
+                    # native comfy_quant INT8 files too.
+                    if weight_dtype == "int8_tensorwise" or _checkpoint_looks_int8(ckpt_path):
+                        from .patches.comfy_quant_int8 import load_checkpoint_sdxl_hswq_weight_dtype
+                        return load_checkpoint_sdxl_hswq_weight_dtype(
+                            ckpt_name, weight_dtype, device=None,
+                        )
                     model_options = {}
                     if weight_dtype == "fp8_e4m3fn":
                         model_options["dtype"] = torch.float8_e4m3fn
@@ -603,7 +623,7 @@ try:
                         model_options["fp8_optimizations"] = True
                     elif weight_dtype == "fp8_e5m2":
                         model_options["dtype"] = torch.float8_e5m2
-                    
+
                     out = comfy.sd.load_checkpoint_guess_config(
                         ckpt_path,
                         output_vae=False,
