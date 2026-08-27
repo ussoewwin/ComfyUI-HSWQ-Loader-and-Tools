@@ -2208,7 +2208,7 @@ def _patch_controllora_int8_dequant() -> bool:
     if ControlLora is None:
         return False
     original = getattr(ControlLora, "pre_run", None)
-    _CL_VER = 2
+    _CL_VER = 3
     if original is None or getattr(original, "_hswq_int8_controllora_ver", 0) >= _CL_VER:
         return getattr(original, "_hswq_int8_controllora", False)
     true_orig = getattr(original, "_hswq_orig_controllora_pre_run", original)
@@ -2223,13 +2223,110 @@ def _patch_controllora_int8_dequant() -> bool:
         (which caused ``RecursionError: maximum recursion depth exceeded``)."""
         full = orig_sd()
 
-        # Collect the state-dict prefix of every quantized weight.
+        # Collect the state-dict prefix of every quantized weight, together
+        # with its module (needed to detect HSWQ-armed Conv2d ConvRot).
         quant_weight_keys = {}
         for name, module in diffusion_model.named_modules():
             w = getattr(module, "weight", None)
             if isinstance(w, QuantizedTensor):
                 key = (name + "." if name else "") + "weight"
-                quant_weight_keys[key] = w
+                quant_weight_keys[key] = (w, module)
+
+        import torch as _torch
+
+        def _regular_hadamard(size):
+            h4 = _torch.tensor(
+                [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
+                dtype=_torch.float32,
+            )
+            h = h4
+            while h.shape[0] < size:
+                h = _torch.kron(h, h4)
+            return h / (size ** 0.5)
+
+        def _unrotate_conv2d(w, gs):
+            """Inverse of rotate_weight_conv2d (per-(o,kh,kw) in-channel rows)."""
+            o, i, kh, kw = w.shape
+            if i % gs != 0 or i // gs <= 0:
+                return w
+            h = _regular_hadamard(gs)
+            flat = w.float().permute(0, 2, 3, 1).contiguous().view(-1, i)
+            flat = (flat.view(-1, i // gs, gs) @ h).view(-1, i)
+            return flat.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
+
+        def _manual_qt_dequant(qt):
+            """Dequantize a QuantizedTensor, incl. 4D Conv2d ConvRot.
+
+            comfy-kitchen's ``dequantize_int8_convrot_weight_dtype`` only
+            accepts 2D (Linear); for Conv2d (4D) it raises
+            NoCapableBackendError, which the old wrapper swallowed and fell
+            back to the RAW qdata (absmax ~127) - poisoning the float
+            ControlLoraOps control model. Rebuild manually instead:
+            W_rot = qdata * scale, then un-rotate along in_channels per
+            (o, kh, kw) row (mirrors native_convert_int8.rotate_weight_conv2d).
+            """
+            p = qt._params
+            qd = qt._qdata
+            w = qd.float() * p.scale.float()
+            gs = int(getattr(p, "convrot_groupsize", 0) or 0)
+            if getattr(p, "convrot", False) and gs >= 4:
+                if w.ndim == 2:
+                    o, i = w.shape
+                    if i % gs == 0 and i // gs > 0:
+                        h = _regular_hadamard(gs)
+                        w = (w.view(o, i // gs, gs) @ h).view(o, i)
+                elif w.ndim == 4:
+                    w = _unrotate_conv2d(w, gs)
+            orig = getattr(p, "orig_shape", None)
+            if orig is not None and tuple(w.shape) != tuple(orig):
+                w = w.reshape(orig)
+            return w.to(qd.dtype if qd.is_floating_point() else _torch.float16)
+
+        # Fallback: layers whose comfy_quant was NOT consumed at load time
+        # (stock ComfyUI leaves e.g. Conv2d int8_tensorwise as raw int8 qdata
+        # reinterpreted as float, absmax ~127; no QuantizedTensor attached).
+        # Dequantize them here from the sidecar keys; QuantizedTensor modules
+        # above are already covered by the qt.dequantize() path.
+        raw_weights = {}
+        raw_sidecar_drop = set()
+        for key in list(full.keys()):
+            if not key.endswith(".comfy_quant"):
+                continue
+            base = key[: -len("comfy_quant")]
+            wkey = base + "weight"
+            if wkey in quant_weight_keys or wkey not in full:
+                continue
+            try:
+                conf = json.loads(full[key].numpy().tobytes())
+            except Exception:  # noqa: BLE001
+                continue
+            if conf.get("format") != "int8_tensorwise":
+                continue
+            scale = full.get(base + "weight_scale")
+            if scale is None:
+                continue
+            q = full[wkey]
+            is_raw = q.dtype in (_torch.int8, _torch.uint8) or (
+                q.is_floating_point()
+                and bool(_torch.isfinite(q).all())
+                and float(q.abs().max()) <= 127.5
+            )
+            if not is_raw:
+                continue
+            w = q.float() * scale.float()
+            convrot = bool(conf.get("convrot", False))
+            gs = int(conf.get("convrot_groupsize", 0) or 0)
+            if convrot and gs >= 4:
+                if w.ndim == 2:
+                    o, i = w.shape
+                    if i % gs == 0 and i // gs > 0:
+                        h = _regular_hadamard(gs)
+                        w = (w.view(o, i // gs, gs) @ h).view(o, i)
+                elif w.ndim == 4:
+                    w = _unrotate_conv2d(w, gs)
+            raw_weights[wkey] = w.to(_torch.float16)
+            raw_sidecar_drop.add(base + "weight_scale")
+            raw_sidecar_drop.add(key)
 
         out = {}
         n_dequant = 0
@@ -2237,18 +2334,39 @@ def _patch_controllora_int8_dequant() -> bool:
         for k, v in full.items():
             replaced = False
             dropped = False
-            for wk, qt in quant_weight_keys.items():
+            for wk, (qt, mod) in quant_weight_keys.items():
                 if k == wk:
                     # raw int8 qdata -> real float weight
                     try:
-                        out[k] = qt.dequantize()
-                        n_dequant += 1
+                        wgt = qt.dequantize()
                     except Exception as e:  # noqa: BLE001
-                        logger.warning(
-                            "[HSWQ INT8] ControlLora: dequantize failed for %s: %s",
-                            k, e,
-                        )
-                        out[k] = v
+                        # kitchen dequantize() is 2D-only (Conv2d ConvRot
+                        # raises NoCapableBackendError); never inject raw
+                        # qdata - rebuild the float weight manually.
+                        try:
+                            wgt = _manual_qt_dequant(qt)
+                        except Exception as e2:  # noqa: BLE001
+                            logger.warning(
+                                "[HSWQ INT8] ControlLora: dequantize failed for %s (%s; manual %s)",
+                                k, e, e2,
+                            )
+                            wgt = v
+                    # HSWQ-armed Conv2d ConvRot: params.convrot is CLEARED and
+                    # weights stay in the ROTATED basis (forward rotates NCHW
+                    # activations online). Plain dequantize() therefore returns
+                    # W_rot; the float ControlLoraOps control model does NOT
+                    # rotate activations, so un-rotate back to W here.
+                    if (
+                        mod is not None
+                        and getattr(mod, "_hswq_convrot", False)
+                        and getattr(qt, "_qdata", None) is not None
+                        and qt._qdata.ndim == 4
+                    ):
+                        gs = int(getattr(mod, "_hswq_convrot_groupsize", 0) or 0)
+                        if gs >= 4:
+                            wgt = _unrotate_conv2d(wgt, gs)
+                    out[k] = wgt
+                    n_dequant += 1
                     replaced = True
                     break
                 base = wk[: -len("weight")]  # "X."
@@ -2259,6 +2377,13 @@ def _patch_controllora_int8_dequant() -> bool:
                 ):
                     dropped = True
                     break
+            if not replaced and not dropped and k in raw_weights:
+                out[k] = raw_weights[k]
+                n_dequant += 1
+                continue
+            if not replaced and not dropped and k in raw_sidecar_drop:
+                n_drop += 1
+                continue
             if replaced:
                 continue
             if dropped:
@@ -2267,13 +2392,14 @@ def _patch_controllora_int8_dequant() -> bool:
             out[k] = v
 
         print(
-            f"[HSWQ INT8][ControlLora] dequantized state_dict: "
-            f"weights dequantized(int8->float)={n_dequant}, "
-            f"sidecar keys dropped(scale/comfy_quant/input_scale)={n_drop}, "
-            f"total keys out={len(out)}",
+            "[HSWQ INT8][ControlLora] dequantized state_dict: "
+            "weights dequantized(int8->float)=%d, sidecars dropped=%d, "
+            "total keys out=%d" % (n_dequant, n_drop, len(out)),
             flush=True,
         )
         return out
+
+
 
     def pre_run(self, model, percent_to_timestep_function):
         diffusion_model = getattr(model, "diffusion_model", None)

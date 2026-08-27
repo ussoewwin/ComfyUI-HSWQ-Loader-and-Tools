@@ -131,6 +131,19 @@ from .utils import get_package_version, get_plugin_version
 # Dynamic INT8 LoRA bake must detect comfy QuantizedTensor only — never bare
 # torch.int8 (Nunchaku SVDQ false positive → Abort on Z-Image / Lumina2).
 
+# ControlLora (LoRA-type ControlNet, e.g. anytest v4) borrows the base UNet's
+# state_dict at pre_run; with ConvRot INT8 / Hybrid ConvRot NVFP4 bases those
+# weights arrive as raw qdata (or sidecar-carrying raw float) and must be
+# dequantized before injection into the float ControlLoraOps control model.
+# Install the ControlLora dequant wrapper unconditionally at startup so it is
+# active regardless of which loader the workflow uses (stock or HSWQ).
+try:
+    from .patches.comfy_quant_int8 import _patch_controllora_int8_dequant
+    if not _patch_controllora_int8_dequant():
+        logger.warning("ControlLora INT8 dequant patch not installed")
+except Exception:
+    logger.exception("ControlLora INT8 dequant patch failed to install")
+
 # LATENT None-guard: stock VAEDecode / VAEDecodeTiled index samples["samples"],
 # so a dropped LATENT kills the prompt after sampling already finished.
 try:
