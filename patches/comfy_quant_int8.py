@@ -853,7 +853,7 @@ def _model_has_int8_quantized_weights(model) -> bool:
 
 
 def _load_native_convert_int8_helpers():
-    """Lazy-load Hadamard / rotate helpers from sibling native_convert_int8.py."""
+    """Lazy-load Hadamard / rotate helpers from nodes/native_convert_int8.py."""
     import importlib.util
     import sys
 
@@ -868,7 +868,7 @@ def _load_native_convert_int8_helpers():
         _NATIVE_CONVERT_INT8_MOD = existing
         return existing
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(root, "native_convert_int8.py")
+    path = os.path.join(root, "nodes", "native_convert_int8.py")
     if not os.path.isfile(path):
         raise FileNotFoundError(f"native_convert_int8.py not found: {path}")
     spec = importlib.util.spec_from_file_location(name, path)
