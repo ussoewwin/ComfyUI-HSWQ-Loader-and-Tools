@@ -16,7 +16,7 @@
 - See [Release Notes v3.4.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.5) for details.
 ## Version 3.4.4
 
-- **Added**: **HSWQ Load ConvRot INT8 ControlNet Model** (`HSWQLoadConvRotINT8ControlNet`) — Loads ConvRot / TensorWise INT8-quantized ControlNet checkpoints (e.g., Qwen Image Fun ControlNet) keeping weights INT8 in VRAM with `comfy_kitchen` `int8_linear` execution. Resolves stock ComfyUI `controlnet_load_state_dict` INT8 initialization crashes by forcing BF16 module graph construction with explicit `int8_tensorwise` MixedPrecisionOps injection.
+- **Added**: **HSWQ ControlNet Loader (ConvRot INT8)** (`HSWQControlNetLoader` / `HSWQLoadConvRotINT8ControlNet`) — Loads ConvRot / TensorWise INT8-quantized ControlNet checkpoints (e.g., Qwen Image Fun ControlNet) keeping weights INT8 in VRAM with `comfy_kitchen` `int8_linear` execution. Resolves stock ComfyUI `controlnet_load_state_dict` INT8 initialization crashes by forcing BF16 module graph construction with explicit `int8_tensorwise` MixedPrecisionOps injection.
 - See [Release Notes v3.4.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.4) for details.
 
 ## Version 3.4.3

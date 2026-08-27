@@ -114,9 +114,9 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 **VRAM purge**: For **ConvRot NVFP4** (and HSWQ INT8) UNet loads, place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the end of the workflow with **`HSWQ`** on — same reason as the SDXL Checkpoint Loader section.
 
-### HSWQ Load ConvRot INT8 ControlNet Model
+### HSWQ ControlNet Loader (ConvRot INT8)
 
-<img src="png/convrot_int8_controlnet.png" alt="HSWQ Load ConvRot INT8 ControlNet Model" width="400">
+<img src="png/convrot_int8_controlnet.png" alt="HSWQ ControlNet Loader (ConvRot INT8)" width="400">
 
 ComfyUI loader node for **ConvRot / TensorWise INT8-quantized ControlNet checkpoints** (e.g. Qwen Image Fun ControlNet). Loads the ControlNet directly into VRAM in 8-bit precision (`QuantizedTensor` / `TensorWiseINT8Layout`) and executes via `comfy_kitchen`'s high-speed `int8_linear` kernel with online activation rotation (`convrot`).
 
@@ -133,7 +133,7 @@ Standard ComfyUI `controlnet_load_state_dict` sets architecture dtype to `weight
 
 - **Inputs**: `control_net_name` (safetensors ControlNet model from the `models/controlnet` directory)
 - **Outputs**: `CONTROL_NET`
-- **Category**: `HSWQ-ussoewwin`
+- **Category**: Loaders (`loaders`)
 - **Drop-in replacement**: Can replace ComfyUI's built-in "Load ControlNet Model" node entirely — automatically handles ConvRot INT8, FP8, BF16, and FP16 checkpoints without manual switching
 
 ### HSWQ Ultimate SD Upscale

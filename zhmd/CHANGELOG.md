@@ -16,7 +16,7 @@
 - 详情见 [发布说明 v3.4.5](v3.4.5.md)。
 ## Version 3.4.4
 
-- **新增**：**HSWQ Load ConvRot INT8 ControlNet Model**（`HSWQLoadConvRotINT8ControlNet`）节点 —— 支持在 ComfyUI 中直接加载 ConvRot / TensorWise INT8 量化 ControlNet（如 Qwen Image Fun ControlNet 等），权重在显存中保持 INT8 并走 `comfy_kitchen` 的 `int8_linear` 执行；通过强制 BF16 模块图构建与显式注入 `int8_tensorwise` MixedPrecisionOps，解决 ComfyUI 原生 `controlnet_load_state_dict` 的 INT8 梯度初始化崩溃问题。
+- **新增**：**HSWQ ControlNet Loader (ConvRot INT8)**（`HSWQControlNetLoader` / `HSWQLoadConvRotINT8ControlNet`）节点 —— 支持在 ComfyUI 中直接加载 ConvRot / TensorWise INT8 量化 ControlNet（如 Qwen Image Fun ControlNet 等），权重在显存中保持 INT8 并走 `comfy_kitchen` 的 `int8_linear` 执行；通过强制 BF16 模块图构建与显式注入 `int8_tensorwise` MixedPrecisionOps，解决 ComfyUI 原生 `controlnet_load_state_dict` 的 INT8 梯度初始化崩溃问题。
 - 详情见 [发布说明 v3.4.4](v3.4.4.md)。
 
 ## Version 3.4.3

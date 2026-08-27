@@ -159,7 +159,7 @@ def _load_comfy_flux_controlnet(sd: dict, model_options: dict):
     return control
 
 
-class HSWQLoadConvRotINT8ControlNet:
+class HSWQControlNetLoader:
     """Load a ConvRot INT8 ControlNet keeping weights INT8 in VRAM."""
 
     @classmethod
@@ -168,7 +168,7 @@ class HSWQLoadConvRotINT8ControlNet:
             "required": {
                 "control_net_name": (
                     get_filename_list(_CN_DIR),
-                    {"tooltip": "ConvRot INT8 ControlNet model (.safetensors)"},
+                    {"tooltip": "ConvRot INT8 / standard ControlNet model (.safetensors)"},
                 ),
             },
         }
@@ -176,8 +176,18 @@ class HSWQLoadConvRotINT8ControlNet:
     RETURN_TYPES = ("CONTROL_NET",)
     RETURN_NAMES = ("control_net",)
     FUNCTION = "load_controlnet"
-    CATEGORY = "HSWQ-ussoewwin"
-    TITLE = "HSWQ Load ConvRot INT8 ControlNet Model"
+    CATEGORY = "loaders"
+    TITLE = "HSWQ ControlNet Loader (ConvRot INT8)"
+    SEARCH_ALIASES = [
+        "controlnet",
+        "control net",
+        "cn",
+        "load controlnet",
+        "controlnet loader",
+        "hswq controlnet",
+        "convrot controlnet",
+        "int8 controlnet",
+    ]
 
     def load_controlnet(self, control_net_name: str, **kwargs):
         ckpt_path = get_full_path_or_raise(_CN_DIR, control_net_name)
@@ -237,3 +247,6 @@ class HSWQLoadConvRotINT8ControlNet:
                 f"[HSWQ INT8 CN] Failed to detect controlnet in {control_net_name}"
             )
         return (control,)
+
+
+HSWQLoadConvRotINT8ControlNet = HSWQControlNetLoader

@@ -682,14 +682,20 @@ except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Torch Compile not registered: %s", e)
 
 try:
-    from .nodes.hswq_load_convrot_int8_controlnet import HSWQLoadConvRotINT8ControlNet
+    from .nodes.hswq_load_convrot_int8_controlnet import (
+        HSWQControlNetLoader,
+        HSWQLoadConvRotINT8ControlNet,
+    )
+    NODE_CLASS_MAPPINGS["HSWQControlNetLoader"] = HSWQControlNetLoader
     NODE_CLASS_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = HSWQLoadConvRotINT8ControlNet
-    logger.info("Registered HSWQ Load ConvRot INT8 ControlNet Model")
+    logger.info("Registered HSWQ ControlNet Loader (ConvRot INT8)")
 except (ImportError, ModuleNotFoundError) as e:
-    logger.debug("HSWQ Load ConvRot INT8 ControlNet not registered: %s", e)
+    logger.debug("HSWQ ControlNet Loader not registered: %s", e)
 NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_MAPPINGS.items()}
-# Explicit override — TITLE alone is not enough for ComfyUI graph node headers.
+# Explicit overrides — TITLE alone is not enough for some ComfyUI graph headers / search menus.
 NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader (SDXL)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQControlNetLoader"] = "HSWQ ControlNet Loader (ConvRot INT8)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 WEB_DIRECTORY = "js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 logger.info("=" * (80 + len(" ComfyUI-nunchaku Initialization ")))
