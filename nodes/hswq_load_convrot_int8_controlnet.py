@@ -24,6 +24,14 @@ for UNet/CLIP.
 
 The output is a normal CONTROL_NET object; use it with the stock
 "Apply ControlNet" node.
+
+FLUX ControlNet note: ``comfy.controlnet.load_controlnet_state_dict`` has no
+detection branch for the comfy-native ``ControlNetFlux`` layout
+(``img_in`` / ``pos_embed_input.weight`` / ``controlnet_blocks.*``) - it only
+knows the diffusers, InstantX (``controlnet_x_embedder.weight``) and
+mistoline variants.  ConvRot INT8 FLUX ControlNets ship in exactly that
+comfy-native layout, so we detect it here and build ``ControlNetFlux``
+directly (mirroring ``load_controlnet_flux_instantx``).
 """
 from __future__ import annotations
 
@@ -82,6 +90,75 @@ def _int8_mixed_precision_ops():
     )
 
 
+def _looks_like_comfy_flux_controlnet(sd: dict) -> bool:
+    """True for the comfy-native ``ControlNetFlux`` layout.
+
+    Discriminators (all must hold):
+
+    - ``img_in.weight`` (comfy naming; InstantX/diffusers use
+      ``x_embedder`` / ``controlnet_x_embedder``)
+    - ``pos_embed_input.weight`` (plain Linear; SD3/mmdit use
+      ``pos_embed_input.proj.weight``)
+    - ``controlnet_blocks.0.weight``
+    - none of the classic-SD or InstantX markers
+    """
+    return (
+        "img_in.weight" in sd
+        and "controlnet_blocks.0.weight" in sd
+        and "pos_embed_input.weight" in sd
+        and "controlnet_x_embedder.weight" not in sd
+        and "control_model.zero_convs.0.0.weight" not in sd
+        and "zero_convs.0.0.weight" not in sd
+    )
+
+
+def _load_comfy_flux_controlnet(sd: dict, model_options: dict):
+    """Build a ``ControlNetFlux`` from a comfy-native FLUX ControlNet sd.
+
+    Mirrors ``comfy.controlnet.load_controlnet_flux_instantx``: latent-input
+    ControlNet with the FLUX latent format and y/guidance extra conds.  The
+    union mode embedder is only created when the sd actually carries
+    ``controlnet_mode_embedder.weight`` (ConvRot INT8 union-pro models don't).
+    """
+    (
+        model_config,
+        operations,
+        load_device,
+        unet_dtype,
+        manual_cast_dtype,
+        offload_device,
+    ) = comfy.controlnet.controlnet_config(sd, model_options=model_options)
+
+    # pos_embed_input is Linear(patch*patch*latent_channels -> hidden);
+    # patch size is 2, so latent channels = in_features // 4.
+    control_latent_channels = sd["pos_embed_input.weight"].shape[1] // 4
+
+    control_model = comfy.ldm.flux.controlnet.ControlNetFlux(
+        latent_input=True,
+        num_union_modes=0,
+        control_latent_channels=control_latent_channels,
+        operations=operations,
+        device=offload_device,
+        dtype=unet_dtype,
+        **model_config.unet_config,
+    )
+    control_model = comfy.controlnet.controlnet_load_state_dict(
+        control_model, sd
+    )
+
+    latent_format = comfy.latent_formats.Flux()
+    control = comfy.controlnet.ControlNet(
+        control_model,
+        compression_ratio=1,
+        latent_format=latent_format,
+        concat_mask=False,
+        load_device=load_device,
+        manual_cast_dtype=manual_cast_dtype,
+        extra_conds=["y", "guidance"],
+    )
+    return control
+
+
 class HSWQLoadConvRotINT8ControlNet:
     """Load a ConvRot INT8 ControlNet keeping weights INT8 in VRAM."""
 
@@ -106,6 +183,32 @@ class HSWQLoadConvRotINT8ControlNet:
         ckpt_path = get_full_path_or_raise(_CN_DIR, control_net_name)
 
         sd = comfy.utils.load_torch_file(ckpt_path, safe_load=True)
+
+        if _looks_like_comfy_flux_controlnet(sd):
+            # comfy.controlnet.load_controlnet_state_dict cannot detect the
+            # comfy-native ControlNetFlux layout -> build it directly.
+            model_options = {}
+            if _has_int8_comfy_quant(sd):
+                model_options = {
+                    "dtype": torch.bfloat16,
+                    "custom_operations": _int8_mixed_precision_ops(),
+                }
+                logger.info(
+                    "[HSWQ INT8 CN] INT8 ComfyQuant detected: loading %s with "
+                    "MixedPrecisionOps (weights stay INT8 in VRAM)",
+                    control_net_name,
+                )
+            else:
+                logger.info(
+                    "[HSWQ INT8 CN] No INT8 ComfyQuant layers, loading %s directly",
+                    control_net_name,
+                )
+            control = _load_comfy_flux_controlnet(sd, model_options)
+            if control is None:
+                raise RuntimeError(
+                    f"[HSWQ INT8 CN] Failed to detect controlnet in {control_net_name}"
+                )
+            return (control,)
 
         if _has_int8_comfy_quant(sd):
             model_options = {
