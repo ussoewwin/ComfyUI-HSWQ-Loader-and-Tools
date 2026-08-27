@@ -300,7 +300,14 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         load_extra_params=False,
     ):
         conf = peek_nvfp4_conf(state_dict, prefix)
-        if is_nvfp4_conf(conf):
+        weight_key = f"{prefix}weight"
+        w_tensor = state_dict.get(weight_key)
+        has_nvfp4_scale = f"{prefix}weight_scale_2" in state_dict
+
+        # Route to NVFP4 loader only if format is nvfp4 AND NVFP4 scales/packed storage exist
+        if is_nvfp4_conf(conf) and (
+            has_nvfp4_scale or (w_tensor is not None and getattr(w_tensor, "dtype", None) == torch.uint8)
+        ):
             load_nvfp4_linear_module(
                 module,
                 super_load,

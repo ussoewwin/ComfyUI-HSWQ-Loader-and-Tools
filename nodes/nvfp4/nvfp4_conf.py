@@ -73,10 +73,8 @@ def convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
 def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
     """Return logical in_features for a Linear weight.
 
-    NVFP4 storage K is packed (and often 16-padded). Never guess
-    ``packed_shape[1] * 2`` — that recovers padded K, not logical in_features
-    (e.g. logical 12 → pad 16 → pack 8 → *2 = 16 ≠ 12). Require
-    ``orig_shape`` / ``in_features`` on comfy_quant (or refuse).
+    NVFP4 storage K is packed (and often 16-padded). For packed uint8 weights,
+    prefer ``orig_shape`` / ``in_features`` on comfy_quant.
     """
     import torch
 
@@ -91,16 +89,14 @@ def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
     cq_key = comfy_quant_key_for_weight(weight_key)
     conf = decode_comfy_quant_conf(state_dict.get(cq_key))
     if is_nvfp4_conf(conf) and weight.ndim == 2:
-        orig = conf.get("orig_shape") if isinstance(conf, dict) else None
-        if orig is not None and len(orig) >= 2:
-            return int(orig[1])
-        if conf.get("in_features") is not None:
-            return int(conf["in_features"])
-        raise ValueError(
-            f"{weight_key}: nvfp4 packed weight but comfy_quant lacks "
-            f"orig_shape/in_features; refuse packed_K*{_NVFP4_PACK_FACTOR} guess "
-            f"(packed_K={packed_in})"
-        )
+        if getattr(weight, "dtype", None) == torch.uint8:
+            orig = conf.get("orig_shape") if isinstance(conf, dict) else None
+            if orig is not None and len(orig) >= 2:
+                return int(orig[1])
+            if isinstance(conf, dict) and conf.get("in_features") is not None:
+                return int(conf["in_features"])
+            return packed_in * _NVFP4_PACK_FACTOR
+        return packed_in
     return packed_in
 
 
@@ -164,6 +160,10 @@ def fix_unet_config_packed_dims(unet_config: dict, state_dict: dict, key_prefix:
                 break
         if attn_k is not None:
             unet_config["context_dim"] = logical_linear_in_features(state_dict, attn_k)
+
+    cap_emb = f"{key_prefix}cap_embedder.1.weight"
+    if cap_emb in state_dict and unet_config.get("cap_feat_dim") is not None:
+        unet_config["cap_feat_dim"] = logical_linear_in_features(state_dict, cap_emb)
 
     return unet_config
 
