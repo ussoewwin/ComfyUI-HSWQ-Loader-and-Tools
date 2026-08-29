@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.4.7
+
+- **新增**：**HSWQ SAM3 Loader（ConvRot INT8）与 HSWQ SAM3 Detect**（`HSWQSAM3Loader` / `HSWQLoadConvRotINT8SAM3` / `HSWQSAM3Detect`）节点 - 在 ComfyUI 中加载与运行 **ConvRot / TensorWise INT8 量化 SAM3（Segment Anything 3）** 检查点。权重以**真 INT8** 驻留 VRAM（`TensorWiseINT8Layout`），并通过 `comfy_kitchen` 的 `int8_linear`（带在线激活旋转）执行；非 4 倍数维度（例如 `boxRPB_embed_x` 的 K=2）自动以 float 精度回退（`_patch_comfy_kitchen_int8_gemm_fallback`）。
+- **修复**：**SAM3 INT8 在 DynamicVRAM（aimdo）下的运行崩溃** - `resolve_cast_module_with_vbar` 中的 `ValueError: Buffer too small`（`6d4f3f8`）：vbar 缓冲区按 INT8 载荷大小分配，运行时权重保护将权重替换为 FP16 后 cast geometry 不再匹配。`_strip_dynamic_vram_attrs` 现在会丢弃 vbar 状态（`_v` / `_prefetch` / `_v_signature` / `_v_block`，先 `vbar_unpin`），使 `cast_bias_weight` 回退到常规 cast 路径。
+- **修复**：**SAM3 CLIP 加载（"clip missing" → 掩码噪声）**（`8c20913`）：sd 级与 `_clip_stash` 的 `in_proj_weight` 预分割破坏了 ComfyUI 的 `transformers_convert` 重映射（它期望融合的 `in_proj_weight` 形式）；INT8 检查点的 language_backbone 已按 q/k/v 分割存储，`transformers_convert` 无法重映射。已移除两处预分割，并由 `process_clip_state_dict` 将残留的 `encoder.*` 键重映射为 `sam3_clip.transformer.text_model.encoder.layers.N.self_attn.q_proj`，恢复正确的文本嵌入（fp16 与 INT8 均约 0.98 分，掩码干净统一为白色）。
+- **文档**：`md/HSWQ_SAM3_CONVROT_INT8_TECHNICAL_GUIDE.md`（以 `d33862a` 为基线的完整技术指南）；README / 中文 README 更新了节点用法、示例工作流与 FP16 兼容性。
+- 详情见 [发布说明 v3.4.7](v3.4.7.md)。
+
 ## Version 3.4.6
 
 - **修复**：**SDXL anytest LoRA 型 ControlNet（ControlLora）在 ConvRot INT8 / Hybrid ConvRot NVFP4 基座上的失效与不染色问题** —— 两阶段根治（症状：先是控制完全无效，之后输出被锁定为线稿 —— 黑白、不染色、强度滑块失效）：
