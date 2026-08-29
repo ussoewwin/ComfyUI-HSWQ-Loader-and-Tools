@@ -2773,57 +2773,59 @@ def _patch_sam3_process_state_dict() -> bool:
             return False
 
         orig_process = getattr(sam3_cls, "process_unet_state_dict", None)
-        if orig_process is None or getattr(orig_process, "_hswq_patched", False):
+        orig_process_clip = getattr(sam3_cls, "process_clip_state_dict", None)
+        if orig_process is None or orig_process_clip is None or getattr(orig_process, "_hswq_patched", False):
             _SAM3_PROCESS_STATE_DICT_PATCHED = True
             return True
 
         def _safe_process_unet_state_dict(self, state_dict):
-            # Split in_proj_weight_scale and comfy_quant sidecars before original method pops in_proj_weight
-            for k in list(state_dict.keys()):
-                if k.endswith(".in_proj_weight"):
-                    base = k[:-len(".in_proj_weight")]
-                    w = state_dict.get(k)
-                    scale_key = base + ".in_proj_weight_scale"
-                    quant_key = base + ".in_proj_weight.comfy_quant"
-                    scale = state_dict.pop(scale_key, None)
-                    quant = state_dict.pop(quant_key, None)
-                    if w is not None and w.ndim >= 1:
-                        d = w.shape[0] // 3
-                        if scale is not None:
-                            if scale.ndim >= 1 and scale.shape[0] == w.shape[0]:
-                                state_dict[base + ".q_proj.weight_scale"] = scale[:d]
-                                state_dict[base + ".k_proj.weight_scale"] = scale[d:2*d]
-                                state_dict[base + ".v_proj.weight_scale"] = scale[2*d:]
-                            else:
-                                state_dict[base + ".q_proj.weight_scale"] = scale.clone() if hasattr(scale, "clone") else scale
-                                state_dict[base + ".k_proj.weight_scale"] = scale.clone() if hasattr(scale, "clone") else scale
-                                state_dict[base + ".v_proj.weight_scale"] = scale.clone() if hasattr(scale, "clone") else scale
-                        if quant is not None:
-                            state_dict[base + ".q_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
-                            state_dict[base + ".k_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
-                            state_dict[base + ".v_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
+            # HSWQ: keep stock behavior. Pre-splitting in_proj_weight (or its
+            # weight_scale / .comfy_quant sidecars) before ComfyUI's
+            # clip_text_transformers_convert() breaks the CLIP key remap:
+            # transformers_convert() expects the fused in_proj_weight form to
+            # produce "sam3_clip.transformer.text_model.encoder.layers.N.
+            # self_attn.q_proj" keys. Pre-split keys are left un-remapped, so the
+            # CLIP loads with missing weights ("clip missing") and corrupts text
+            # embeddings -> noisy SAM3 masks. Stock path handles everything.
+            return orig_process(self, state_dict)
 
-            # Run stock state dict remapping (handles tracker, in_proj_weight/bias split, mlp renames)
-            out = orig_process(self, state_dict)
+        _CLIP_SIMPLE_REMAP = {
+            "encoder.positional_embedding": "sam3_clip.transformer.text_model.embeddings.position_embedding.weight",
+            "encoder.token_embedding.weight": "sam3_clip.transformer.text_model.embeddings.token_embedding.weight",
+            "encoder.ln_final.weight": "sam3_clip.transformer.text_model.final_layer_norm.weight",
+            "encoder.ln_final.bias": "sam3_clip.transformer.text_model.final_layer_norm.bias",
+            "encoder.text_projection.weight": "sam3_clip.transformer.text_projection.weight",
+            "encoder.text_projection": "sam3_clip.transformer.text_projection.weight",
+        }
 
-            # Split in_proj_weight / in_proj_bias inside self._clip_stash so CLIP gets all 24 layers!
-            if hasattr(self, "_clip_stash") and isinstance(self._clip_stash, dict):
-                for k in list(self._clip_stash.keys()):
-                    if k.endswith((".in_proj_weight", ".in_proj_bias")):
-                        t = self._clip_stash.pop(k)
-                        base, suffix = k.rsplit(".in_proj_", 1)
-                        s = ".weight" if suffix == "weight" else ".bias"
-                        d = t.shape[0] // 3
-                        self._clip_stash[base + ".q_proj" + s] = t[:d]
-                        self._clip_stash[base + ".k_proj" + s] = t[d:2*d]
-                        self._clip_stash[base + ".v_proj" + s] = t[2*d:]
-
+        def _safe_process_clip_state_dict(self, state_dict):
+            clip_sd = orig_process_clip(self, state_dict)
+            # INT8 SAM3 checkpoints store language_backbone already split into
+            # q_proj/k_proj/v_proj (no fused in_proj_weight), so ComfyUI's
+            # transformers_convert() leaves those keys un-remapped
+            # ("clip missing" -> corrupt text embeddings -> noisy masks).
+            # Remap leftover "encoder.*" keys to the expected CLIP layout.
+            out = {}
+            for k, v in clip_sd.items():
+                nk = k
+                if nk.startswith("encoder.transformer.resblocks."):
+                    nk = nk.replace("encoder.transformer.resblocks.", "sam3_clip.transformer.text_model.encoder.layers.", 1)
+                    nk = nk.replace(".attn.", ".self_attn.")
+                    nk = nk.replace(".mlp.c_fc.", ".mlp.fc1.")
+                    nk = nk.replace(".mlp.c_proj.", ".mlp.fc2.")
+                    nk = nk.replace(".ln_1.", ".layer_norm1.")
+                    nk = nk.replace(".ln_2.", ".layer_norm2.")
+                elif nk in _CLIP_SIMPLE_REMAP:
+                    nk = _CLIP_SIMPLE_REMAP[nk]
+                out[nk] = v
             return out
 
         _safe_process_unet_state_dict._hswq_patched = True
+        _safe_process_clip_state_dict._hswq_patched = True
         sam3_cls.process_unet_state_dict = _safe_process_unet_state_dict
+        sam3_cls.process_clip_state_dict = _safe_process_clip_state_dict
         _SAM3_PROCESS_STATE_DICT_PATCHED = True
-        logger.info("[HSWQ INT8] SAM3 QKV ComfyQuant sidecar split patch armed")
+        logger.info("[HSWQ INT8] SAM3 process_state_dict patch armed (CLIP remap for pre-split INT8 checkpoints)")
         return True
     except Exception as e:
         logger.debug("[HSWQ INT8] SAM3 process_state_dict patch skipped: %s", e)
@@ -2977,16 +2979,10 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                     dequant_count,
                 )
 
-            # 3. Pre-split in_proj_weight / in_proj_bias in language_backbone so CLIP finds q_proj, k_proj, v_proj
-            for k in list(sd.keys()):
-                if "language_backbone" in k and k.endswith((".in_proj_weight", ".in_proj_bias")):
-                    t = sd.pop(k)
-                    base, suffix = k.rsplit(".in_proj_", 1)
-                    s = ".weight" if suffix == "weight" else ".bias"
-                    d = t.shape[0] // 3
-                    sd[base + ".q_proj" + s] = t[:d]
-                    sd[base + ".k_proj" + s] = t[d:2*d]
-                    sd[base + ".v_proj" + s] = t[2*d:]
+            # (removed) sd-level in_proj_weight pre-split: it breaks ComfyUI's
+            # clip_text_transformers_convert() remap -> "clip missing" -> corrupt
+            # text embeddings -> noisy SAM3 masks. The stock process_unet_state_dict
+            # / transformers_convert split in_proj_weight correctly.
 
             # 4. Attach MixedPrecisionOps for SAM3 so all Linear layers (ViT trunk, transformer) load as true INT8 in VRAM
             if has_int8:
