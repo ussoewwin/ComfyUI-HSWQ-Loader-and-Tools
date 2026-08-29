@@ -2800,10 +2800,26 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             metadata=None,
             disable_dynamic=False,
         ):
+            # Strict SAM3 gate: NEVER affect SDXL, Krea2, ZImage, FLUX, SD1.5, SD3, Wan, etc.
+            is_sam3 = any(k.startswith("detector.") or "detector.backbone.vision_backbone" in k for k in sd.keys())
+            if not is_sam3:
+                return orig_fn(
+                    sd,
+                    output_vae=output_vae,
+                    output_clip=output_clip,
+                    output_clipvision=output_clipvision,
+                    embedding_directory=embedding_directory,
+                    output_model=output_model,
+                    model_options=model_options,
+                    te_model_options=te_model_options,
+                    metadata=metadata,
+                    disable_dynamic=disable_dynamic,
+                )
+
             model_options = dict(model_options) if model_options else {}
             te_model_options = dict(te_model_options) if te_model_options else {}
 
-            # 1. Check if checkpoint carries INT8 comfy_quant layers
+            # 1. Check if SAM3 checkpoint carries INT8 comfy_quant layers
             has_int8 = False
             for k in sd.keys():
                 if k.endswith(".comfy_quant"):
@@ -2823,22 +2839,16 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                     disabled=[],
                 )
                 logger.info(
-                    "[HSWQ INT8] Load Checkpoint: Auto-attached MixedPrecisionOps for INT8 comfy_quant checkpoint"
+                    "[HSWQ INT8] Load Checkpoint: Auto-attached MixedPrecisionOps for SAM3 INT8 comfy_quant checkpoint"
                 )
 
-            # 2. Dequantize any text encoder keys to FP16 for flawless CLIP prompt encoding
+            # 2. Dequantize SAM3 language backbone (CLIP) keys to FP16 for flawless prompt encoding
             if output_clip and has_int8:
                 text_keys_to_dequant = []
                 for k in list(sd.keys()):
                     if k.endswith(".comfy_quant"):
                         base = k[:-len(".comfy_quant")]
-                        if any(base.startswith(p) for p in (
-                            "detector.backbone.language_backbone.",
-                            "text_encoders.",
-                            "cond_stage_model.",
-                            "clip_g.",
-                            "clip_l.",
-                        )):
+                        if base.startswith("detector.backbone.language_backbone."):
                             text_keys_to_dequant.append((base, k))
 
                 if text_keys_to_dequant:
@@ -2870,7 +2880,7 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                             sd.pop(scale_key, None)
                             sd.pop(quant_key, None)
                     logger.info(
-                        "[HSWQ INT8] Load Checkpoint: Dequantized %d text encoder keys to float16 for CLIP accuracy",
+                        "[HSWQ INT8] Load Checkpoint: Dequantized %d SAM3 language backbone keys to float16 for CLIP accuracy",
                         len(text_keys_to_dequant),
                     )
 
