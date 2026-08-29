@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.8
+
+- **移除**：**HSWQ SAM3 Loader（ConvRot INT8）与 HSWQ SAM3 Detect 节点** - SAM3 节点相关代码（加载器、检测节点、补丁、指南）已从树中移除。经测试（及 r/StableDiffusion 社区确认）证明**专用加载器并非必需**：启动时补丁（`_patch_load_state_dict_guess_config_int8` 的 `is_sam3` 门控）已能让标准加载器（`CheckpointLoaderSimple` / 默认 Comfy SAM3.1 节点）自动处理 ConvRot INT8 SAM3 检查点，包括 MixedPrecisionOps 附加与 CLIP 键重映射。树已恢复到基线 `d33862a`（`191ddbc`）；全部技术工作（补丁、节点、技术指南）仍保留在 git 历史中供参考。
+- 详情见 [发布说明 v3.4.8](v3.4.8.md)。
+
 ## Version 3.4.6
 
 - **修复**：**SDXL anytest LoRA 型 ControlNet（ControlLora）在 ConvRot INT8 / Hybrid ConvRot NVFP4 基座上的失效与不染色问题** —— 两阶段根治（症状：先是控制完全无效，之后输出被锁定为线稿 —— 黑白、不染色、强度滑块失效）：

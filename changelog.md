@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.4.8
+
+- **Removed**: **HSWQ SAM3 Loader (ConvRot INT8) & HSWQ SAM3 Detect nodes** - the SAM3 node work (loader, detect node, patches, guides) was removed from the tree. Testing (and community confirmation on r/StableDiffusion) showed the dedicated loader is **not required**: the startup patch (`_patch_load_state_dict_guess_config_int8`, `is_sam3` gate) already makes stock loaders (`CheckpointLoaderSimple` / default Comfy SAM3.1 node) handle ConvRot INT8 SAM3 checkpoints automatically, including MixedPrecisionOps attachment and CLIP key remapping. The tree is restored to baseline `d33862a` (`191ddbc`); all technical work (patches, nodes, technical guide) remains in the git history for reference.
+- See [Release Notes v3.4.8](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.8) for details.
+
 ## Version 3.4.6
 
 - **Fixed**: **SDXL anytest LoRA-type ControlNet (ControlLora) on ConvRot INT8 / Hybrid ConvRot NVFP4 bases** - two-stage root fix (symptom: control first had no effect, then locked the output onto the lineart - B&W, no coloring, dead strength slider):
