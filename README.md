@@ -138,6 +138,8 @@ Standard ComfyUI `controlnet_load_state_dict` sets architecture dtype to `weight
 
 ### HSWQ SAM3 Loader (ConvRot INT8) & SAM3 Detect
 
+<img src="png/sam3.png" alt="HSWQ SAM3 Loader & SAM3 Detect" width="500">
+
 ComfyUI loader and detector nodes for **ConvRot / TensorWise INT8-quantized SAM3 (Segment Anything 3) checkpoints**. Loads the SAM3 model directly into VRAM in 8-bit precision (`QuantizedTensor` / `TensorWiseINT8Layout`) and executes via `comfy_kitchen`'s high-speed `int8_linear` kernel with online activation rotation (`convrot`).
 
 Includes automatic hardware safety fallback for unaligned layers (such as `boxRPB_embed_x` with $K=2$), dynamically dequantizing non-multiple-of-4 dimensions while running all heavy backbone and transformer blocks in accelerated INT8 Tensor Core precision.
@@ -148,6 +150,38 @@ Includes automatic hardware safety fallback for unaligned layers (such as `boxRP
 - **Fast Execution**: Uses `comfy_kitchen` `int8_linear` GEMM kernel with online activation rotation for ConvRot layers
 - **Automatic Fallback Protection**: Layers with unaligned dimensions ($K \% 4 \neq 0$) safely compute in float precision without crashing cuBLAS INT8 GEMM
 - **Seamless Compatibility**: Produces standard `MODEL` output compatible with **HSWQ SAM3 Detect** and stock ComfyUI SAM3 detection/tracking nodes
+
+#### Nodes
+
+**HSWQ SAM3 Loader (ConvRot INT8)** — category `loaders`
+
+- **Input** `sam3_name`: ConvRot INT8 / standard SAM3 checkpoint (`.safetensors`), searched across `diffusion_models` / `sams` / `detection` / `checkpoints`
+- **Output** `model` (`MODEL`): standard ComfyUI model, compatible with HSWQ SAM3 Detect and stock SAM3 nodes
+- Detects `int8_tensorwise` comfy_quant metadata and auto-attaches `MixedPrecisionOps`, keeping Linear layers **true INT8 in VRAM**
+- Non-INT8 checkpoints load normally (no MixedPrecisionOps attached)
+
+**HSWQ SAM3 Detect** — category `HSWQ/Detection`
+
+- **Inputs**
+  - `model` (`MODEL`): SAM3 model (from HSWQ SAM3 Loader or CheckpointLoaderSimple)
+  - `image` (`IMAGE`): input image (batches supported)
+  - `conditioning` (`CONDITIONING`, optional): text prompts, e.g. CLIPTextEncode `"person"`
+  - `bboxes` (`BBOXES`, optional): boxes to segment within
+  - `positive_coords` / `negative_coords` (`STRING`, optional): point prompts as JSON `[{"x": int, "y": int}, ...]` (pixel coords)
+  - `threshold` (default `0.50`): detection score threshold
+  - `refine_iterations` (default `2`): SAM decoder refinement passes (`0` = raw detector masks)
+  - `individual_masks` (default `false`): output per-object masks instead of union
+- **Outputs**
+  - `masks` (`MASK`): binary segmentation masks
+  - `bboxes` (`BBOXES`): detected boxes with scores
+  - `image` (`IMAGE`): pass-through input image
+
+#### Example workflow
+
+1. **HSWQ SAM3 Loader** → select `sam3.1_multiplex_convrot_int8.safetensors`
+2. **CheckpointLoaderSimple** (same checkpoint) → **CLIPTextEncode** (`"person"`) for text-conditioned detection
+3. **HSWQ SAM3 Detect** → connect `model`, `image`, and `conditioning`
+4. **MaskPreview+** → visualize the `masks` output
 
 ### HSWQ Ultimate SD Upscale
 
