@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import threading
+import torch
 
 logger = logging.getLogger(__name__)
 _PATCHES_APPLIED = False
