@@ -141,8 +141,12 @@ try:
     from .patches.comfy_quant_int8 import (
         _patch_controllora_int8_dequant,
         _patch_comfy_kitchen_int8_gemm_fallback,
+        _patch_sam3_process_state_dict,
+        _patch_load_state_dict_guess_config_int8,
     )
     _patch_comfy_kitchen_int8_gemm_fallback()
+    _patch_sam3_process_state_dict()
+    _patch_load_state_dict_guess_config_int8()
     if not _patch_controllora_int8_dequant():
         logger.warning("ControlLora INT8 dequant patch not installed")
 except Exception:

@@ -2688,10 +2688,221 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
     return False
 
 
+def _regular_hadamard_global(size: int, device=None):
+    h4 = torch.tensor(
+        [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
+        dtype=torch.float32,
+        device=device,
+    )
+    h = h4
+    while h.shape[0] < size:
+        h = torch.kron(h, h4)
+    return h / (size ** 0.5)
+
+
+_SAM3_PROCESS_STATE_DICT_PATCHED = False
+
+
+def _patch_sam3_process_state_dict() -> bool:
+    """Fix ComfyUI SAM3 / SAM31 process_unet_state_dict to preserve and slice
+    weight_scale and .comfy_quant sidecars when in_proj_weight is split into
+    q_proj, k_proj, v_proj. Without this, INT8 QKV layers lose scales/metadata
+    and load as raw unscaled integers (off by 1000x), breaking attention and
+    causing all-black detection masks.
+    """
+    global _SAM3_PROCESS_STATE_DICT_PATCHED
+    if _SAM3_PROCESS_STATE_DICT_PATCHED:
+        return True
+
+    try:
+        import comfy.supported_models as sm
+        sam3_cls = getattr(sm, "SAM3", None)
+        if sam3_cls is None:
+            return False
+
+        orig_process = getattr(sam3_cls, "process_unet_state_dict", None)
+        if orig_process is None or getattr(orig_process, "_hswq_patched", False):
+            _SAM3_PROCESS_STATE_DICT_PATCHED = True
+            return True
+
+        def _safe_process_unet_state_dict(self, state_dict):
+            # Split in_proj_weight_scale and comfy_quant sidecars before original method pops in_proj_weight
+            for k in list(state_dict.keys()):
+                if k.endswith(".in_proj_weight"):
+                    base = k[:-len(".in_proj_weight")]
+                    w = state_dict.get(k)
+                    scale_key = base + ".in_proj_weight_scale"
+                    quant_key = base + ".in_proj_weight.comfy_quant"
+                    scale = state_dict.pop(scale_key, None)
+                    quant = state_dict.pop(quant_key, None)
+                    if w is not None and w.ndim >= 1:
+                        d = w.shape[0] // 3
+                        if scale is not None:
+                            if scale.ndim >= 1 and scale.shape[0] == w.shape[0]:
+                                state_dict[base + ".q_proj.weight_scale"] = scale[:d]
+                                state_dict[base + ".k_proj.weight_scale"] = scale[d:2*d]
+                                state_dict[base + ".v_proj.weight_scale"] = scale[2*d:]
+                            else:
+                                state_dict[base + ".q_proj.weight_scale"] = scale.clone() if hasattr(scale, "clone") else scale
+                                state_dict[base + ".k_proj.weight_scale"] = scale.clone() if hasattr(scale, "clone") else scale
+                                state_dict[base + ".v_proj.weight_scale"] = scale.clone() if hasattr(scale, "clone") else scale
+                        if quant is not None:
+                            state_dict[base + ".q_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
+                            state_dict[base + ".k_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
+                            state_dict[base + ".v_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
+
+            # Run stock state dict remapping (handles tracker, in_proj_weight/bias split, mlp renames)
+            return orig_process(self, state_dict)
+
+        _safe_process_unet_state_dict._hswq_patched = True
+        sam3_cls.process_unet_state_dict = _safe_process_unet_state_dict
+        _SAM3_PROCESS_STATE_DICT_PATCHED = True
+        logger.info("[HSWQ INT8] SAM3 QKV ComfyQuant sidecar split patch armed")
+        return True
+    except Exception as e:
+        logger.debug("[HSWQ INT8] SAM3 process_state_dict patch skipped: %s", e)
+        return False
+
+
+_CHECKPOINT_LOADER_INT8_PATCHED = False
+
+
+def _patch_load_state_dict_guess_config_int8() -> bool:
+    """Patch comfy.sd.load_state_dict_guess_config so that standard Load Checkpoint:
+    1. Automatically arms MixedPrecisionOps when loading INT8 comfy_quant checkpoints.
+    2. Automatically dequantizes text encoder (CLIP) keys if quantized to INT8,
+       ensuring CLIP Text Encode produces 100% accurate prompt embeddings.
+    """
+    global _CHECKPOINT_LOADER_INT8_PATCHED
+    if _CHECKPOINT_LOADER_INT8_PATCHED:
+        return True
+
+    try:
+        import comfy.sd
+        import torch
+        from comfy.quant_ops import QUANT_ALGOS
+        from comfy import ops as comfy_ops
+
+        orig_fn = getattr(comfy.sd, "load_state_dict_guess_config", None)
+        if orig_fn is None or getattr(orig_fn, "_hswq_patched", False):
+            _CHECKPOINT_LOADER_INT8_PATCHED = True
+            return True
+
+        def _safe_load_state_dict_guess_config(
+            sd,
+            output_vae=True,
+            output_clip=True,
+            output_clipvision=False,
+            embedding_directory=None,
+            output_model=True,
+            model_options={},
+            te_model_options={},
+            metadata=None,
+            disable_dynamic=False,
+        ):
+            model_options = dict(model_options) if model_options else {}
+            te_model_options = dict(te_model_options) if te_model_options else {}
+
+            # 1. Check if checkpoint carries INT8 comfy_quant layers
+            has_int8 = False
+            for k in sd.keys():
+                if k.endswith(".comfy_quant"):
+                    has_int8 = True
+                    break
+
+            if has_int8 and model_options.get("custom_operations") is None:
+                apply_comfy_quant_int8_patches()
+                quant_config = {
+                    "int8_tensorwise": QUANT_ALGOS["int8_tensorwise"],
+                }
+                model_options["dtype"] = model_options.get("dtype", torch.bfloat16)
+                model_options["custom_operations"] = comfy_ops.mixed_precision_ops(
+                    quant_config,
+                    model_options["dtype"],
+                    full_precision_mm=False,
+                    disabled=[],
+                )
+                logger.info(
+                    "[HSWQ INT8] Load Checkpoint: Auto-attached MixedPrecisionOps for INT8 comfy_quant checkpoint"
+                )
+
+            # 2. Dequantize any text encoder keys to FP16 for flawless CLIP prompt encoding
+            if output_clip and has_int8:
+                text_keys_to_dequant = []
+                for k in list(sd.keys()):
+                    if k.endswith(".comfy_quant"):
+                        base = k[:-len(".comfy_quant")]
+                        if any(base.startswith(p) for p in (
+                            "detector.backbone.language_backbone.",
+                            "text_encoders.",
+                            "cond_stage_model.",
+                            "clip_g.",
+                            "clip_l.",
+                        )):
+                            text_keys_to_dequant.append((base, k))
+
+                if text_keys_to_dequant:
+                    for base, quant_key in text_keys_to_dequant:
+                        w_key = base + "weight" if not base.endswith(".") else base + "weight"
+                        if w_key not in sd:
+                            w_key = base
+                        scale_key = base + "weight_scale" if not base.endswith(".") else base[:-1] + "_scale"
+                        if scale_key not in sd:
+                            scale_key = base + "_scale"
+
+                        q = sd.get(w_key)
+                        scale = sd.get(scale_key)
+                        raw_conf = sd.get(quant_key)
+                        if q is not None and scale is not None:
+                            try:
+                                conf = json.loads(raw_conf.numpy().tobytes()) if hasattr(raw_conf, "numpy") else {}
+                            except Exception:
+                                conf = {}
+                            w_float = q.float() * scale.float()
+                            if isinstance(conf, dict) and conf.get("convrot", False):
+                                gs = int(conf.get("convrot_groupsize", 0) or 0)
+                                if gs >= 4 and w_float.ndim == 2:
+                                    o, i = w_float.shape
+                                    if i % gs == 0 and i // gs > 0:
+                                        h = _regular_hadamard_global(gs, device=w_float.device)
+                                        w_float = (w_float.view(o, i // gs, gs) @ h).view(o, i)
+                            sd[w_key] = w_float.to(torch.float16)
+                            sd.pop(scale_key, None)
+                            sd.pop(quant_key, None)
+                    logger.info(
+                        "[HSWQ INT8] Load Checkpoint: Dequantized %d text encoder keys to float16 for CLIP accuracy",
+                        len(text_keys_to_dequant),
+                    )
+
+            return orig_fn(
+                sd,
+                output_vae=output_vae,
+                output_clip=output_clip,
+                output_clipvision=output_clipvision,
+                embedding_directory=embedding_directory,
+                output_model=output_model,
+                model_options=model_options,
+                te_model_options=te_model_options,
+                metadata=metadata,
+                disable_dynamic=disable_dynamic,
+            )
+
+        _safe_load_state_dict_guess_config._hswq_patched = True
+        comfy.sd.load_state_dict_guess_config = _safe_load_state_dict_guess_config
+        _CHECKPOINT_LOADER_INT8_PATCHED = True
+        logger.info("[HSWQ INT8] CheckpointLoader INT8 auto-attach & CLIP dequant patch armed")
+        return True
+    except Exception as e:
+        logger.debug("[HSWQ INT8] load_state_dict_guess_config patch failed: %s", e)
+        return False
+
+
 def apply_comfy_quant_int8_patches() -> bool:
     """Install INT8 comfy_quant patches once. Returns True if applied (or already applied)."""
     global _PATCHES_APPLIED
     ok_gemm = _patch_comfy_kitchen_int8_gemm_fallback()
+    ok_sam3_sd = _patch_sam3_process_state_dict()
+    ok_ckpt = _patch_load_state_dict_guess_config_int8()
     ok_keys = _patch_load_lora_key_counts()
     ok_name = _patch_lora_loader_name_context()
     ok_path = _patch_loras_folder_path_name()
