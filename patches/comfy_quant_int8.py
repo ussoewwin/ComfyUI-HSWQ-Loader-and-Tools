@@ -2820,71 +2820,69 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             te_model_options = dict(te_model_options) if te_model_options else {}
 
             # 1. Check if SAM3 checkpoint carries INT8 comfy_quant layers
-            has_int8 = False
-            for k in sd.keys():
-                if k.endswith(".comfy_quant"):
-                    has_int8 = True
-                    break
+            has_int8 = any(k.endswith(".comfy_quant") for k in sd.keys())
 
-            if has_int8 and model_options.get("custom_operations") is None:
+            # 2. Dequantize SAM3 language backbone (CLIP) keys to true FP16 for prompt encoding
+            if output_clip and has_int8:
+                text_quant_keys = [k for k in list(sd.keys()) if "language_backbone" in k and k.endswith(".comfy_quant")]
+                for quant_key in text_quant_keys:
+                    base = quant_key[:-len(".comfy_quant")]
+                    # Check possible weight and scale keys
+                    w_key = base + "weight" if base.endswith(".") else base + ".weight"
+                    if w_key not in sd:
+                        w_key = base
+                    candidates = [
+                        base + "weight_scale" if base.endswith(".") else base + ".weight_scale",
+                        base + "scale" if base.endswith(".") else base + ".scale",
+                        base[:-1] + "_scale" if base.endswith(".") else base + "_scale",
+                    ]
+                    scale_key = next((c for c in candidates if c in sd), None)
+
+                    q = sd.get(w_key)
+                    scale = sd.get(scale_key) if scale_key else None
+                    raw_conf = sd.get(quant_key)
+
+                    if q is not None and scale is not None:
+                        try:
+                            conf = json.loads(raw_conf.numpy().tobytes()) if hasattr(raw_conf, "numpy") else {}
+                        except Exception:
+                            conf = {}
+                        w_float = q.float() * scale.float()
+                        if isinstance(conf, dict) and conf.get("convrot", False):
+                            gs = int(conf.get("convrot_groupsize", 0) or 0)
+                            if gs >= 4 and w_float.ndim == 2:
+                                o, i = w_float.shape
+                                if i % gs == 0 and i // gs > 0:
+                                    h = _regular_hadamard_global(gs, device=w_float.device)
+                                    w_float = (w_float.view(o, i // gs, gs) @ h).view(o, i)
+                        sd[w_key] = w_float.to(torch.float16)
+                        if scale_key:
+                            sd.pop(scale_key, None)
+                        sd.pop(quant_key, None)
+                logger.info(
+                    "[HSWQ INT8] Load Checkpoint: Dequantized %d SAM3 language backbone keys to float16 for CLIP accuracy",
+                    len(text_quant_keys),
+                )
+
+            # 3. Attach MixedPrecisionOps for SAM3 MODEL
+            if has_int8:
                 apply_comfy_quant_int8_patches()
                 quant_config = {
                     "int8_tensorwise": QUANT_ALGOS["int8_tensorwise"],
                 }
-                model_options["dtype"] = model_options.get("dtype", torch.bfloat16)
-                model_options["custom_operations"] = comfy_ops.mixed_precision_ops(
+                sam3_ops = comfy_ops.mixed_precision_ops(
                     quant_config,
-                    model_options["dtype"],
+                    torch.bfloat16,
                     full_precision_mm=False,
                     disabled=[],
                 )
+                model_options["custom_operations"] = sam3_ops
+                model_options["dtype"] = torch.bfloat16
                 logger.info(
                     "[HSWQ INT8] Load Checkpoint: Auto-attached MixedPrecisionOps for SAM3 INT8 comfy_quant checkpoint"
                 )
 
-            # 2. Dequantize SAM3 language backbone (CLIP) keys to FP16 for flawless prompt encoding
-            if output_clip and has_int8:
-                text_keys_to_dequant = []
-                for k in list(sd.keys()):
-                    if k.endswith(".comfy_quant"):
-                        base = k[:-len(".comfy_quant")]
-                        if base.startswith("detector.backbone.language_backbone."):
-                            text_keys_to_dequant.append((base, k))
-
-                if text_keys_to_dequant:
-                    for base, quant_key in text_keys_to_dequant:
-                        w_key = base + "weight" if not base.endswith(".") else base + "weight"
-                        if w_key not in sd:
-                            w_key = base
-                        scale_key = base + "weight_scale" if not base.endswith(".") else base[:-1] + "_scale"
-                        if scale_key not in sd:
-                            scale_key = base + "_scale"
-
-                        q = sd.get(w_key)
-                        scale = sd.get(scale_key)
-                        raw_conf = sd.get(quant_key)
-                        if q is not None and scale is not None:
-                            try:
-                                conf = json.loads(raw_conf.numpy().tobytes()) if hasattr(raw_conf, "numpy") else {}
-                            except Exception:
-                                conf = {}
-                            w_float = q.float() * scale.float()
-                            if isinstance(conf, dict) and conf.get("convrot", False):
-                                gs = int(conf.get("convrot_groupsize", 0) or 0)
-                                if gs >= 4 and w_float.ndim == 2:
-                                    o, i = w_float.shape
-                                    if i % gs == 0 and i // gs > 0:
-                                        h = _regular_hadamard_global(gs, device=w_float.device)
-                                        w_float = (w_float.view(o, i // gs, gs) @ h).view(o, i)
-                            sd[w_key] = w_float.to(torch.float16)
-                            sd.pop(scale_key, None)
-                            sd.pop(quant_key, None)
-                    logger.info(
-                        "[HSWQ INT8] Load Checkpoint: Dequantized %d SAM3 language backbone keys to float16 for CLIP accuracy",
-                        len(text_keys_to_dequant),
-                    )
-
-            return orig_fn(
+            out = orig_fn(
                 sd,
                 output_vae=output_vae,
                 output_clip=output_clip,
@@ -2896,6 +2894,7 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                 metadata=metadata,
                 disable_dynamic=disable_dynamic,
             )
+            return out
 
         _safe_load_state_dict_guess_config._hswq_patched = True
         comfy.sd.load_state_dict_guess_config = _safe_load_state_dict_guess_config

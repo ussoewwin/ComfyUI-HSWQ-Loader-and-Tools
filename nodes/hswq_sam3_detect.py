@@ -87,10 +87,32 @@ def _refine_mask(sam3_model, orig_image_hwc, coarse_mask, box_xyxy, H, W, device
     return ((full_mask[0] > 0) | (coarse_full[0] > 0)).float()
 
 
+def _guard_sam3_model_weights(sam3_model):
+    """Ensure that all linear/conv layers in SAM3 are either QuantizedTensor or proper float,
+    never raw unscaled int8 (which causes all-black masks)."""
+    try:
+        from comfy_kitchen.tensor import QuantizedTensor
+    except Exception:
+        QuantizedTensor = None
+
+    for name, module in sam3_model.named_modules():
+        w = getattr(module, "weight", None)
+        if w is None:
+            continue
+        is_qt = QuantizedTensor is not None and isinstance(w, QuantizedTensor)
+        if not is_qt and getattr(w, "dtype", None) == torch.int8:
+            scale = getattr(module, "weight_scale", None)
+            if scale is not None:
+                module.weight = torch.nn.Parameter(
+                    (w.float() * scale.float()).to(dtype=torch.float16),
+                    requires_grad=False,
+                )
+
+
 def run_sam3_detect(model, image, conditioning=None, bboxes=None, positive_coords=None, negative_coords=None, threshold=0.5, refine_iterations=2, individual_masks=False):
     try:
-        from ..patches.comfy_quant_int8 import _patch_comfy_kitchen_int8_gemm_fallback
-        _patch_comfy_kitchen_int8_gemm_fallback()
+        from ..patches.comfy_quant_int8 import apply_comfy_quant_int8_patches
+        apply_comfy_quant_int8_patches()
     except Exception:
         pass
     B, H, W, C = image.shape
@@ -125,6 +147,7 @@ def run_sam3_detect(model, image, conditioning=None, bboxes=None, positive_coord
     device = comfy.model_management.get_torch_device()
     dtype = model.model.get_dtype()
     sam3_model = model.model.diffusion_model
+    _guard_sam3_model_weights(sam3_model)
 
     point_inputs = None
     if has_points:
