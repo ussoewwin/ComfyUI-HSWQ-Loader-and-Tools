@@ -183,6 +183,14 @@ Includes automatic hardware safety fallback for unaligned layers (such as `boxRP
 3. **HSWQ SAM3 Detect** → connect `model`, `image`, and `conditioning`
 4. **MaskPreview+** → visualize the `masks` output
 
+#### FP16 compatibility
+
+Both nodes fully support **standard FP16 SAM3 checkpoints** (e.g. `sam3.1_multiplex_fp16.safetensors`):
+
+- **HSWQ SAM3 Loader** detects the absence of `int8_tensorwise` comfy_quant metadata and loads the checkpoint with stock ComfyUI settings (no MixedPrecisionOps, no behavior change)
+- **HSWQ SAM3 Detect** runs identically on FP16 and INT8 models — the runtime weight guard dequantizes INT8 layers to FP16 internally, so both paths produce equivalent masks
+- FP16 checkpoints also work through the stock **CheckpointLoaderSimple** thanks to the HSWQ CLIP remap patch (no "clip missing" warning)
+
 ### HSWQ Ultimate SD Upscale
 
 <img src="png/usdu_auto_workflow.png" alt="HSWQ Ultimate SD Upscale" width="400">
