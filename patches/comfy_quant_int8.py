@@ -2851,7 +2851,7 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             # 1. Check if SAM3 checkpoint carries INT8 comfy_quant layers
             has_int8 = any(k.endswith(".comfy_quant") for k in sd.keys())
 
-            # 2. Dequantize & un-rotate Conv2d/ConvTranspose2d, language_backbone (CLIP), and mask decoder layers
+            # 2. Dequantize & un-rotate ALL SAM3 layers in sd to pristine FP16
             if has_int8:
                 dequant_count = 0
                 for quant_key in list(sd.keys()):
@@ -2865,57 +2865,25 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                     if q is None:
                         continue
 
-                    # Dequantize Conv2d/ConvTranspose2d (no INT8 kernel in PyTorch Conv2d),
-                    # language backbone (CLIP), and mask decoder/segmentation heads for solid masks
-                    is_conv = getattr(q, "ndim", 0) == 4
-                    is_text = "language_backbone" in quant_key
-                    is_mask_head = (
-                        "segmentation_head" in quant_key
-                        or "sam_mask_decoder" in quant_key
-                        or "mask_downscaling" in quant_key
-                        or "output_upscaling" in quant_key
-                        or "conv_s0" in quant_key
-                        or "conv_s1" in quant_key
-                    )
+                    candidates = [
+                        base + "weight_scale" if base.endswith(".") else base + ".weight_scale",
+                        base + "scale" if base.endswith(".") else base + ".scale",
+                        base[:-1] + "_scale" if base.endswith(".") else base + "_scale",
+                    ]
+                    scale_key = next((c for c in candidates if c in sd), None)
+                    scale = sd.get(scale_key) if scale_key else None
+                    raw_conf = sd.get(quant_key)
 
-                    if is_conv or is_text or is_mask_head:
-                        candidates = [
-                            base + "weight_scale" if base.endswith(".") else base + ".weight_scale",
-                            base + "scale" if base.endswith(".") else base + ".scale",
-                            base[:-1] + "_scale" if base.endswith(".") else base + "_scale",
-                        ]
-                        scale_key = next((c for c in candidates if c in sd), None)
-                        scale = sd.get(scale_key) if scale_key else None
-                        raw_conf = sd.get(quant_key)
-
-                        w_clean = _dequant_and_unrotate_tensor(q, scale, raw_conf)
-                        sd[w_key] = w_clean
-                        if scale_key:
-                            sd.pop(scale_key, None)
-                        sd.pop(quant_key, None)
-                        dequant_count += 1
+                    w_clean = _dequant_and_unrotate_tensor(q, scale, raw_conf)
+                    sd[w_key] = w_clean
+                    if scale_key:
+                        sd.pop(scale_key, None)
+                    sd.pop(quant_key, None)
+                    dequant_count += 1
 
                 logger.info(
-                    "[HSWQ INT8] Load Checkpoint: Dequantized & un-rotated %d Conv2d/CLIP/mask head keys to float16 for noise-free masks",
+                    "[HSWQ INT8] Load Checkpoint: Dequantized & un-rotated %d SAM3 layers to float16 for 100%% exact masks",
                     dequant_count,
-                )
-
-            # 3. Attach MixedPrecisionOps for SAM3 ViT/Transformer linear layers
-            if has_int8:
-                apply_comfy_quant_int8_patches()
-                quant_config = {
-                    "int8_tensorwise": QUANT_ALGOS["int8_tensorwise"],
-                }
-                sam3_ops = comfy_ops.mixed_precision_ops(
-                    quant_config,
-                    torch.bfloat16,
-                    full_precision_mm=False,
-                    disabled=[],
-                )
-                model_options["custom_operations"] = sam3_ops
-                model_options["dtype"] = torch.bfloat16
-                logger.info(
-                    "[HSWQ INT8] Load Checkpoint: Auto-attached MixedPrecisionOps for SAM3 INT8 comfy_quant checkpoint"
                 )
 
             out = orig_fn(

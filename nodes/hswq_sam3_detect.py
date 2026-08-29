@@ -88,8 +88,8 @@ def _refine_mask(sam3_model, orig_image_hwc, coarse_mask, box_xyxy, H, W, device
 
 
 def _guard_sam3_model_weights(sam3_model):
-    """Ensure that all linear/conv layers in SAM3 are either QuantizedTensor or proper float,
-    never raw unscaled int8 or rotated Conv2d (which causes noisy masks)."""
+    """Ensure that all linear/conv layers in SAM3 are pristine float16,
+    never raw unscaled int8, QuantizedTensor with kernel bugs, or rotated Conv2d."""
     try:
         from comfy_kitchen.tensor import QuantizedTensor
     except Exception:
@@ -104,10 +104,15 @@ def _guard_sam3_model_weights(sam3_model):
         if w is None:
             continue
         is_qt = QuantizedTensor is not None and isinstance(w, QuantizedTensor)
-        is_conv = isinstance(module, (torch.nn.Conv2d, torch.nn.ConvTranspose2d))
         is_raw_int8 = not is_qt and getattr(w, "dtype", None) == torch.int8
 
-        if is_raw_int8 or (is_conv and getattr(w, "dtype", None) == torch.int8):
+        if is_qt:
+            try:
+                w_deq = w.dequantize().to(torch.float16)
+                module.weight = torch.nn.Parameter(w_deq, requires_grad=False)
+            except Exception:
+                pass
+        elif is_raw_int8:
             scale = getattr(module, "weight_scale", None)
             w_float = w.float() * (scale.float() if scale is not None else 1.0)
             if _regular_hadamard_global is not None:
@@ -116,7 +121,9 @@ def _guard_sam3_model_weights(sam3_model):
                     for cand_gs in (256, 64, 16, 4):
                         if i % cand_gs == 0 and i // cand_gs > 0:
                             h = _regular_hadamard_global(cand_gs, device=w_float.device)
-                            w_float = (w_float.view(o, i // cand_gs, cand_gs) @ h).view(o, i)
+                            group_count = i // cand_gs
+                            w_grouped = w_float.view(o, group_count, cand_gs)
+                            w_float = torch.matmul(w_grouped, h.to(dtype=w_float.dtype, device=w_float.device)).reshape(o, i)
                             break
                 elif w_float.ndim == 4:
                     o, i, kh, kw = w_float.shape
@@ -124,8 +131,10 @@ def _guard_sam3_model_weights(sam3_model):
                         if i % cand_gs == 0 and i // cand_gs > 0:
                             h = _regular_hadamard_global(cand_gs, device=w_float.device)
                             flat = w_float.permute(0, 2, 3, 1).contiguous().view(-1, i)
-                            flat = (flat.view(-1, i // cand_gs, cand_gs) @ h).view(-1, i)
-                            w_float = flat.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
+                            group_count = i // cand_gs
+                            flat_grouped = flat.view(-1, group_count, cand_gs)
+                            flat_un = torch.matmul(flat_grouped, h.to(dtype=flat.dtype, device=flat.device)).reshape(-1, i)
+                            w_float = flat_un.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
                             break
             module.weight = torch.nn.Parameter(w_float.to(dtype=torch.float16), requires_grad=False)
 
