@@ -2676,24 +2676,53 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
                 logger.debug("[HSWQ INT8] int8_addmm fallback (k=%d, n=%d): %s", k, n, e)
                 return torch.addmm(*dequantize_args(args), **dequantize_args(kwargs))
 
-        _INT8_DEQUANT_DTYPE_TO_CODE = {
-            torch.float32: 0,
-            torch.float16: 1,
-            torch.bfloat16: 2,
-        }
-
         def _safe_dequantize(qdata, params):
-            output_dtype_code = _INT8_DEQUANT_DTYPE_TO_CODE.get(params.orig_dtype, 0)
+            output_dtype = getattr(params, "orig_dtype", torch.float16)
             scale = params.scale
-            if isinstance(scale, torch.Tensor) and scale.dim() > 1:
-                scale = scale.squeeze(-1).contiguous()
-            if getattr(params, "convrot", False):
-                result = torch.ops.comfy_kitchen.dequantize_int8_convrot_weight_dtype(
-                    qdata.contiguous(), scale, params.convrot_groupsize, output_dtype_code
-                )
+            # 1. Multiply qdata by scale with correct broadcasting
+            if scale is None:
+                w_float = qdata.float()
+            elif isinstance(scale, torch.Tensor):
+                if scale.ndim == 1 and qdata.ndim == 2 and scale.shape[0] == qdata.shape[0]:
+                    w_float = qdata.float() * scale.float().unsqueeze(1)
+                elif scale.ndim == 2 and qdata.ndim == 2 and scale.shape[0] == qdata.shape[0]:
+                    w_float = qdata.float() * scale.float()
+                elif scale.numel() == 1:
+                    w_float = qdata.float() * scale.item()
+                else:
+                    try:
+                        w_float = qdata.float() * scale.float()
+                    except Exception:
+                        w_float = qdata.float() * scale.float().view(-1, 1)
             else:
-                result = torch.ops.comfy_kitchen.dequantize_int8_simple_dtype(qdata.contiguous(), scale, output_dtype_code)
-            return result.to(params.orig_dtype)
+                w_float = qdata.float() * float(scale)
+
+            # 2. Apply ConvRot Hadamard un-rotation if enabled
+            convrot = getattr(params, "convrot", False)
+            gs = getattr(params, "convrot_groupsize", 256) or 256
+            if convrot and w_float.ndim >= 2:
+                if w_float.ndim == 2:
+                    o, i = w_float.shape
+                    for cand_gs in (gs, 256, 64, 16, 4):
+                        if i % cand_gs == 0 and i // cand_gs > 0:
+                            h = _regular_hadamard_global(cand_gs, device=w_float.device)
+                            group_count = i // cand_gs
+                            w_grouped = w_float.view(o, group_count, cand_gs)
+                            w_float = torch.matmul(w_grouped, h.to(dtype=w_float.dtype, device=w_float.device)).reshape(o, i)
+                            break
+                elif w_float.ndim == 4:
+                    o, i, kh, kw = w_float.shape
+                    for cand_gs in (gs, 256, 64, 16, 4):
+                        if i % cand_gs == 0 and i // cand_gs > 0:
+                            h = _regular_hadamard_global(cand_gs, device=w_float.device)
+                            flat = w_float.permute(0, 2, 3, 1).contiguous().view(-1, i)
+                            group_count = i // cand_gs
+                            flat_grouped = flat.view(-1, group_count, cand_gs)
+                            flat_un = torch.matmul(flat_grouped, h.to(dtype=flat.dtype, device=flat.device)).reshape(-1, i)
+                            w_float = flat_un.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
+                            break
+
+            return w_float.to(output_dtype)
 
         TensorWiseINT8Layout.dequantize = _safe_dequantize
         _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.linear.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_linear_tensorwise
@@ -2806,7 +2835,23 @@ def _dequant_and_unrotate_tensor(q, scale, raw_conf):
         conf = json.loads(raw_conf.numpy().tobytes()) if hasattr(raw_conf, "numpy") else {}
     except Exception:
         conf = {}
-    w_float = q.float() * (scale.float() if scale is not None else 1.0)
+    if scale is None:
+        w_float = q.float()
+    elif isinstance(scale, torch.Tensor):
+        if scale.ndim == 1 and q.ndim == 2 and scale.shape[0] == q.shape[0]:
+            w_float = q.float() * scale.float().unsqueeze(1)
+        elif scale.ndim == 2 and q.ndim == 2 and scale.shape[0] == q.shape[0]:
+            w_float = q.float() * scale.float()
+        elif scale.numel() == 1:
+            w_float = q.float() * scale.item()
+        else:
+            try:
+                w_float = q.float() * scale.float()
+            except Exception:
+                w_float = q.float() * scale.float().view(-1, 1)
+    else:
+        w_float = q.float() * float(scale)
+
     has_convrot = isinstance(conf, dict) and conf.get("convrot", False)
     gs = int(conf.get("convrot_groupsize", 256) or 256) if has_convrot else 0
 
@@ -2816,7 +2861,9 @@ def _dequant_and_unrotate_tensor(q, scale, raw_conf):
             for cand_gs in (gs, 256, 64, 16, 4):
                 if i % cand_gs == 0 and i // cand_gs > 0:
                     h = _regular_hadamard_global(cand_gs, device=w_float.device)
-                    w_float = (w_float.view(o, i // cand_gs, cand_gs) @ h).view(o, i)
+                    group_count = i // cand_gs
+                    w_grouped = w_float.view(o, group_count, cand_gs)
+                    w_float = torch.matmul(w_grouped, h.to(dtype=w_float.dtype, device=w_float.device)).reshape(o, i)
                     break
         elif w_float.ndim == 4:
             o, i, kh, kw = w_float.shape
@@ -2824,8 +2871,10 @@ def _dequant_and_unrotate_tensor(q, scale, raw_conf):
                 if i % cand_gs == 0 and i // cand_gs > 0:
                     h = _regular_hadamard_global(cand_gs, device=w_float.device)
                     flat = w_float.permute(0, 2, 3, 1).contiguous().view(-1, i)
-                    flat = (flat.view(-1, i // cand_gs, cand_gs) @ h).view(-1, i)
-                    w_float = flat.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
+                    group_count = i // cand_gs
+                    flat_grouped = flat.view(-1, group_count, cand_gs)
+                    flat_un = torch.matmul(flat_grouped, h.to(dtype=flat.dtype, device=flat.device)).reshape(-1, i)
+                    w_float = flat_un.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
                     break
     return w_float.to(torch.float16)
 
@@ -2834,10 +2883,9 @@ _CHECKPOINT_LOADER_INT8_PATCHED = False
 
 
 def _patch_load_state_dict_guess_config_int8() -> bool:
-    """Patch comfy.sd.load_state_dict_guess_config so that standard Load Checkpoint:
-    1. Automatically arms MixedPrecisionOps when loading INT8 comfy_quant checkpoints.
-    2. Automatically dequantizes text encoder (CLIP), Conv2d, and mask decoder keys,
-       ensuring clean, solid, noise-free segmentation masks.
+    """Patch comfy.sd.load_state_dict_guess_config so that SAM3 checkpoints
+    with .comfy_quant INT8 layers automatically attach MixedPrecisionOps with
+    INT8 tensorwise algorithm, while dequantizing text encoder (CLIP) keys.
     """
     global _CHECKPOINT_LOADER_INT8_PATCHED
     if _CHECKPOINT_LOADER_INT8_PATCHED:
@@ -2845,8 +2893,8 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
 
     try:
         import comfy.sd
+        import comfy.ops as comfy_ops
         from comfy.quant_ops import QUANT_ALGOS
-        from comfy import ops as comfy_ops
 
         orig_fn = getattr(comfy.sd, "load_state_dict_guess_config", None)
         if orig_fn is None or getattr(orig_fn, "_hswq_patched", False):
@@ -2865,6 +2913,9 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             metadata=None,
             disable_dynamic=False,
         ):
+            # Arm sub-patches first
+            apply_comfy_quant_int8_patches()
+
             # Strict SAM3 gate: NEVER affect SDXL, Krea2, ZImage, FLUX, SD1.5, SD3, Wan, etc.
             is_sam3 = any(k.startswith("detector.") or "detector.backbone.vision_backbone" in k for k in sd.keys())
             if not is_sam3:
@@ -2887,7 +2938,7 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             # 1. Check if SAM3 checkpoint carries INT8 comfy_quant layers
             has_int8 = any(k.endswith(".comfy_quant") for k in sd.keys())
 
-            # 2. Dequantize text encoder keys (CLIP Text Encode requires float) and 4D Conv2d keys
+            # 2. Pre-split and dequantize language_backbone (CLIP Text Encode) and Conv2d keys in sd
             if has_int8:
                 dequant_count = 0
                 for quant_key in list(sd.keys()):
@@ -2926,9 +2977,19 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                     dequant_count,
                 )
 
-            # 3. Attach MixedPrecisionOps for SAM3 so all Linear layers (ViT trunk, transformer) load as true INT8 in VRAM
+            # 3. Pre-split in_proj_weight / in_proj_bias in language_backbone so CLIP finds q_proj, k_proj, v_proj
+            for k in list(sd.keys()):
+                if "language_backbone" in k and k.endswith((".in_proj_weight", ".in_proj_bias")):
+                    t = sd.pop(k)
+                    base, suffix = k.rsplit(".in_proj_", 1)
+                    s = ".weight" if suffix == "weight" else ".bias"
+                    d = t.shape[0] // 3
+                    sd[base + ".q_proj" + s] = t[:d]
+                    sd[base + ".k_proj" + s] = t[d:2*d]
+                    sd[base + ".v_proj" + s] = t[2*d:]
+
+            # 4. Attach MixedPrecisionOps for SAM3 so all Linear layers (ViT trunk, transformer) load as true INT8 in VRAM
             if has_int8:
-                apply_comfy_quant_int8_patches()
                 quant_config = {
                     "int8_tensorwise": QUANT_ALGOS["int8_tensorwise"],
                 }
