@@ -2765,14 +2765,43 @@ def _patch_sam3_process_state_dict() -> bool:
         return False
 
 
+def _dequant_and_unrotate_tensor(q, scale, raw_conf):
+    try:
+        conf = json.loads(raw_conf.numpy().tobytes()) if hasattr(raw_conf, "numpy") else {}
+    except Exception:
+        conf = {}
+    w_float = q.float() * (scale.float() if scale is not None else 1.0)
+    has_convrot = isinstance(conf, dict) and conf.get("convrot", False)
+    gs = int(conf.get("convrot_groupsize", 256) or 256) if has_convrot else 0
+
+    if has_convrot and gs >= 4:
+        if w_float.ndim == 2:
+            o, i = w_float.shape
+            for cand_gs in (gs, 256, 64, 16, 4):
+                if i % cand_gs == 0 and i // cand_gs > 0:
+                    h = _regular_hadamard_global(cand_gs, device=w_float.device)
+                    w_float = (w_float.view(o, i // cand_gs, cand_gs) @ h).view(o, i)
+                    break
+        elif w_float.ndim == 4:
+            o, i, kh, kw = w_float.shape
+            for cand_gs in (gs, 256, 64, 16, 4):
+                if i % cand_gs == 0 and i // cand_gs > 0:
+                    h = _regular_hadamard_global(cand_gs, device=w_float.device)
+                    flat = w_float.permute(0, 2, 3, 1).contiguous().view(-1, i)
+                    flat = (flat.view(-1, i // cand_gs, cand_gs) @ h).view(-1, i)
+                    w_float = flat.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
+                    break
+    return w_float.to(torch.float16)
+
+
 _CHECKPOINT_LOADER_INT8_PATCHED = False
 
 
 def _patch_load_state_dict_guess_config_int8() -> bool:
     """Patch comfy.sd.load_state_dict_guess_config so that standard Load Checkpoint:
     1. Automatically arms MixedPrecisionOps when loading INT8 comfy_quant checkpoints.
-    2. Automatically dequantizes text encoder (CLIP) keys if quantized to INT8,
-       ensuring CLIP Text Encode produces 100% accurate prompt embeddings.
+    2. Automatically dequantizes text encoder (CLIP), Conv2d, and mask decoder keys,
+       ensuring clean, solid, noise-free segmentation masks.
     """
     global _CHECKPOINT_LOADER_INT8_PATCHED
     if _CHECKPOINT_LOADER_INT8_PATCHED:
@@ -2780,7 +2809,6 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
 
     try:
         import comfy.sd
-        import torch
         from comfy.quant_ops import QUANT_ALGOS
         from comfy import ops as comfy_ops
 
@@ -2823,49 +2851,56 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             # 1. Check if SAM3 checkpoint carries INT8 comfy_quant layers
             has_int8 = any(k.endswith(".comfy_quant") for k in sd.keys())
 
-            # 2. Dequantize SAM3 language backbone (CLIP) keys to true FP16 for prompt encoding
-            if output_clip and has_int8:
-                text_quant_keys = [k for k in list(sd.keys()) if "language_backbone" in k and k.endswith(".comfy_quant")]
-                for quant_key in text_quant_keys:
+            # 2. Dequantize & un-rotate Conv2d/ConvTranspose2d, language_backbone (CLIP), and mask decoder layers
+            if has_int8:
+                dequant_count = 0
+                for quant_key in list(sd.keys()):
+                    if not quant_key.endswith(".comfy_quant"):
+                        continue
                     base = quant_key[:-len(".comfy_quant")]
-                    # Check possible weight and scale keys
                     w_key = base + "weight" if base.endswith(".") else base + ".weight"
                     if w_key not in sd:
                         w_key = base
-                    candidates = [
-                        base + "weight_scale" if base.endswith(".") else base + ".weight_scale",
-                        base + "scale" if base.endswith(".") else base + ".scale",
-                        base[:-1] + "_scale" if base.endswith(".") else base + "_scale",
-                    ]
-                    scale_key = next((c for c in candidates if c in sd), None)
-
                     q = sd.get(w_key)
-                    scale = sd.get(scale_key) if scale_key else None
-                    raw_conf = sd.get(quant_key)
+                    if q is None:
+                        continue
 
-                    if q is not None and scale is not None:
-                        try:
-                            conf = json.loads(raw_conf.numpy().tobytes()) if hasattr(raw_conf, "numpy") else {}
-                        except Exception:
-                            conf = {}
-                        w_float = q.float() * scale.float()
-                        if isinstance(conf, dict) and conf.get("convrot", False):
-                            gs = int(conf.get("convrot_groupsize", 0) or 0)
-                            if gs >= 4 and w_float.ndim == 2:
-                                o, i = w_float.shape
-                                if i % gs == 0 and i // gs > 0:
-                                    h = _regular_hadamard_global(gs, device=w_float.device)
-                                    w_float = (w_float.view(o, i // gs, gs) @ h).view(o, i)
-                        sd[w_key] = w_float.to(torch.float16)
+                    # Dequantize Conv2d/ConvTranspose2d (no INT8 kernel in PyTorch Conv2d),
+                    # language backbone (CLIP), and mask decoder/segmentation heads for solid masks
+                    is_conv = getattr(q, "ndim", 0) == 4
+                    is_text = "language_backbone" in quant_key
+                    is_mask_head = (
+                        "segmentation_head" in quant_key
+                        or "sam_mask_decoder" in quant_key
+                        or "mask_downscaling" in quant_key
+                        or "output_upscaling" in quant_key
+                        or "conv_s0" in quant_key
+                        or "conv_s1" in quant_key
+                    )
+
+                    if is_conv or is_text or is_mask_head:
+                        candidates = [
+                            base + "weight_scale" if base.endswith(".") else base + ".weight_scale",
+                            base + "scale" if base.endswith(".") else base + ".scale",
+                            base[:-1] + "_scale" if base.endswith(".") else base + "_scale",
+                        ]
+                        scale_key = next((c for c in candidates if c in sd), None)
+                        scale = sd.get(scale_key) if scale_key else None
+                        raw_conf = sd.get(quant_key)
+
+                        w_clean = _dequant_and_unrotate_tensor(q, scale, raw_conf)
+                        sd[w_key] = w_clean
                         if scale_key:
                             sd.pop(scale_key, None)
                         sd.pop(quant_key, None)
+                        dequant_count += 1
+
                 logger.info(
-                    "[HSWQ INT8] Load Checkpoint: Dequantized %d SAM3 language backbone keys to float16 for CLIP accuracy",
-                    len(text_quant_keys),
+                    "[HSWQ INT8] Load Checkpoint: Dequantized & un-rotated %d Conv2d/CLIP/mask head keys to float16 for noise-free masks",
+                    dequant_count,
                 )
 
-            # 3. Attach MixedPrecisionOps for SAM3 MODEL
+            # 3. Attach MixedPrecisionOps for SAM3 ViT/Transformer linear layers
             if has_int8:
                 apply_comfy_quant_int8_patches()
                 quant_config = {

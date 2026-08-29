@@ -89,24 +89,45 @@ def _refine_mask(sam3_model, orig_image_hwc, coarse_mask, box_xyxy, H, W, device
 
 def _guard_sam3_model_weights(sam3_model):
     """Ensure that all linear/conv layers in SAM3 are either QuantizedTensor or proper float,
-    never raw unscaled int8 (which causes all-black masks)."""
+    never raw unscaled int8 or rotated Conv2d (which causes noisy masks)."""
     try:
         from comfy_kitchen.tensor import QuantizedTensor
     except Exception:
         QuantizedTensor = None
+    try:
+        from ..patches.comfy_quant_int8 import _regular_hadamard_global
+    except Exception:
+        _regular_hadamard_global = None
 
     for name, module in sam3_model.named_modules():
         w = getattr(module, "weight", None)
         if w is None:
             continue
         is_qt = QuantizedTensor is not None and isinstance(w, QuantizedTensor)
-        if not is_qt and getattr(w, "dtype", None) == torch.int8:
+        is_conv = isinstance(module, (torch.nn.Conv2d, torch.nn.ConvTranspose2d))
+        is_raw_int8 = not is_qt and getattr(w, "dtype", None) == torch.int8
+
+        if is_raw_int8 or (is_conv and getattr(w, "dtype", None) == torch.int8):
             scale = getattr(module, "weight_scale", None)
-            if scale is not None:
-                module.weight = torch.nn.Parameter(
-                    (w.float() * scale.float()).to(dtype=torch.float16),
-                    requires_grad=False,
-                )
+            w_float = w.float() * (scale.float() if scale is not None else 1.0)
+            if _regular_hadamard_global is not None:
+                if w_float.ndim == 2:
+                    o, i = w_float.shape
+                    for cand_gs in (256, 64, 16, 4):
+                        if i % cand_gs == 0 and i // cand_gs > 0:
+                            h = _regular_hadamard_global(cand_gs, device=w_float.device)
+                            w_float = (w_float.view(o, i // cand_gs, cand_gs) @ h).view(o, i)
+                            break
+                elif w_float.ndim == 4:
+                    o, i, kh, kw = w_float.shape
+                    for cand_gs in (256, 64, 16, 4):
+                        if i % cand_gs == 0 and i // cand_gs > 0:
+                            h = _regular_hadamard_global(cand_gs, device=w_float.device)
+                            flat = w_float.permute(0, 2, 3, 1).contiguous().view(-1, i)
+                            flat = (flat.view(-1, i // cand_gs, cand_gs) @ h).view(-1, i)
+                            w_float = flat.view(o, kh, kw, i).permute(0, 3, 1, 2).contiguous()
+                            break
+            module.weight = torch.nn.Parameter(w_float.to(dtype=torch.float16), requires_grad=False)
 
 
 def run_sam3_detect(model, image, conditioning=None, bboxes=None, positive_coords=None, negative_coords=None, threshold=0.5, refine_iterations=2, individual_masks=False):
