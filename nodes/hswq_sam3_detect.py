@@ -88,8 +88,8 @@ def _refine_mask(sam3_model, orig_image_hwc, coarse_mask, box_xyxy, H, W, device
 
 
 def _guard_sam3_model_weights(sam3_model):
-    """Ensure that all linear/conv layers in SAM3 are pristine float16,
-    never raw unscaled int8, QuantizedTensor with kernel bugs, or rotated Conv2d."""
+    """Ensure that all linear/conv layers in SAM3 are either QuantizedTensor (true INT8) or proper float,
+    never raw unscaled int8 (which causes all-black masks)."""
     try:
         from comfy_kitchen.tensor import QuantizedTensor
     except Exception:
@@ -106,13 +106,7 @@ def _guard_sam3_model_weights(sam3_model):
         is_qt = QuantizedTensor is not None and isinstance(w, QuantizedTensor)
         is_raw_int8 = not is_qt and getattr(w, "dtype", None) == torch.int8
 
-        if is_qt:
-            try:
-                w_deq = w.dequantize().to(torch.float16)
-                module.weight = torch.nn.Parameter(w_deq, requires_grad=False)
-            except Exception:
-                pass
-        elif is_raw_int8:
+        if is_raw_int8:
             scale = getattr(module, "weight_scale", None)
             w_float = w.float() * (scale.float() if scale is not None else 1.0)
             if _regular_hadamard_global is not None:
