@@ -1,1 +1,0 @@
-Prompt executed in 47.77 seconds\nFETCH ComfyRegistry Data: 100/166\nFETCH ComfyRegistry Data: 105/166\nFETCH ComfyRegistry Data: 110/166\nFETCH ComfyRegistry Data: 115/166\nFETCH ComfyRegistry Data: 120/166\nFETCH Com

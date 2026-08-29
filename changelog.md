@@ -7,14 +7,6 @@
   </tr>
 </table>
 
-## Version 3.4.7
-
-- **Added**: **HSWQ SAM3 Loader (ConvRot INT8) & HSWQ SAM3 Detect** (`HSWQSAM3Loader` / `HSWQLoadConvRotINT8SAM3` / `HSWQSAM3Detect`) - load and run **ConvRot / TensorWise INT8-quantized SAM3 (Segment Anything 3)** checkpoints in ComfyUI. Weights stay **true INT8 in VRAM** (`TensorWiseINT8Layout`) and execute via `comfy_kitchen` `int8_linear` with online activation rotation; non-multiple-of-4 layers (e.g. `boxRPB_embed_x` K=2) automatically fall back to float precision (`_patch_comfy_kitchen_int8_gemm_fallback`).
-- **Fixed**: **SAM3 INT8 runtime crash under DynamicVRAM (aimdo)** - `ValueError: Buffer too small` in `resolve_cast_module_with_vbar` (`6d4f3f8`): the vbar buffer is allocated with the INT8 payload size, so after the runtime weight guard replaces weights with FP16 the cast geometry no longer fits. `_strip_dynamic_vram_attrs` now drops the vbar state (`_v` / `_prefetch` / `_v_signature` / `_v_block`, after `vbar_unpin`) so `cast_bias_weight` falls back to the regular cast path.
-- **Fixed**: **SAM3 CLIP loading ("clip missing" -> noisy masks)** (`8c20913`): the sd-level and `_clip_stash` `in_proj_weight` pre-splits broke ComfyUI's `transformers_convert` remap (it expects the fused `in_proj_weight` form), and INT8 checkpoints store language_backbone already split into q/k/v, which `transformers_convert` cannot remap. Both pre-splits were removed and `process_clip_state_dict` now remaps the leftover `encoder.*` keys to `sam3_clip.transformer.text_model.encoder.layers.N.self_attn.q_proj`, restoring correct text embeddings (fp16 and INT8 both score ~0.98; masks are clean uniform white).
-- **Docs**: `md/HSWQ_SAM3_CONVROT_INT8_TECHNICAL_GUIDE.md` (complete technical guide against baseline `d33862a`); README / zhmd README updated with node usage, example workflow, and FP16 compatibility.
-- See [Release Notes v3.4.7](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.7) for details.
-
 ## Version 3.4.6
 
 - **Fixed**: **SDXL anytest LoRA-type ControlNet (ControlLora) on ConvRot INT8 / Hybrid ConvRot NVFP4 bases** - two-stage root fix (symptom: control first had no effect, then locked the output onto the lineart - B&W, no coloring, dead strength slider):

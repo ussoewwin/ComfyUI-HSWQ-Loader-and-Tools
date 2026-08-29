@@ -45,7 +45,6 @@ _SKIP_PREFIXES = (
     "clip_g.",
     "clip_l.",
     "vae.",
-    "detector.backbone.language_backbone.",
 )
 
 
