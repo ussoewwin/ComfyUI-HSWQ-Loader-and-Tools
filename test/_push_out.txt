@@ -1,0 +1,14 @@
+To https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools.git
+   06993f7..a12eb12  main -> main
+## main...origin/main
+ M nodes/nvfp4/nvfp4_hadamard.py
+ M nodes/zimage_nvfp4/nvfp4_comfy_parity.py
+?? ComfyUI-HSWQ-Loader-and-Tools_3.3.0/
+?? __pycache__/
+?? hswq/__pycache__/
+?? model_base/__pycache__/
+?? model_configs/__pycache__/
+?? nodes/__pycache__/
+?? nodes/models/__pycache__/
+?? patches/__pycache__/
+?? test/

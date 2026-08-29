@@ -1,0 +1,10 @@
+
+
+### ④ 含义
+
+| 片段 | 含义 |
+|-------|---------|
+| `_hswq_nvfp4_comfy_only` | ops 处于 Z Image parity — 不得当作 SDXL 产品 TC |
+| `_hswq_nvfp4_product_tc` | 仅由 `nodes/nvfp4` 的 SDXL 产品安装器打戳 |
+| 在线 act rotate | 权重离线旋转；激活在 parity forward 中用 Hadamard `H` 旋转 |
+| Linear 上清除 `Params.convrot` | kitchen 不得再旋转；HSWQ 通过 `_h

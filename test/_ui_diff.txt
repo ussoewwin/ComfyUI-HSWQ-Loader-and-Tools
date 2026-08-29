@@ -1,0 +1,268 @@
+diff --git a/nodes/hswq_sampler.py b/nodes/hswq_sampler.py
+index acdfbb6..d6e8bd6 100644
+--- a/nodes/hswq_sampler.py
++++ b/nodes/hswq_sampler.py
+@@ -25,33 +25,133 @@ logger = logging.getLogger(__name__)
+ # CLIP / Text Encoder offload
+ # ────────────────────────────────────────────────
+ 
+-def _is_text_encoder(patcher) -> bool:
++try:
++    from ..patches.comfy_quant_int8 import KREA2_MODEL_FLAG
++except Exception:  # loader patches unavailable — the config checks still work
++    KREA2_MODEL_FLAG = "_hswq_is_krea2"
++
++# comfy/text_encoders/krea2.py — the only module that defines a Krea2 text
++# encoder. Z Image lives in comfy.text_encoders.z_image, Flux in flux, and so on.
++_KREA2_TE_MODULE = "comfy.text_encoders.krea2"
++
++
++def _obj_tags(obj) -> str:
++    """'module.ClassName' for an instance or a class (logging only)."""
++    if obj is None:
++        return ""
++    cls = obj if isinstance(obj, type) else type(obj)
++    return f"{getattr(cls, '__module__', '')}.{getattr(cls, '__qualname__', '')}"
++
++
++def _obj_module(obj) -> str:
++    if obj is None:
++        return ""
++    cls = obj if isinstance(obj, type) else type(obj)
++    return getattr(cls, "__module__", "") or ""
++
++
++def _class_name(obj) -> str:
++    if obj is None:
++        return ""
++    cls = obj if isinstance(obj, type) else type(obj)
++    return getattr(cls, "__name__", "") or ""
++
++
++def _is_krea2_diffusion_model(model) -> bool:
++    """
++    True only when the MODEL input is a Krea2 diffusion model.
++
++    The verdict comes from the tag the HSWQ loader stamps at load time, or from
++    ComfyUI's own architecture detection (``unet_config["image_model"]`` written
++    by ``model_detection``, and the ``supported_models.Krea2`` /
++    ``model_base.Krea2`` identities). No substring matching on class or file
++    names, so a rename or a lookalike name cannot flip the answer.
++
++    Every other architecture (Z Image / Lumina2, Flux, SDXL, Qwen, WAN, ...)
++    returns False, so the offload path is never entered for them.
++    """
++    if model is None:
++        return False
++
++    inner = getattr(model, "model", None)          # BaseModel
++    if getattr(model, KREA2_MODEL_FLAG, False) is True:
++        return True
++    if getattr(inner, KREA2_MODEL_FLAG, False) is True:
++        return True
++
++    config = getattr(inner, "model_config", None)
++    unet_config = getattr(config, "unet_config", None)
++    if isinstance(unet_config, dict) and str(unet_config.get("image_model", "")).lower() == "krea2":
++        return True
++
++    return _class_name(config) == "Krea2" or _class_name(inner) == "Krea2"
++
++
++def _is_krea2_text_encoder(patcher) -> bool:
++    """
++    True only for a Krea2 text encoder.
++
++    is_clip alone is not enough: Z Image (ZImageTEModel_), Flux, SDXL and every
++    other CLIP wrapper also carry it, and unloading those breaks unrelated
++    workflows. The extra condition is that the encoder object is defined in
++    ComfyUI's Krea2 text-encoder module — an exact module identity, not a name
++    that happens to contain "krea2".
+     """
+-    True only for text-encoder (CLIP) patchers.
++    if getattr(patcher, "is_clip", False) is not True:
++        return False
++
++    real = getattr(patcher, "model", None)         # cond_stage_model
++    candidates = (
++        patcher,
++        real,
++        getattr(real, "clip_model", None),
++        getattr(real, "transformer", None),
++        getattr(real, "text_model", None),
++    )
++    return any(_obj_module(obj) == _KREA2_TE_MODULE for obj in candidates)
+ 
+-    is_clip is set by ComfyUI's CLIP wrapper and by nothing else. Diffusion
+-    models, ControlNets, VAEs and upscalers never carry it, so they are never
+-    offload candidates here.
++
++def _offload_requested(value) -> bool:
+     """
+-    return getattr(patcher, "is_clip", False) is True
++    Strict toggle read. Only a real True enables the offload.
++
++    A plain truthiness test is not safe here: when an older saved workflow has a
++    shorter widgets_values array, the frontend fills this widget positionally and
++    a neighbouring value (for example denoise = 1.0) can land on it. That reads as
++    truthy and fires the offload while the UI still shows the toggle as off.
++    Anything that is not a boolean is refused and logged.
++    """
++    if value is True or value is False:
++        return value is True
++    if value is None:
++        return False
++
++    logger.warning(
++        "[HSWQSampler] clip_perfect_offload got a non-boolean value (%r, %s); "
++        "treating it as OFF. The saved workflow's widget values are misaligned — "
++        "re-add the node to clear it.",
++        value, type(value).__name__,
++    )
++    return False
+ 
+ 
+ def _offload_loaded_clips() -> int:
+     """
+-    Free text-encoder VRAM only — same shape as krea2_int8_bench TE offload.
++    Free text-encoder VRAM only — Krea2 TE offload, fully Krea2-scoped.
+ 
+-    Bench sequence (before DiT sample):
++    Sequence (only when MODEL is Krea2 AND a Krea2 TE is in current_loaded_models):
+       cond_stage_model.cpu()
+-      unload_model_and_clones(clip.patcher)
+-      soft path via free_memory(..., keep_loaded=non-TE)
++      unload_model_and_clones(clip.patcher, unload_additional_models=False)
+ 
+-    Leaving TE weights only via model_unload+pop keeps ~3 GiB in the CUDA
+-    caching allocator (reserved). unload_model_and_clones keeps DiT / VAE /
+-    ControlNet in keep_loaded and soft_empty_caches after the TE drop — that
+-    is the ~3 GiB gap vs the bench peak. Hard empty_cache / unload_all_models
+-    are NOT used (they rebuild DiT cudaMalloc and were measured slower).
++    ``unload_additional_models=False`` keeps DiT / VAE / ControlNet / every
++    non-Krea2 model in ``keep_loaded``. No ``soft_empty_cache`` /
++    ``empty_cache`` / ``unload_all_models`` is ever called here: those are
++    global allocator ops and would reach into unrelated workflows sharing the
++    CUDA caching allocator. TE tensors are released by popping the patcher
++    from ``current_loaded_models`` (Python refcount), not by a global sweep.
+ 
+-    Nothing other than a text encoder is a candidate.
++    Only a Krea2 text encoder (``comfy.text_encoders.krea2`` module identity)
++    is ever a candidate. Z Image / Flux / SDXL / WAN TEs never match.
+     """
+     try:
+         loaded_models = _mm.current_loaded_models
+@@ -62,7 +162,7 @@ def _offload_loaded_clips() -> int:
+     seen = set()
+     for loaded in list(loaded_models):
+         patcher = getattr(loaded, "model", None)
+-        if patcher is None or not _is_text_encoder(patcher):
++        if patcher is None or not _is_krea2_text_encoder(patcher):
+             continue
+         pid = id(patcher)
+         if pid in seen:
+@@ -71,12 +171,11 @@ def _offload_loaded_clips() -> int:
+         te_patchers.append(patcher)
+ 
+     if not te_patchers:
+-        # Encode may have left reserved blocks with TE already absent from the
+-        # loaded list (MultiGPU CPU TE). Reclaim for DiT without touching models.
+-        try:
+-            _mm.soft_empty_cache()
+-        except Exception:
+-            pass
++        # No Krea2 TE in the loaded list. Do NOT touch global CUDA cache here:
++        # soft_empty_cache() is a global op and would reach into non-Krea2
++        # workflows (Z Image / Flux / SDXL) that share the allocator. Krea2-only
++        # branch means: nothing to unload -> nothing to do.
++        logger.debug("[HSWQSampler] No Krea2 text encoder found in loaded models; offload is a no-op")
+         return 0
+ 
+     unloaded = 0
+@@ -90,8 +189,10 @@ def _offload_loaded_clips() -> int:
+                 logger.exception("[HSWQSampler] TE .cpu() failed")
+ 
+         try:
+-            # Keeps every non-TE LoadedModel; only TE (+ clones / nested TE) leave.
+-            _mm.unload_model_and_clones(patcher)
++            # Keeps every other LoadedModel. unload_additional_models=False so the
++            # free set is exactly this Krea2 TE patcher and its own clones —
++            # nested additional models attached to it are never dragged out.
++            _mm.unload_model_and_clones(patcher, unload_additional_models=False)
+             unloaded += 1
+             continue
+         except Exception:
+@@ -99,7 +200,10 @@ def _offload_loaded_clips() -> int:
+                 "[HSWQSampler] unload_model_and_clones TE failed; fallback unload"
+             )
+ 
+-        # Fallback: TE-only model_unload + pop, then soft_empty_cache (no hard empty_cache).
++        # Fallback: TE-only model_unload + pop. No soft_empty_cache here either:
++        # once the TE patcher is popped from current_loaded_models its tensors
++        # are freed by Python's refcount, and a global cache sweep would again
++        # touch unrelated workflows sharing the CUDA allocator.
+         for i in range(len(loaded_models) - 1, -1, -1):
+             try:
+                 loaded = loaded_models[i]
+@@ -110,10 +214,6 @@ def _offload_loaded_clips() -> int:
+                     unloaded += 1
+             except Exception:
+                 logger.exception("[HSWQSampler] TE fallback unload skipped")
+-        try:
+-            _mm.soft_empty_cache()
+-        except Exception:
+-            pass
+ 
+     if unloaded:
+         logger.info(
+@@ -316,8 +416,16 @@ class HSWQSampler:
+                 "negative":     ("CONDITIONING",),
+                 "latent_image": ("LATENT",),
+                 "denoise":      ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+-                "clip_perfect_offload": ("BOOLEAN", {"default": False}),
+-            }
++            },
++            "optional": {
++                # Optional so workflows saved before this widget existed keep their
++                # own widget order instead of shifting a neighbouring value onto it.
++                "clip_perfect_offload": ("BOOLEAN", {
++                    "default": False,
++                    "tooltip": "Krea2 only. Frees the Krea2 text encoder before sampling. "
++                               "Ignored for every other architecture.",
++                }),
++            },
+         }
+ 
+     RETURN_TYPES = ("LATENT",)
+@@ -328,9 +436,15 @@ class HSWQSampler:
+     def sample(self, model, seed, steps, cfg, sampler_name, scheduler,
+                positive, negative, latent_image, denoise=1.0,
+                clip_perfect_offload=False):
+-        if clip_perfect_offload:
++        if _offload_requested(clip_perfect_offload):
+             try:
+-                _offload_loaded_clips()
++                if _is_krea2_diffusion_model(model):
++                    _offload_loaded_clips()
++                else:
++                    logger.info(
++                        "[HSWQSampler] clip_perfect_offload ignored: MODEL is not Krea2 (%s)",
++                        _obj_tags(getattr(model, "model", model)) or "unknown",
++                    )
+             except Exception:
+                 logger.exception("[HSWQSampler] CLIP offload failed; continuing")
+ 
+@@ -344,7 +458,12 @@ class HSWQSampler:
+         # common_ksampler must always hand back (latent_dict,). Anything else means
+         # an upstream patch swallowed the result, and letting it through only
+         # surfaces as an opaque NoneType error inside VAEDecode.
+-        if not out or out[0] is None or "samples" not in out[0]:
++        if (
++            not out
++            or out[0] is None
++            or "samples" not in out[0]
++            or out[0]["samples"] is None
++        ):
+             raise RuntimeError(
+                 "[HSWQSampler] sampling returned no latent "
+                 f"(got {type(out[0]).__name__ if out else 'None'}). "

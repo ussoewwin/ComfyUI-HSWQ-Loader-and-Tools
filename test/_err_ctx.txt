@@ -1,0 +1,318 @@
+=== line 2870 @2933 ===
+<timestamp>Wednesday, Aug 5, 2026, 7:21 PM (UTC+9)</timestamp>
+<user_query>
+d=0f65b784
+[INFO] [HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+  0%|                                                               | 0/12 [00:00<?, ?it/s,   Model Initializing ...  ][HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+=== line 2870 @4595 ===
+nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 342, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 316, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 304, in process_inputs
+    result = f(**inputs)
+  File "D:\USERFILES\ComfyUI\ComfyUI\nodes.py", line 368, in decode
+    images = vae.decode_tiled(samples["samples"], tile_x=tile_size // compression, tile_y=tile_size // compression, overlap=overlap // compression, tile_t=temporal_size, overlap_t=temporal_overlap)
+                              ~~~~~~~^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+[INFO] Prompt executed in 96.93 seconds
+FETCH ComfyRegistry Data [DONE]
+[INFO] [ComfyUI-Manager] default cache updated: https://api.comfy.org/nodes
+FETCH DATA from: https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json [DONE]
+[INFO] [ComfyUI-Manager] All startup tasks have been completed.
+
+</user_query>
+
+=== line 2871 @29067 ===
+er_qt_baked=0 nv_candidates=180 rem_candidates=60 nv_pass_skip_int8_rem=60 (INT8 rem baked separately as int8_baked) patches_left=0 patches_uuid=0f65b784
+[INFO] [HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+  0%|                                                               | 0/12 [00:00<?, ?it/s,   Model Initializing ...  ][HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+=== line 2871 @30729 ===
+nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 342, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 316, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 304, in process_inputs
+    result = f(**inputs)
+  File "D:\USERFILES\ComfyUI\ComfyUI\nodes.py", line 368, in decode
+    images = vae.decode_tiled(samples["samples"], tile_x=tile_size // compression, tile_y=tile_size // compression, overlap=overlap // compression, tile_t=temporal_size, overlap_t=temporal_overlap)
+                              ~~~~~~~^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+[INFO] Prompt executed in 96.93 seconds
+FETCH ComfyRegistry Data [DONE]
+[INFO] [ComfyUI-Manager] default cache updated: https://api.comfy.org/nodes
+FETCH DATA from: https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json [DONE]
+[INFO] [ComfyUI-Manager] All startup tasks have been completed.
+
+</user_query>
+
+=== line 2872 @29067 ===
+er_qt_baked=0 nv_candidates=180 rem_candidates=60 nv_pass_skip_int8_rem=60 (INT8 rem baked separately as int8_baked) patches_left=0 patches_uuid=0f65b784
+[INFO] [HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+  0%|                                                               | 0/12 [00:00<?, ?it/s,   Model Initializing ...  ][HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+=== line 2872 @30729 ===
+nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 342, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 316, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 304, in process_inputs
+    result = f(**inputs)
+  File "D:\USERFILES\ComfyUI\ComfyUI\nodes.py", line 368, in decode
+    images = vae.decode_tiled(samples["samples"], tile_x=tile_size // compression, tile_y=tile_size // compression, overlap=overlap // compression, tile_t=temporal_size, overlap_t=temporal_overlap)
+                              ~~~~~~~^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+[INFO] Prompt executed in 96.93 seconds
+FETCH ComfyRegistry Data [DONE]
+[INFO] [ComfyUI-Manager] default cache updated: https://api.comfy.org/nodes
+FETCH DATA from: https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json [DONE]
+[INFO] [ComfyUI-Manager] All startup tasks have been completed.
+
+</user_query>
+
+=== line 2876 @29067 ===
+er_qt_baked=0 nv_candidates=180 rem_candidates=60 nv_pass_skip_int8_rem=60 (INT8 rem baked separately as int8_baked) patches_left=0 patches_uuid=0f65b784
+[INFO] [HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+  0%|                                                               | 0/12 [00:00<?, ?it/s,   Model Initializing ...  ][HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+=== line 2876 @30729 ===
+nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 342, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 316, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 304, in process_inputs
+    result = f(**inputs)
+  File "D:\USERFILES\ComfyUI\ComfyUI\nodes.py", line 368, in decode
+    images = vae.decode_tiled(samples["samples"], tile_x=tile_size // compression, tile_y=tile_size // compression, overlap=overlap // compression, tile_t=temporal_size, overlap_t=temporal_overlap)
+                              ~~~~~~~^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+[INFO] Prompt executed in 96.93 seconds
+FETCH ComfyRegistry Data [DONE]
+[INFO] [ComfyUI-Manager] default cache updated: https://api.comfy.org/nodes
+FETCH DATA from: https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json [DONE]
+[INFO] [ComfyUI-Manager] All startup tasks have been completed.
+
+</user_query>
+
+=== line 3021 @14716 ===
+er_qt_baked=0 nv_candidates=180 rem_candidates=60 nv_pass_skip_int8_rem=60 (INT8 rem baked separately as int8_baked) patches_left=0 patches_uuid=aa236324
+[INFO] [HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+  0%|                                                               | 0/12 [00:00<?, ?it/s,   Model Initializing ...  ][HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:31<00:00,  2.65s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+=== line 3021 @16378 ===
+nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:31<00:00,  2.65s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 342, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 316, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File "D:\USERFILES\ComfyUI\ComfyUI\execution.py", line 304, in process_inputs
+    result = f(**inputs)
+  File "D:\USERFILES\ComfyUI\ComfyUI\nodes.py", line 368, in decode
+    images = vae.decode_tiled(samples["samples"], tile_x=tile_size // compression, tile_y=tile_size // compression, overlap=overlap // compression, tile_t=temporal_size, overlap_t=temporal_overlap)
+                              ~~~~~~~^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+[INFO] Prompt executed in 93.42 seconds
+
+</user_query>
+

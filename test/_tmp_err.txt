@@ -1,0 +1,238 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Wednesday, Aug 5, 2026, 7:21 PM (UTC+9)</timestamp>
+<user_query>
+[INFO] To see the GUI go to: http://127.0.0.1:8188
+[WARNING] [DEPRECATION WARNING] Detected import of deprecated legacy API: /scripts/ui.js. This is likely caused by a custom node extension using outdated APIs. Please update your extensions or contact the extension author for an updated version.
+[WARNING] [DEPRECATION WARNING] Detected import of deprecated legacy API: /extensions/core/clipspace.js. This is likely caused by a custom node extension using outdated APIs. Please update your extensions or contact the extension author for an updated version.
+[WARNING] [DEPRECATION WARNING] Detected import of deprecated legacy API: /extensions/core/groupNode.js. This is likely caused by a custom node extension using outdated APIs. Please update your extensions or contact the extension author for an updated version.
+[WARNING] [DEPRECATION WARNING] Detected import of deprecated legacy API: /extensions/core/widgetInputs.js. This is likely caused by a custom node extension using outdated APIs. Please update your extensions or contact the extension author for an updated version.
+USDU batch patches applied successfully.
+USDU batch patches applied successfully.
+[INFO] USDU batch patches applied successfully.
+[INFO] [HSWQSampler] Registered 179 RES4LYF samplers into KSampler.SAMPLERS
+[]
+[]
+[WARNING] [DEPRECATION WARNING] Detected import of deprecated legacy API: /scripts/ui/components/button.js. This is likely caused by a custom node extension using outdated APIs. Please update your extensions or contact the extension author for an updated version.
+[WARNING] [DEPRECATION WARNING] Detected import of deprecated legacy API: /scripts/ui/components/buttonGroup.js. This is likely caused by a custom node extension using outdated APIs. Please update your extensions or contact the extension author for an updated version.
+[INFO] HTTP Request: GET http://127.0.0.1:11434/api/tags \"HTTP/1.1 200 OK\"
+[INFO] got prompt
+1girl, solo, long_hair, looking_at_viewer, blush, smile, shirt, black_hair, closed_mouth, brown_eyes, choker, blunt_bangs, black_eyes, lips, head_tilt, black_choker, portrait, red_shirt, pink_lips, realistic, red_lips, o-ring_choker, voice_actor, asian, k-pop, photorealistic
+[INFO] Using pytorch attention in VAE
+[INFO] Using pytorch attention in VAE
+[INFO] VAE load device: cuda:0, offload device: cpu, dtype: torch.bfloat16
+[INFO] Requested to load AutoencodingEngine
+[INFO] Model AutoencodingEngine prepared for dynamic VRAM loading. 159MB Staged. 0 patches attached. Force pre-loaded 108 weights: 182 KB.
+[MultiGPU Issue21] Registered ModelPatcherDynamic._load_list guard
+[MultiGPU Core Patching] text_encoder_device_patched returning device: cpu (current_text_encoder_device=cpu)
+[INFO] Requested to load ZImageTEModel_
+[INFO] loaded completely;  7672.25 MB loaded, full load: True
+[INFO] CLIP/text encoder model load device: cpu, offload device: cpu, current: cpu, dtype: torch.float16
+[HSWQ ZI NVFP4 LoRA] Dynamic.load bake hook ON v7 (NVFP4 ConvRot bake + leftover INT8/QT bake + load_models_gpu)
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load bake hook ON v7 (NVFP4 ConvRot bake + leftover INT8/QT bake + load_models_gpu)
+[HSWQ ZI NVFP4 LoRA] load_models_gpu bake hook ON v7
+[INFO] [HSWQ ZI NVFP4 LoRA] load_models_gpu bake hook ON v7
+[HSWQ NVFP4] Z Image stack applied (detect packed K + nvfp4_load + hybrid LoRA bake; TC skipped over ConvRot parity; ComfyUI-master untouched)
+[INFO] [HSWQ NVFP4] Z Image stack applied (detect packed K + nvfp4_load + hybrid LoRA bake; TC skipped over ConvRot parity; ComfyUI-master untouched)
+[HSWQ NVFP4] TC probe: GPU=NVIDIA GeForce RTX 5060 Ti CC=12.0 — scaled_mm_nvfp4 enabled (min CC 10.0)
+[HSWQ NVFP4] registered aten.addmm.default for TensorCoreNVFP4Layout (stock F.linear+bias -> scaled_mm_nvfp4; was dequant-only)
+[HSWQ NVFP4] comfy_parity ON: stock MixedPrecision GEMM + online act rotate (NVFP4 ConvRot + INT8 protect ConvRot) + ConvRot Linear LoRA bake (Z Image; not HSWQ TC Linear.forward)
+[INFO] [HSWQ NVFP4] comfy_parity ON: stock MixedPrecision GEMM + online act rotate (NVFP4 ConvRot + INT8 protect ConvRot) + ConvRot Linear LoRA bake (Z Image; not HSWQ TC Linear.forward)
+[HSWQ INT8][ControlLora] pre_run patch INSTALLED (v2): borrowed INT8 base weights dequantized via state_dict wrap for LoRA-type ControlNet (anytest fix)
+[HSWQ INT8] comfy_quant patches applied (Conv2d quant load + decode + convert_old_quants + LoRA bake logs + LoRA key counts + LoRA name + LowVramPatch float dtype + Dynamic INT8 LoRA bake + INT8→Nunchaku VRAM handoff + ControlLora INT8 dequant)
+[INFO] [HSWQ INT8] comfy_quant patches applied (Conv2d quant load + decode + convert_old_quants + LoRA bake logs + LoRA key counts + LoRA name + LowVramPatch float dtype + Dynamic INT8 LoRA bake + INT8→Nunchaku VRAM handoff + ControlLora INT8 dequant)
+[HSWQ ZI NVFP4 LoRA] Dynamic.load bake hook ON v7 (NVFP4 ConvRot bake + leftover INT8/QT bake + load_models_gpu)
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load bake hook ON v7 (NVFP4 ConvRot bake + leftover INT8/QT bake + load_models_gpu)
+[HSWQ ZI NVFP4 LoRA] load_models_gpu bake hook ON v7
+[INFO] [HSWQ ZI NVFP4 LoRA] load_models_gpu bake hook ON v7
+[INFO] [HSWQ NVFP4] Loading UNet (ConvRot NVFP4 comfy_parity + INT8 ConvRot ComfyUI core): moodyProMix_zitV13_hswq_int8protect60_convrot_nvfp4.safetensors (weight_dtype=Z Image ConvRot NVFP4)
+[HSWQ NVFP4] Loading UNet (ConvRot NVFP4 / comfy_parity): moodyProMix_zitV13_hswq_int8protect60_convrot_nvfp4.safetensors
+[INFO] Found quantization metadata version 1
+[INFO] Detected mixed precision quantization
+[INFO] Using mixed precision operations
+[INFO] Native ops: mxfp8, float8_e4m3fn, int8_tensorwise, convrot_w4a4, float8_e5m2, nvfp4
+[INFO] model weight dtype torch.bfloat16, manual cast: torch.bfloat16
+[INFO] model_type FLOW
+[HSWQ NVFP4][diag] arm ConvRot #1 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #1 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm ConvRot #2 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #2 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm ConvRot #3 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #3 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #1 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #1 gs=256 params_cleared=True
+[HSWQ NVFP4][diag] arm ConvRot #4 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #4 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #2 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #2 gs=256 params_cleared=True
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #3 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #3 gs=256 params_cleared=True
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #4 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #4 gs=256 params_cleared=True
+[HSWQ NVFP4][diag] arm ConvRot #40 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #40 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #20 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #20 gs=256 params_cleared=True
+[HSWQ NVFP4][diag] arm ConvRot #80 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #80 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #40 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #40 gs=256 params_cleared=True
+[HSWQ NVFP4][diag] arm ConvRot #120 gs=256 format=nvfp4 convrot=True params.convrot=None
+[INFO] [HSWQ NVFP4][diag] arm ConvRot #120 gs=256 format=nvfp4 convrot=True params.convrot=None
+[HSWQ NVFP4][diag] arm INT8 protect ConvRot #60 gs=256 params_cleared=True
+[INFO] [HSWQ NVFP4][diag] arm INT8 protect ConvRot #60 gs=256 params_cleared=True
+[WARNING] unet missing: ['layers.0.attention.qkv.input_scale', 'layers.0.attention.out.input_scale', 'layers.0.feed_forward.w1.input_scale', 'layers.0.feed_forward.w3.input_scale', 'layers.0.adaLN_modulation.0.input_scale', 'layers.1.attention.qkv.input_scale', 'layers.1.attention.out.input_scale', 'layers.1.feed_forward.w1.input_scale', 'layers.1.feed_forward.w3.input_scale', 'layers.1.adaLN_modulation.0.input_scale', 'layers.2.attention.qkv.input_scale', 'layers.2.attention.out.input_scale', 'layers.2.feed_forward.w1.input_scale', 'layers.2.feed_forward.w3.input_scale', 'layers.2.adaLN_modulation.0.input_scale', 'layers.3.attention.qkv.input_scale', 'layers.3.attention.out.input_scale', 'layers.3.feed_forward.w1.input_scale', 'layers.3.adaLN_modulation.0.input_scale', 'layers.4.attention.qkv.input_scale', 'layers.4.attention.out.input_scale', 'layers.4.feed_forward.w1.input_scale', 'layers.4.feed_forward.w3.input_scale', 'layers.4.adaLN_modulation.0.input_scale', 'layers.5.attention.qkv.input_scale', 'layers.5.attention.out.input_scale', 'layers.5.feed_forward.w1.input_scale', 'layers.5.feed_forward.w3.input_scale', 'layers.5.adaLN_modulation.0.input_scale', 'layers.6.attention.qkv.input_scale', 'layers.6.attention.out.input_scale', 'layers.6.feed_forward.w1.input_scale', 'layers.6.feed_forward.w3.input_scale', 'layers.6.adaLN_modulation.0.input_scale', 'layers.7.attention.qkv.input_scale', 'layers.7.attention.out.input_scale', 'layers.7.feed_forward.w1.input_scale', 'layers.7.feed_forward.w3.input_scale', 'layers.7.adaLN_modulation.0.input_scale', 'layers.8.attention.out.input_scale', 'layers.8.feed_forward.w1.input_scale', 'layers.8.feed_forward.w3.input_scale', 'layers.8.adaLN_modulation.0.input_scale', 'layers.9.feed_forward.w1.input_scale', 'layers.9.feed_forward.w3.input_scale', 'layers.9.adaLN_modulation.0.input_scale', 'layers.10.attention.out.input_scale', 'layers.10.feed_forward.w1.input_scale', 'layers.10.feed_forward.w3.input_scale', 'layers.10.adaLN_modulation.0.input_scale', 'layers.11.feed_forward.w1.input_scale', 'layers.11.feed_forward.w3.input_scale', 'layers.11.adaLN_modulation.0.input_scale', 'layers.12.attention.qkv.input_scale', 'layers.12.feed_forward.w1.input_scale', 'layers.12.feed_forward.w3.input_scale', 'layers.12.adaLN_modulation.0.input_scale', 'layers.13.attention.qkv.input_scale', 'layers.13.feed_forward.w1.input_scale', 'layers.13.adaLN_modulation.0.input_scale', 'layers.14.attention.qkv.input_scale', 'layers.14.feed_forward.w1.input_scale', 'layers.14.feed_forward.w3.input_scale', 'layers.14.adaLN_modulation.0.input_scale', 'layers.15.attention.qkv.input_scale', 'layers.15.attention.out.input_scale', 'layers.15.feed_forward.w1.input_scale', 'layers.15.feed_forward.w3.input_scale', 'layers.15.adaLN_modulation.0.input_scale', 'layers.16.attention.out.input_scale', 'layers.16.feed_forward.w3.input_scale', 'layers.16.adaLN_modulation.0.input_scale', 'layers.17.attention.qkv.input_scale', 'layers.17.attention.out.input_scale', 'layers.17.feed_forward.w3.input_scale', 'layers.17.adaLN_modulation.0.input_scale', 'layers.18.attention.qkv.input_scale', 'layers.18.attention.out.input_scale', 'layers.18.feed_forward.w3.input_scale', 'layers.18.adaLN_modulation.0.input_scale', 'layers.19.attention.qkv.input_scale', 'layers.19.attention.out.input_scale', 'layers.19.adaLN_modulation.0.input_scale', 'layers.20.attention.qkv.input_scale', 'layers.20.attention.out.input_scale', 'layers.20.feed_forward.w1.input_scale', 'layers.20.feed_forward.w3.input_scale', 'layers.20.adaLN_modulation.0.input_scale', 'layers.21.attention.qkv.input_scale', 'layers.21.attention.out.input_scale', 'layers.21.feed_forward.w2.input_scale', 'layers.21.feed_forward.w3.input_scale', 'layers.21.adaLN_modulation.0.input_scale', 'layers.22.attention.qkv.input_scale', 'layers.22.attention.out.input_scale', 'layers.22.feed_forward.w3.input_scale', 'layers.22.adaLN_modulation.0.input_scale', 'layers.23.attention.qkv.input_scale', 'layers.23.attention.out.input_scale', 'layers.23.feed_forward.w3.input_scale', 'layers.23.adaLN_modulation.0.input_scale', 'layers.24.attention.qkv.input_scale', 'layers.24.attention.out.input_scale', 'layers.25.attention.qkv.input_scale', 'layers.25.attention.out.input_scale', 'layers.25.feed_forward.w3.input_scale', 'layers.25.adaLN_modulation.0.input_scale', 'layers.26.attention.qkv.input_scale', 'layers.26.attention.out.input_scale', 'layers.26.feed_forward.w2.input_scale', 'layers.27.attention.out.input_scale', 'layers.27.feed_forward.w1.input_scale', 'layers.27.feed_forward.w2.input_scale', 'layers.27.feed_forward.w3.input_scale', 'layers.28.attention.out.input_scale', 'layers.28.feed_forward.w1.input_scale', 'layers.29.attention.out.input_scale', 'layers.29.feed_forward.w1.input_scale', 'layers.29.feed_forward.w2.input_scale', 'layers.29.feed_forward.w3.input_scale']
+[HSWQ INT8 LoRA] ===== load summary =====
+[HSWQ INT8 LoRA] Linear: 208  set_weight=208  convert_weight=208  quantized/layout=180
+[HSWQ INT8 LoRA] Conv2d: 0  set_weight=0  convert_weight=0  quantized/layout=0
+[HSWQ INT8 LoRA] OK: Conv2d has set_weight+convert_weight (dequant -> bake -> requant)
+[HSWQ INT8 LoRA] =========================
+[HSWQ LoRA Status] Processing LoRA slot(s):
+[HSWQ LoRA Status] Slot 1: | lora_name='adazasr_v1_060.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-2.0 | strength_clip=-2.0 | → APPLIED ✓
+[HSWQ LoRA Status]   file_keys=480 mapped=240 not_mapped=0 mapped_not_attached=0
+[HSWQ LoRA Status] Slot 2: | lora_name='bw_slider3_000000075.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-4.0 | strength_clip=-4.0 | → APPLIED ✓
+[HSWQ LoRA Status]   file_keys=480 mapped=240 not_mapped=0 mapped_not_attached=0
+[HSWQ LoRA Status] Slot 3: | lora_name='Z-Fat-Slider.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-3.0 | strength_clip=-3.0 | → APPLIED ✓
+[HSWQ LoRA Status]   file_keys=480 mapped=240 not_mapped=0 mapped_not_attached=0
+[HSWQ LoRA Status] Slot 4: | lora_name='Age_Slider_ZIT_v1_000000075.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-3.0 | strength_clip=-3.0 | → APPLIED ✓
+[HSWQ LoRA Status]   file_keys=480 mapped=240 not_mapped=0 mapped_not_attached=0
+[INFO] HTTP Request: POST http://127.0.0.1:11434/api/generate \"HTTP/1.1 200 OK\"
+Unloaded 2 model(s)
+unload_all_models() issued
+free_memory(1e30) issued for all CUDA devices
+Ollama: Starting FULL purge (zero residual; includes comfyui-ollama-describer)...
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.CompfyuiOllama
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.deprecated_nodes
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama-describer
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama-describer.config
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama-describer.nodes
+Ollama: Purging server at http://127.0.0.1:11434...
+Ollama: http://127.0.0.1:11434 initial loaded=['baytout3/qwen3.5-uncensored:4b']
+Ollama: http://127.0.0.1:11434 round 1/8 still loaded=['baytout3/qwen3.5-uncensored:4b']
+Ollama: /api/generate keep_alive=0 -> baytout3/qwen3.5-uncensored:4b
+Ollama: /api/chat keep_alive=0 -> baytout3/qwen3.5-uncensored:4b
+[INFO] HTTP Request: POST http://127.0.0.1:11434/api/generate \"HTTP/1.1 200 OK\"
+Ollama: Client.generate keep_alive=0 -> baytout3/qwen3.5-uncensored:4b
+[INFO] HTTP Request: POST http://127.0.0.1:11434/api/chat \"HTTP/1.1 200 OK\"
+Ollama: Client.chat keep_alive=0 -> baytout3/qwen3.5-uncensored:4b
+Ollama: CLI stop baytout3/qwen3.5-uncensored:4b rc=0 stdout= stderr=
+[INFO] HTTP Request: GET http://127.0.0.1:11434/api/ps \"HTTP/1.1 200 OK\"
+Ollama: http://127.0.0.1:11434 EMPTY after round 1 (verified /api/ps)
+Ollama: Purging server at http://localhost:11434...
+Ollama: http://localhost:11434 initial loaded=(none)
+[INFO] HTTP Request: GET http://localhost:11434/api/ps \"HTTP/1.1 200 OK\"
+Ollama: http://localhost:11434 EMPTY after round 0 (verified /api/ps)
+Ollama: wiped saved_context dir files via D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama count=0
+Ollama: Cleared CHAT_SESSIONS via D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.CompfyuiOllama entries=0
+Ollama: wiped saved_context dir files via D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.CompfyuiOllama count=0
+Ollama: wiped saved_context dir files via D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.deprecated_nodes count=0
+Ollama: Cleared instance state on 1 Ollama objects
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.CompfyuiOllama
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama.deprecated_nodes
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama-describer
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama-describer.config
+Ollama: scanning module D:\\USERFILES\\ComfyUI\\ComfyUI\\custom_nodes\\comfyui-ollama-describer.nodes
+Ollama: FINAL VERIFY OK http://127.0.0.1:11434 loaded=(none)
+Ollama: FINAL VERIFY OK http://localhost:11434 loaded=(none)
+Ollama: Done — unload_attempts=1, sessions_cleared=0, context_attrs_cleared=1, files_wiped=0, instances_cleared=1, residual=(none)
+[INFO] Requested to load ZImageTEModel_
+[INFO] loaded completely;  7672.25 MB loaded, full load: True
+[ModelPatchLoaderCustom] Info: 51 keys loaded via state_dict (e.g. lazy-init layers)
+[INFO] Requested to load AutoencodingEngine
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #1: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #1: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model AutoencodingEngine prepared for dynamic VRAM loading. 159MB Staged. 0 patches attached. Force pre-loaded 108 weights: 182 KB.
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #2: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #2: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model AutoencodingEngine prepared for dynamic VRAM loading. 159MB Staged. 0 patches attached. Force pre-loaded 108 weights: 182 KB.
+[INFO] [HSWQSampler] Offloaded 1 CLIP/TE model(s) from GPU
+[MultiGPU Runtime] Using runtime device cuda:0 (comfy.sample.sample:ModelPatcherDynamic)
+[INFO] Requested to load ZImage_Control
+[INFO] Requested to load Lumina2
+[INFO] loaded completely;  1923.20 MB loaded, full load: True
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #3: patches=180 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #3: patches=180 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 180 patches attached. Force pre-loaded 325 weights: 1046 KB.
+[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #1: diffusion_model.layers.0.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #1: diffusion_model.layers.0.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #2: diffusion_model.layers.1.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #2: diffusion_model.layers.1.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #3: diffusion_model.layers.2.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #3: diffusion_model.layers.2.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #4: diffusion_model.layers.3.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #4: diffusion_model.layers.3.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #5: diffusion_model.layers.3.feed_forward.w3.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #5: diffusion_model.layers.3.feed_forward.w3.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #6: diffusion_model.layers.4.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ZI NVFP4 LoRA] nv_pass_defer_int8_rem sample #6: diffusion_model.layers.4.feed_forward.w2.weight layout='TensorWiseINT8Layout' nvfp4_convrot=False int8_convrot=True params_convrot=False (not a failure — baked in INT8 rem pass)
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #1 (nvfp4): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #1 (nvfp4): re-rotate gs=256 shape=(10240, 3840) layout=TensorCoreNVFP4Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #2 (nvfp4): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #2 (nvfp4): re-rotate gs=256 shape=(10240, 3840) layout=TensorCoreNVFP4Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #3 (nvfp4): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #3 (nvfp4): re-rotate gs=256 shape=(15360, 256) layout=TensorCoreNVFP4Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #4 (nvfp4): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #4 (nvfp4): re-rotate gs=256 shape=(10240, 3840) layout=TensorCoreNVFP4Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #1 (int8_protect): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #1 (int8_protect): re-rotate gs=256 shape=(3840, 10240) layout=TensorWiseINT8Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #2 (int8_protect): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #2 (int8_protect): re-rotate gs=256 shape=(3840, 10240) layout=TensorWiseINT8Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #3 (int8_protect): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #3 (int8_protect): re-rotate gs=256 shape=(3840, 10240) layout=TensorWiseINT8Layout
+[INFO] [HSWQ ConvRot LoRA] Linear.convert_weight #4 (int8_protect): unrotate gs=256 in=QuantizedTensor/torch.float16 -> out=Tensor/torch.float16
+[INFO] [HSWQ ConvRot LoRA] Linear.set_weight #4 (int8_protect): re-rotate gs=256 shape=(3840, 10240) layout=TensorWiseINT8Layout
+[HSWQ LoRA Status] ===== bake summary (4 slot(s)) =====
+[HSWQ LoRA Status] Slot 1: | lora_name='adazasr_v1_060.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-2.0 | strength_clip=-2.0 | bake rq=240 ir=0 nb=0 | → APPLIED ✓
+[HSWQ LoRA Status] Slot 2: | lora_name='bw_slider3_000000075.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-4.0 | strength_clip=-4.0 | bake rq=240 ir=0 nb=0 | → APPLIED ✓
+[HSWQ LoRA Status] Slot 3: | lora_name='Z-Fat-Slider.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-3.0 | strength_clip=-3.0 | bake rq=240 ir=0 nb=0 | → APPLIED ✓
+[HSWQ LoRA Status] Slot 4: | lora_name='Age_Slider_ZIT_v1_000000075.safetensors' | applied_keys=240 (unet=240 clip=0) | skipped_keys=0 | strength_model=-3.0 | strength_clip=-3.0 | bake rq=240 ir=0 nb=0 | → APPLIED ✓
+[HSWQ LoRA Status] Summary: 4/4 LoRA(s) with applied keys
+[HSWQ LoRA Bake] total=180 requant=180 int8_round=0 shape_skip=0
+[HSWQ LoRA Bake] path OK (all requant)
+[HSWQ ZI NVFP4 LoRA] Dynamic.load bake #1 (Dynamic.load): nvfp4_baked=120 int8_baked=60 other_qt_baked=0 nv_candidates=180 rem_candidates=60 nv_pass_skip_int8_rem=60 (INT8 rem baked separately as int8_baked) patches_left=0 patches_uuid=0f65b784
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load bake #1 (Dynamic.load): nvfp4_baked=120 int8_baked=60 other_qt_baked=0 nv_candidates=180 rem_candidates=60 nv_pass_skip_int8_rem=60 (INT8 rem baked separately as int8_baked) patches_left=0 patches_uuid=0f65b784
+[INFO] [HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[HSWQ ConvRot LoRA] EVIDENCE (bake#1/Dynamic.load): NVFP4_LORA_BAKE_OK INT8_PROTECT_LORA_BAKE_OK this_pass | nvfp4 convert_unrotate=120 set_rerotate=120 nvfp4_baked=120 sample_nvfp4_keys=[diffusion_model.layers.0.feed_forward.w1.weight, diffusion_model.layers.0.feed_forward.w3.weight, diffusion_model.layers.0.adaLN_modulation.0.weight] | int8_protect convert_unrotate=60 set_rerotate=60 int8_baked=60 sample_int8_keys=[diffusion_model.layers.0.feed_forward.w2.weight, diffusion_model.layers.1.feed_forward.w2.weight, diffusion_model.layers.2.feed_forward.w2.weight] | session_total nv_c/s=120/120 int8_c/s=60/60
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+  0%|                                                               | 0/12 [00:00<?, ?it/s,   Model Initializing ...  ][HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #4: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #5: patches=0 nvfp4_convrot=False flagged=0 qt_on_weight=0 model=AutoencodingEngine
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[INFO] [HSWQ ZI NVFP4 LoRA] Dynamic.load ENTER #6: patches=0 nvfp4_convrot=True flagged=120 qt_on_weight=120 model=Lumina2
+[MultiGPU Issue21] Using non-recursive ModelPatcherDynamic._load_list guard
+[INFO] Model Lumina2 prepared for dynamic VRAM loading. 5176MB Staged. 0 patches attached. Force pre-loaded 325 weights: 1046 KB.
+100%|██████████████████████████████████████████████████████████████████████████████████| 12/12 [00:28<00:00,  2.40s/it]
+[INFO] Restoring initial comfy attention
+[INFO] [ComfyUI] Using FA-2 (Flash-Attention 2.9.2) direct
+[ERROR] !!! Exception during processing !!! 'NoneType' object is not subscriptable
+[ERROR] Traceback (most recent call last):
+  File \"D:\\USERFILES\\ComfyUI\\ComfyUI\\execution.py\", line 543, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File \"D:\\USERFILES\\ComfyUI\\ComfyUI\\execution.py\", line 342, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File \"D:\\USERFILES\\ComfyUI\\ComfyUI\\execution.py\", line 316, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File \"D:\\USERFILES\\ComfyUI\\ComfyUI\\execution.py\", line 304, in process_inputs
+    result = f(**inputs)
+  File \"D:\\USERFILES\\ComfyUI\\ComfyUI\
+odes.py\", line 368, in decode
+    images = vae.decode_tiled(samples[\"samples\"], tile_x=tile_size // compression, tile_y=tile_size // compression, overlap=overlap // compression, tile_t=temporal_size, overlap_t=temporal_overlap)
+                              ~~~~~~~^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+[INFO] Prompt executed in 96.93 seconds
+FETCH ComfyRegistry Data [DONE]
+[INFO] [ComfyUI-Manager] default cache updated: https://api.comfy.org/nodes
+FETCH DATA from: https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json [DONE]
+[INFO] [ComfyUI-Manager] All startup tasks have been completed.
+
+</user_query>"}]}}

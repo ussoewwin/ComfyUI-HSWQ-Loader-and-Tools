@@ -1,0 +1,29 @@
+﻿[main d4f7b8c] docs: add HSWQ Torch Compile section to Chinese README
+ 1 file changed, 30 insertions(+)
+commit d4f7b8c9b325be954620dc39637546f506926cc0
+Author:     ussoewwin <136552381+ussoewwin@users.noreply.github.com>
+AuthorDate: Mon Aug 3 20:41:52 2026 +0900
+Commit:     ussoewwin <136552381+ussoewwin@users.noreply.github.com>
+CommitDate: Mon Aug 3 20:41:52 2026 +0900
+
+    docs: add HSWQ Torch Compile section to Chinese README
+git : To https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools.git
+発生場所 行:1 文字:540
++ ... t_out5.txt' -Append -Encoding utf8; git push origin main 2>&1 | Out-F ...
++                                         ~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (To https://gith...r-and-Tools.git:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   1fbf11c..d4f7b8c  main -> main
+## main...origin/main
+ M nodes/nvfp4/nvfp4_hadamard.py
+ M nodes/zimage_nvfp4/nvfp4_comfy_parity.py
+?? ComfyUI-HSWQ-Loader-and-Tools_3.3.0/
+?? __pycache__/
+?? hswq/__pycache__/
+?? model_base/__pycache__/
+?? model_configs/__pycache__/
+?? nodes/__pycache__/
+?? nodes/models/__pycache__/
+?? patches/__pycache__/
+?? test/

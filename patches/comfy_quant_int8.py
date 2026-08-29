@@ -2464,9 +2464,177 @@ def _patch_controllora_int8_dequant() -> bool:
     return True
 
 
+_COMFY_KITCHEN_INT8_FALLBACK_PATCHED = False
+
+
+def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
+    """Patch comfy_kitchen's TensorWiseINT8Layout op handlers (linear, mm, addmm)
+    to safely handle non-multiple-of-4 dimensions (e.g. SAM3 boxRPB_embed_x K=2)
+    and GPU GEMM exceptions by falling back to dequantization instead of crashing.
+    """
+    global _COMFY_KITCHEN_INT8_FALLBACK_PATCHED
+    if _COMFY_KITCHEN_INT8_FALLBACK_PATCHED:
+        return True
+
+    try:
+        import torch
+        import comfy_kitchen.tensor.base as ck_base
+        import comfy_kitchen.tensor.int8 as ck_int8
+        from comfy_kitchen.tensor.base import (
+            QuantizedTensor,
+            TensorWiseINT8Layout,
+            _LAYOUT_DISPATCH_TABLE,
+            dequantize_args,
+            _dtype_code,
+        )
+    except Exception as e:
+        logger.debug("[HSWQ INT8] comfy_kitchen int8 fallback patch skipped: %s", e)
+        return False
+
+    orig_linear = getattr(ck_int8, "_handle_int8_linear_tensorwise", None)
+    orig_mm = getattr(ck_int8, "_handle_int8_mm_tensorwise", None)
+    orig_addmm = getattr(ck_int8, "_handle_int8_addmm_tensorwise", None)
+
+    def _safe_handle_int8_linear_tensorwise(qt, args, kwargs):
+        input_tensor = args[0]
+        weight = args[1]
+        bias = args[2] if len(args) > 2 else None
+
+        if not isinstance(weight, QuantizedTensor) or getattr(weight, "_layout_cls", None) != "TensorWiseINT8Layout":
+            return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+        if getattr(weight._params, "transposed", False):
+            return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+
+        if isinstance(input_tensor, QuantizedTensor):
+            input_tensor = input_tensor.dequantize()
+
+        weight_qdata, weight_scale = TensorWiseINT8Layout.get_plain_tensors(weight)
+        k = input_tensor.shape[-1]
+        n = weight_qdata.shape[0]
+
+        # cuBLAS INT8 GEMM requires K % 4 == 0, N % 4 == 0, and CUDA device
+        if not input_tensor.is_cuda or k % 4 != 0 or n % 4 != 0:
+            return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+
+        out_dtype = kwargs.get("out_dtype", input_tensor.dtype)
+        convrot = getattr(weight._params, "convrot", False)
+        convrot_groupsize = getattr(weight._params, "convrot_groupsize", 256)
+
+        try:
+            return torch.ops.comfy_kitchen.int8_linear(
+                input_tensor.contiguous(),
+                weight_qdata.contiguous(),
+                weight_scale,
+                bias,
+                _dtype_code(out_dtype),
+                convrot,
+                convrot_groupsize,
+            )
+        except Exception as e:
+            logger.debug("[HSWQ INT8] int8_linear fallback to dequantize (k=%d, n=%d): %s", k, n, e)
+            return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+
+    def _safe_handle_int8_mm_tensorwise(qt, args, kwargs):
+        input_tensor = args[0]
+        weight = args[1]
+
+        if not isinstance(weight, QuantizedTensor) or getattr(weight, "_layout_cls", None) != "TensorWiseINT8Layout":
+            return torch.mm(*dequantize_args(args), **dequantize_args(kwargs))
+
+        if isinstance(input_tensor, QuantizedTensor):
+            input_tensor = input_tensor.dequantize()
+
+        weight_qdata, weight_scale = TensorWiseINT8Layout.get_plain_tensors(weight)
+        out_dtype = kwargs.get("out_dtype", input_tensor.dtype)
+
+        convrot = getattr(weight._params, "convrot", False)
+        convrot_groupsize = getattr(weight._params, "convrot_groupsize", 256)
+
+        if getattr(weight._params, "transposed", False):
+            int8_weight = weight_qdata.contiguous()
+        elif weight_scale.numel() == 1 and not convrot:
+            int8_weight = weight_qdata.t().contiguous()
+        else:
+            return torch.mm(*dequantize_args(args), **dequantize_args(kwargs))
+
+        k = input_tensor.shape[-1]
+        n = int8_weight.shape[0]
+        if not input_tensor.is_cuda or k % 4 != 0 or n % 4 != 0:
+            return torch.mm(*dequantize_args(args), **dequantize_args(kwargs))
+
+        try:
+            return torch.ops.comfy_kitchen.int8_linear(
+                input_tensor.contiguous(),
+                int8_weight,
+                weight_scale,
+                None,
+                _dtype_code(out_dtype),
+                convrot,
+                convrot_groupsize,
+            )
+        except Exception as e:
+            logger.debug("[HSWQ INT8] int8_mm fallback to dequantize (k=%d, n=%d): %s", k, n, e)
+            return torch.mm(*dequantize_args(args), **dequantize_args(kwargs))
+
+    def _safe_handle_int8_addmm_tensorwise(qt, args, kwargs):
+        bias = args[0]
+        input_tensor = args[1]
+        weight = args[2]
+
+        if not isinstance(weight, QuantizedTensor) or getattr(weight, "_layout_cls", None) != "TensorWiseINT8Layout":
+            return torch.addmm(*dequantize_args(args), **dequantize_args(kwargs))
+
+        if isinstance(input_tensor, QuantizedTensor):
+            input_tensor = input_tensor.dequantize()
+
+        weight_qdata, weight_scale = TensorWiseINT8Layout.get_plain_tensors(weight)
+        out_dtype = kwargs.get("out_dtype", input_tensor.dtype)
+
+        convrot = getattr(weight._params, "convrot", False)
+        convrot_groupsize = getattr(weight._params, "convrot_groupsize", 256)
+
+        if getattr(weight._params, "transposed", False):
+            int8_weight = weight_qdata.contiguous()
+        elif weight_scale.numel() == 1 and not convrot:
+            int8_weight = weight_qdata.t().contiguous()
+        else:
+            return torch.addmm(*dequantize_args(args), **dequantize_args(kwargs))
+
+        k = input_tensor.shape[-1]
+        n = int8_weight.shape[0]
+        if not input_tensor.is_cuda or k % 4 != 0 or n % 4 != 0:
+            return torch.addmm(*dequantize_args(args), **dequantize_args(kwargs))
+
+        try:
+            return torch.ops.comfy_kitchen.int8_linear(
+                input_tensor.contiguous(),
+                int8_weight,
+                weight_scale,
+                bias,
+                _dtype_code(out_dtype),
+                convrot,
+                convrot_groupsize,
+            )
+        except Exception as e:
+            logger.debug("[HSWQ INT8] int8_addmm fallback to dequantize (k=%d, n=%d): %s", k, n, e)
+            return torch.addmm(*dequantize_args(args), **dequantize_args(kwargs))
+
+    _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.linear.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_linear_tensorwise
+    _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.mm.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_mm_tensorwise
+    _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.addmm.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_addmm_tensorwise
+    ck_int8._handle_int8_linear_tensorwise = _safe_handle_int8_linear_tensorwise
+    ck_int8._handle_int8_mm_tensorwise = _safe_handle_int8_mm_tensorwise
+    ck_int8._handle_int8_addmm_tensorwise = _safe_handle_int8_addmm_tensorwise
+
+    _COMFY_KITCHEN_INT8_FALLBACK_PATCHED = True
+    logger.info("[HSWQ INT8] comfy_kitchen TensorWiseINT8 unaligned GEMM fallback patch armed")
+    return True
+
+
 def apply_comfy_quant_int8_patches() -> bool:
     """Install INT8 comfy_quant patches once. Returns True if applied (or already applied)."""
     global _PATCHES_APPLIED
+    ok_gemm = _patch_comfy_kitchen_int8_gemm_fallback()
     ok_keys = _patch_load_lora_key_counts()
     ok_name = _patch_lora_loader_name_context()
     ok_path = _patch_loras_folder_path_name()

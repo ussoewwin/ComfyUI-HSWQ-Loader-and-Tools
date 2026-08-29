@@ -136,6 +136,19 @@ Standard ComfyUI `controlnet_load_state_dict` sets architecture dtype to `weight
 - **Category**: Loaders (`loaders`)
 - **Drop-in replacement**: Can replace ComfyUI's built-in "Load ControlNet Model" node entirely — automatically handles ConvRot INT8, FP8, BF16, and FP16 checkpoints without manual switching
 
+### HSWQ SAM3 Loader (ConvRot INT8) & SAM3 Detect
+
+ComfyUI loader and detector nodes for **ConvRot / TensorWise INT8-quantized SAM3 (Segment Anything 3) checkpoints**. Loads the SAM3 model directly into VRAM in 8-bit precision (`QuantizedTensor` / `TensorWiseINT8Layout`) and executes via `comfy_kitchen`'s high-speed `int8_linear` kernel with online activation rotation (`convrot`).
+
+Includes automatic hardware safety fallback for unaligned layers (such as `boxRPB_embed_x` with $K=2$), dynamically dequantizing non-multiple-of-4 dimensions while running all heavy backbone and transformer blocks in accelerated INT8 Tensor Core precision.
+
+#### Features
+
+- **Native INT8 VRAM Retention**: Keeps weights in 8-bit precision in VRAM with `TensorWiseINT8Layout`, cutting memory requirements significantly
+- **Fast Execution**: Uses `comfy_kitchen` `int8_linear` GEMM kernel with online activation rotation for ConvRot layers
+- **Automatic Fallback Protection**: Layers with unaligned dimensions ($K \% 4 \neq 0$) safely compute in float precision without crashing cuBLAS INT8 GEMM
+- **Seamless Compatibility**: Produces standard `MODEL` output compatible with **HSWQ SAM3 Detect** and stock ComfyUI SAM3 detection/tracking nodes
+
 ### HSWQ Ultimate SD Upscale
 
 <img src="png/usdu_auto_workflow.png" alt="HSWQ Ultimate SD Upscale" width="400">
