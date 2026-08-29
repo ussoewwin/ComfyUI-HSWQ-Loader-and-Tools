@@ -2676,6 +2676,12 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
                 logger.debug("[HSWQ INT8] int8_addmm fallback (k=%d, n=%d): %s", k, n, e)
                 return torch.addmm(*dequantize_args(args), **dequantize_args(kwargs))
 
+        _INT8_DEQUANT_DTYPE_TO_CODE = {
+            torch.float32: 0,
+            torch.float16: 1,
+            torch.bfloat16: 2,
+        }
+
         def _safe_dequantize(qdata, params):
             output_dtype_code = _INT8_DEQUANT_DTYPE_TO_CODE.get(params.orig_dtype, 0)
             scale = params.scale
@@ -2725,9 +2731,7 @@ _SAM3_PROCESS_STATE_DICT_PATCHED = False
 def _patch_sam3_process_state_dict() -> bool:
     """Fix ComfyUI SAM3 / SAM31 process_unet_state_dict to preserve and slice
     weight_scale and .comfy_quant sidecars when in_proj_weight is split into
-    q_proj, k_proj, v_proj. Without this, INT8 QKV layers lose scales/metadata
-    and load as raw unscaled integers (off by 1000x), breaking attention and
-    causing all-black detection masks.
+    q_proj, k_proj, v_proj. Also split in_proj_weight in _clip_stash for CLIP.
     """
     global _SAM3_PROCESS_STATE_DICT_PATCHED
     if _SAM3_PROCESS_STATE_DICT_PATCHED:
@@ -2771,7 +2775,21 @@ def _patch_sam3_process_state_dict() -> bool:
                             state_dict[base + ".v_proj.comfy_quant"] = quant.clone() if hasattr(quant, "clone") else quant
 
             # Run stock state dict remapping (handles tracker, in_proj_weight/bias split, mlp renames)
-            return orig_process(self, state_dict)
+            out = orig_process(self, state_dict)
+
+            # Split in_proj_weight / in_proj_bias inside self._clip_stash so CLIP gets all 24 layers!
+            if hasattr(self, "_clip_stash") and isinstance(self._clip_stash, dict):
+                for k in list(self._clip_stash.keys()):
+                    if k.endswith((".in_proj_weight", ".in_proj_bias")):
+                        t = self._clip_stash.pop(k)
+                        base, suffix = k.rsplit(".in_proj_", 1)
+                        s = ".weight" if suffix == "weight" else ".bias"
+                        d = t.shape[0] // 3
+                        self._clip_stash[base + ".q_proj" + s] = t[:d]
+                        self._clip_stash[base + ".k_proj" + s] = t[d:2*d]
+                        self._clip_stash[base + ".v_proj" + s] = t[2*d:]
+
+            return out
 
         _safe_process_unet_state_dict._hswq_patched = True
         sam3_cls.process_unet_state_dict = _safe_process_unet_state_dict
