@@ -71,7 +71,12 @@ def convrot_flags_from_conf(conf: Optional[dict]) -> tuple[bool, int]:
 
 
 def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
-    """Return logical in_features for a Linear weight (expand packed NVFP4 K)."""
+    """Return logical in_features for a Linear weight.
+
+    NVFP4 storage K is packed (and often 16-padded). For packed uint8 weights,
+    prefer ``orig_shape`` / ``in_features`` on comfy_quant (non-uint8 storage
+    is already the logical shape).
+    """
     import torch
 
     weight = state_dict[weight_key]
@@ -85,7 +90,14 @@ def logical_linear_in_features(state_dict: dict, weight_key: str) -> int:
     cq_key = comfy_quant_key_for_weight(weight_key)
     conf = decode_comfy_quant_conf(state_dict.get(cq_key))
     if is_nvfp4_conf(conf) and weight.ndim == 2:
-        return packed_in * _NVFP4_PACK_FACTOR
+        if getattr(weight, "dtype", None) == torch.uint8:
+            orig = conf.get("orig_shape") if isinstance(conf, dict) else None
+            if orig is not None and len(orig) >= 2:
+                return int(orig[1])
+            if isinstance(conf, dict) and conf.get("in_features") is not None:
+                return int(conf["in_features"])
+            return packed_in * _NVFP4_PACK_FACTOR
+        return packed_in
     return packed_in
 
 

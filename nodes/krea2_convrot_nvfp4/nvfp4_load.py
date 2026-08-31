@@ -174,13 +174,36 @@ def load_nvfp4_linear_module(
     if ts is None or bs is None:
         raise ValueError(f"Missing NVFP4 scales for layer {layer_name}")
 
+    # Prefer logical shape from comfy_quant. Detect / Linear ctor may have
+    # stamped module._orig_shape from packed weight.shape[1] (or packed*2
+    # pad guess); Params must use orig_shape / out×in from sidecar.
+    orig_shape = getattr(module, "_orig_shape", None)
+    conf_orig = layer_conf.get("orig_shape") if isinstance(layer_conf, dict) else None
+    if conf_orig is not None and len(conf_orig) >= 2:
+        orig_shape = tuple(int(x) for x in conf_orig)
+    elif (
+        isinstance(layer_conf, dict)
+        and layer_conf.get("out_features") is not None
+        and layer_conf.get("in_features") is not None
+    ):
+        orig_shape = (int(layer_conf["out_features"]), int(layer_conf["in_features"]))
+    if orig_shape is None:
+        raise ValueError(
+            f"[HSWQ NVFP4] Missing orig_shape for quantized layer {layer_name}"
+        )
+    if hasattr(module, "_orig_shape"):
+        module._orig_shape = orig_shape
+    if len(orig_shape) >= 2 and hasattr(module, "out_features") and hasattr(module, "in_features"):
+        module.out_features = int(orig_shape[0])
+        module.in_features = int(orig_shape[1])
+
     validate_nvfp4_weight_storage(module, weight)
 
     params = layout_cls.Params(
         scale=ts,
         block_scale=bs,
         orig_dtype=compute_dtype,
-        orig_shape=module._orig_shape,
+        orig_shape=orig_shape,
     )
     module.weight = torch.nn.Parameter(
         QuantizedTensor(
