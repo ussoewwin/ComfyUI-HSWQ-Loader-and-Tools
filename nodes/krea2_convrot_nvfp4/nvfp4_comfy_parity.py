@@ -14,7 +14,7 @@ After apply_comfy_quant_nvfp4_patches():
      Without this, convrot-stamped ckpts measure as pure garbage (SSIM ~0.04).
      Still ComfyUI-only: stock load + stock Linear.forward (ops.py).
      Kitchen lacked aten.addmm for NVFP4 (bias F.linear → full dequant); that gap
-     is filled at runtime by nvfp4_addmm_patch (HSWQ hswq_scaled_mm_nvfp4), not kitchen CUBLAS.
+     is filled at runtime by nvfp4_addmm_patch (ck.scaled_mm_nvfp4, TensorCore W4A4).
 
 No invented amax / freeze / ensure_act_scale. Inference + load = ComfyUI only.
 """
@@ -171,7 +171,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     print(
         "[BENCH] nvfp4 ComfyUI-only: load=_load_quantized_module; "
         "Linear.forward=ops.py stock + O(N log N) float32 butterfly act-rotate (zero accumulation error); "
-        "NVFP4 addmm->HSWQ hswq_scaled_mm_nvfp4 registered; "
+        "NVFP4 addmm->ck.scaled_mm_nvfp4 registered; "
         "SSIM target >=0.9",
         flush=True,
     )
