@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 requires = [ "setuptools>=61", "wheel" ]
 
 [project]
-name = "comfyui-hswq-loader-and-Tools"
+name = "comfyui-hswq-loader-and-tools"
 version = "3.4.9"
 description = "HSWQ SDXL/Z Image ConvRot INT8/Hybrid ConvRot NVFP4 Loader, and various tools"
 license = { file = "LICENSE" }
