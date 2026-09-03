@@ -9,10 +9,10 @@ dtype the ``comfy_quant`` metadata would be ignored.
 
 This node fixes both:
 
-1. Force the model architecture dtype to a float type (BF16) so the module
-   graph can be constructed.
+1. Force the model architecture dtype to a float type (BF16 on Ampere+,
+   FP16 on Turing/older GPUs) so the module graph can be constructed.
 2. Pass ``custom_operations = mixed_precision_ops({"int8_tensorwise":
-   QUANT_ALGOS["int8_tensorwise"]}, ...)`` so every Linear in the graph is a
+   QUANT_ALGOS["int8_tensorwise"]}, compute_dtype)`` so every Linear in the graph is a
    MixedPrecisionOps Linear.  Its ``_load_from_state_dict`` consumes
    ``<layer>.comfy_quant`` / ``<layer>.weight_scale`` and attaches an INT8
    ``QuantizedTensor`` (TensorWiseINT8Layout) to the module.
@@ -43,6 +43,7 @@ import os
 import torch
 
 import comfy.controlnet
+import comfy.model_management
 import comfy.utils
 from comfy import ops as comfy_ops
 from comfy.quant_ops import QUANT_ALGOS
@@ -72,19 +73,33 @@ def _has_int8_comfy_quant(sd: dict) -> bool:
     return False
 
 
-def _int8_mixed_precision_ops():
+def _get_default_compute_dtype(device: torch.device | None = None) -> torch.dtype:
+    """Select BF16 on modern GPUs (Ampere/Ada/Blackwell) or FP16 on Turing/older GPUs."""
+    if device is None:
+        try:
+            device = comfy.model_management.get_torch_device()
+        except Exception:  # noqa: BLE001
+            device = None
+    if comfy.model_management.should_use_bf16(device=device):
+        return torch.bfloat16
+    return torch.float16
+
+
+def _int8_mixed_precision_ops(compute_dtype: torch.dtype | None = None):
     """MixedPrecisionOps supporting int8_tensorwise (ConvRot included).
 
     ``pick_operations`` only returns MixedPrecisionOps when
     ``model_config.quant_config`` is set; the ControlNet loader has no model
     config here, so we build the ops class explicitly.
     """
+    if compute_dtype is None:
+        compute_dtype = _get_default_compute_dtype()
     quant_config = {
         "int8_tensorwise": QUANT_ALGOS["int8_tensorwise"],
     }
     return comfy_ops.mixed_precision_ops(
         quant_config,
-        torch.bfloat16,
+        compute_dtype,
         full_precision_mm=False,
         disabled=[],
     )
@@ -193,6 +208,7 @@ class HSWQControlNetLoader:
         ckpt_path = get_full_path_or_raise(_CN_DIR, control_net_name)
 
         sd = comfy.utils.load_torch_file(ckpt_path, safe_load=True)
+        compute_dtype = _get_default_compute_dtype()
 
         if _looks_like_comfy_flux_controlnet(sd):
             # comfy.controlnet.load_controlnet_state_dict cannot detect the
@@ -200,13 +216,14 @@ class HSWQControlNetLoader:
             model_options = {}
             if _has_int8_comfy_quant(sd):
                 model_options = {
-                    "dtype": torch.bfloat16,
-                    "custom_operations": _int8_mixed_precision_ops(),
+                    "dtype": compute_dtype,
+                    "custom_operations": _int8_mixed_precision_ops(compute_dtype=compute_dtype),
                 }
                 logger.info(
                     "[HSWQ INT8 CN] INT8 ComfyQuant detected: loading %s with "
-                    "MixedPrecisionOps (weights stay INT8 in VRAM)",
+                    "MixedPrecisionOps (%s, weights stay INT8 in VRAM)",
                     control_net_name,
+                    compute_dtype,
                 )
             else:
                 logger.info(
@@ -224,13 +241,14 @@ class HSWQControlNetLoader:
             model_options = {
                 # Build the module graph in float; quantized weights are
                 # attached by MixedPrecisionOps during state_dict load.
-                "dtype": torch.bfloat16,
-                "custom_operations": _int8_mixed_precision_ops(),
+                "dtype": compute_dtype,
+                "custom_operations": _int8_mixed_precision_ops(compute_dtype=compute_dtype),
             }
             logger.info(
                 "[HSWQ INT8 CN] INT8 ComfyQuant detected: loading %s with "
-                "MixedPrecisionOps (weights stay INT8 in VRAM)",
+                "MixedPrecisionOps (%s, weights stay INT8 in VRAM)",
                 control_net_name,
+                compute_dtype,
             )
         else:
             model_options = {}
