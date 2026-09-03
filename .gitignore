@@ -1,2 +1,11 @@
 # Local-only reflection records (never publish)
 /反省文/
+/scratch/
+*.bak
+*.bak*
+*.tmp
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
