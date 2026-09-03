@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.4.9
+
+- **改进**：**HSWQ ControlNet Loader (`HSWQControlNetLoader`) 动态计算 Dtype 适配，全面兼容 Turing (sm_75) 及旧代 GPU** —— 解决了在缺乏原生 BF16 硬件 Tensor Core 的 NVIDIA Turing（RTX 2000 / GTX 1600 系列）及更早架构上可能发生的 BF16 运行时错误与隐式 FP32 升精度开销。
+  - **动态架构检测**：利用 `comfy.model_management.should_use_bf16()`，在现代 GPU（Ampere / Ada / Blackwell）上自动采用 `torch.bfloat16`，在 Turing / Pascal 架构上安全采用 `torch.float16`。
+  - **无损 INT8 显存节省**：量化权重在显存中严格保持 8-bit（`TensorWiseINT8Layout`），避免无谓的 FP32 显存膨胀，并在所有 GPU 世代上均能实现最大化的显存缩减效果。
+  - **完全向后兼容**：节点输入输出接口与现有工作流完全保持不变；非量化及 FP8 回退路径完全透明。
+- 详情见 [发布说明 v3.4.9](v3.4.9.md)。
+
 ## Version 3.4.8
 
 - **移除**：**HSWQ SAM3 Loader（ConvRot INT8）与 HSWQ SAM3 Detect 节点** - SAM3 节点相关代码（加载器、检测节点、补丁、指南）已从树中移除。经测试（及 r/StableDiffusion 社区确认）证明**专用加载器并非必需**：启动时补丁（`_patch_load_state_dict_guess_config_int8` 的 `is_sam3` 门控）已能让标准加载器（`CheckpointLoaderSimple` / 默认 Comfy SAM3.1 节点）自动处理 ConvRot INT8 SAM3 检查点，包括 MixedPrecisionOps 附加与 CLIP 键重映射。树已恢复到基线 `d33862a`（`191ddbc`）；全部技术工作（补丁、节点、技术指南）仍保留在 git 历史中供参考。

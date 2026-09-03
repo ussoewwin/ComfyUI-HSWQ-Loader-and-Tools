@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.4.9
+
+- **Improved**: **Dynamic Compute Dtype in HSWQ ControlNet Loader (`HSWQControlNetLoader`) for Turing (sm_75) & Legacy GPU Compatibility** — Resolved potential BF16 runtime errors and implicit FP32 upcasting on NVIDIA Turing (RTX 2000 / GTX 1600 series) and older architectures that lack native BF16 hardware Tensor Cores.
+  - **Dynamic Architecture Detection**: Uses `comfy.model_management.should_use_bf16()` to automatically select `torch.bfloat16` on modern GPUs (Ampere / Ada / Blackwell) while safely selecting `torch.float16` on Turing / Pascal architectures.
+  - **Uncompromised INT8 VRAM Savings**: Keeps quantized weights strictly in 8-bit (`TensorWiseINT8Layout`) in VRAM, eliminating unnecessary FP32 memory overhead while providing maximum VRAM reduction across all GPU generations.
+  - **Full Backwards Compatibility**: Zero changes to node inputs, outputs, or existing workflows; non-quantized and FP8 fallback paths remain completely transparent.
+- See [Release Notes v3.4.9](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.4.9) for details.
+
 ## Version 3.4.8
 
 - **Removed**: **HSWQ SAM3 Loader (ConvRot INT8) & HSWQ SAM3 Detect nodes** - the SAM3 node work (loader, detect node, patches, guides) was removed from the tree. Testing (and community confirmation on r/StableDiffusion) showed the dedicated loader is **not required**: the startup patch (`_patch_load_state_dict_guess_config_int8`, `is_sam3` gate) already makes stock loaders (`CheckpointLoaderSimple` / default Comfy SAM3.1 node) handle ConvRot INT8 SAM3 checkpoints automatically, including MixedPrecisionOps attachment and CLIP key remapping. The tree is restored to baseline `d33862a` (`191ddbc`); all technical work (patches, nodes, technical guide) remains in the git history for reference.
