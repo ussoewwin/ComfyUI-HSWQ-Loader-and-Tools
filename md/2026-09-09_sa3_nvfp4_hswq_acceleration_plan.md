@@ -270,6 +270,41 @@ FP16 に対して安定して速くなる line を狙う。
   （head_dim ≥ 256、非対応形状、GQA）も SA3 側制約に合わせる
 - 精度: README により image gen はほぼロスレス。ただし Z-Image での実測 parity は必須
 
+**実測結果（2026-09-10）— 不採用（品質不成立）**
+
+チェックリストは全項目合格（sageattn3 whl 導入済み、sm121、head_dim 128、CUDA 13.2）。
+実装はベンチ側に限定（既定パス不変）: `zi_convrot_nvfp4_traj_compare.py --attention sage3`、
+`zi_int8_bench.py --attention sage3`（いずれも quant モデルのみ attention を override、
+FP16 ベースラインは stock attention のまま）。
+
+**SA3 単体テスト**（ランダム q/k/v、fp16、HND、head_dim 128、SDPA 比較）:
+
+| 条件 | cos vs SDPA |
+|---|---|
+| seq=4096, per_block_mean=True | **0.98192** |
+| seq=4096, per_block_mean=False | 0.98185 |
+| seq=4128 / 1024 | 同程度（0.9817〜0.9821） |
+
+→ **SA3（FP4 attention）は SDPA に対して常時 ~1.8% の固有誤差**（per_block_mean 無関係）
+
+**実モデル検証**（FP16 ベースライン基準、ローカル 5060 Ti）:
+
+| 組合せ | 指標 | 結果 |
+|---|---|---|
+| NVFP4 Linear（既存 nv100）+ SA3 | final-cos（12step, seed42） | **0.0556（破綻）** per_block_mean True/False 同様 |
+| INT8 Linear（sci_1off）+ SA3 | latent-cos（25step, seed42） | **0.0909（破綻）** 推論 43.3s（INT8 単体 62.5s より 30% 速い） |
+| INT8 Linear 単体（SA3 なし） | latent-cos | 0.9862（正常） |
+| NVFP4 Linear 単体（SA3 なし） | final-cos | 0.987 / 0.984（正常） |
+
+**原因**: SA3 の固有誤差（~1.8%/attention 層）が、量子化 Linear の誤差（NVFP4 ~2.6%、INT8 ~1.4%）
+と加算され、多層 × 多ステップの蓄積で軌道が分岐する。SA3 の単体誤差自体が README の
+「ほぼロスレス」と乖離している（この whl バージョン・5060 Ti 環境での実測）。
+
+- **判断: SA3 併用は品質面で不成立。改良 D は不採用**
+- 速度面は有効（INT8+SA3 で 30% 高速化）だが、品質が使い物にならないため採用不可
+- `--attention` 実装は既定 sdpa（不使用）のまま両ベンチに残置。NVFP4 側（traj_compare）の
+  実装は Owner 指示で撤去済み
+
 ### 改良 E（参考・非対象）: P の FP4 保持
 
 softmax 直後の P を FP4 保持するのは attention 固有。Z-Image の MLP/Linear は
