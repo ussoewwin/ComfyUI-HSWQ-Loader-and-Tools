@@ -17,7 +17,7 @@
   - **实测**：attention 内核约快 **2.3x**；端到端 **-11.4%**（Z Image ConvRot INT8）与 **-15.4%**（Z Image ConvRot NVFP4）（RTX 5060 Ti），bifurcated `0/20`。
 - **不支持**：**SDXL**（`HSWQ Checkpoint Loader (SDXL)`）没有 `attention_accel` 选项，也没有 SA2 代码路径 —— 仅限 Z Image / Krea2。
 - **注意**：**不要**与 `Patch Sage Attention DM`（ComfyUI-DistorchMemoryManager）叠加 —— 两者都会补丁 attention。使用 `attention_accel=sa2` 时请旁路该节点。需要 `sageattention` 包（仅在选择 `sa2` 时导入）。
-- 详情见 [发布说明 v3.5.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.1)。
+- 详情见 [发布说明 v3.5.1](v3.5.1.md)。
 
 ## Version 3.5.0
 
