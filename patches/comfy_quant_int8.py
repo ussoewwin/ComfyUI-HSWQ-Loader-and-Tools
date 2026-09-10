@@ -3112,7 +3112,7 @@ def tag_krea2_model(model) -> bool:
     return True
 
 
-def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
+def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="default"):
     import logging
     import torch
     import folder_paths
@@ -3204,6 +3204,25 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
             if inner_model is not None:
                 inner_model._hswq_krea2_nvfp4_pack = True
 
+        if attention_accel == "sa2":
+            # SageAttention2 on the stock-equivalent ConvRot INT8 load
+            # (pattern zimage_int8 or krea2_int8 - checkpoint-verified).
+            try:
+                from ..hswq.hswq_sa2_accel import sa2_arm_for_model
+
+                if sa2_arm_for_model(model, unet_path, weight_dtype):
+                    print(
+                        f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
+                        flush=True,
+                    )
+                else:
+                    logging.warning(
+                        "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
+                        unet_name, weight_dtype,
+                    )
+            except Exception as e:
+                logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
+
     elif is_int8:
         apply_comfy_quant_int8_patches()
         model_options = {}
@@ -3226,6 +3245,25 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype):
         with _int8_quant_conv_scope():
             model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
         summarize_int8_lora_capability(model)
+
+        if attention_accel == "sa2":
+            # SageAttention2 on the loaded INT8 model (pattern zimage_int8 or
+            # krea2_int8 - decided by the checkpoint-verified arm functions).
+            try:
+                from ..hswq.hswq_sa2_accel import sa2_arm_for_model
+
+                if sa2_arm_for_model(model, unet_path, weight_dtype):
+                    print(
+                        f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
+                        flush=True,
+                    )
+                else:
+                    logging.warning(
+                        "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
+                        unet_name, weight_dtype,
+                    )
+            except Exception as e:
+                logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
     else:
         model_options = {}
         if weight_dtype == "fp8_e4m3fn":
@@ -3330,19 +3368,30 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
     if unet_cls is not None:
         _orig_load_unet = unet_cls.load_unet
 
-        def load_unet(self, unet_name, weight_dtype):
+        def load_unet(self, unet_name, weight_dtype, **kwargs):
+            # Pass through any loader options (e.g. attention_accel) unchanged.
             # Explicit FP8 choices stay on the original FP loader body — never INT8 helper.
             if weight_dtype in _FP8_WEIGHT_DTYPES:
-                return _orig_load_unet(self, unet_name, weight_dtype)
+                return _orig_load_unet(self, unet_name, weight_dtype, **kwargs)
+            # Explicit NVFP4 dtype strings belong to the NVFP4 dispatches
+            # (Z Image / Krea2) wrapped beneath us - never the INT8 helper.
+            if weight_dtype == "Z Image ConvRot NVFP4" or weight_dtype == "Krea2 ConvRot NVFP4":
+                return _orig_load_unet(self, unet_name, weight_dtype, **kwargs)
             if weight_dtype == "int8_tensorwise":
-                return load_unet_hswq_weight_dtype(unet_name, weight_dtype)
+                return load_unet_hswq_weight_dtype(
+                    unet_name, weight_dtype,
+                    attention_accel=kwargs.get("attention_accel", "default"),
+                )
             # default: auto-detect INT8 checkpoints only; otherwise original FP path.
             import folder_paths
 
             unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
             if checkpoint_looks_like_comfy_quant_int8(unet_path):
-                return load_unet_hswq_weight_dtype(unet_name, weight_dtype)
-            return _orig_load_unet(self, unet_name, weight_dtype)
+                return load_unet_hswq_weight_dtype(
+                    unet_name, weight_dtype,
+                    attention_accel=kwargs.get("attention_accel", "default"),
+                )
+            return _orig_load_unet(self, unet_name, weight_dtype, **kwargs)
 
         unet_cls.load_unet = load_unet
 

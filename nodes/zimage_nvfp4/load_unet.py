@@ -242,7 +242,7 @@ def _install_permanent_dynamic_load_guard() -> None:
     _guarded_load._hswq_zi_rearm_guard_prev = cur  # type: ignore[attr-defined]
     Dynamic.load = _guarded_load
 
-def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
+def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="default"):
     """Load Z Image / ZIT UNet with ConvRot NVFP4 (TC if calibrated, else parity)."""
     _patch_load_model_weights_warnings()
     import folder_paths
@@ -312,6 +312,28 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype):
     with _int8_quant_conv_scope():
         model = comfy.sd.load_diffusion_model(unet_path, model_options={})
     summarize_int8_lora_capability(model)
+
+    if attention_accel == "sa2":
+        # SageAttention2 on the Z Image ConvRot NVFP4 model (pattern
+        # zimage_nvfp4 - checkpoint-verified).
+        try:
+            from ...hswq.hswq_sa2_accel import sa2_arm_for_model
+
+            if sa2_arm_for_model(model, unet_path, weight_dtype):
+                print(
+                    f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
+                    flush=True,
+                )
+            else:
+                import logging
+                logging.warning(
+                    "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
+                    unet_name, weight_dtype,
+                )
+        except Exception as e:
+            import logging
+            logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
+
     return (model,)
 
 
@@ -360,13 +382,17 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
     _fp8 = frozenset({"fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"})
     _prev = unet_cls.load_unet
 
-    def load_unet(self, unet_name, weight_dtype):
+    def load_unet(self, unet_name, weight_dtype, **kwargs):
+        # Pass through any loader options (e.g. attention_accel) unchanged.
         _ensure_dynamic_load_bake_wrap()
         _install_permanent_dynamic_load_guard()
         if weight_dtype in _fp8:
-            return _prev(self, unet_name, weight_dtype)
+            return _prev(self, unet_name, weight_dtype, **kwargs)
         if weight_dtype == ZI_NVFP4_WEIGHT_DTYPE:
-            return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+            return load_unet_nvfp4_weight_dtype(
+                unet_name, weight_dtype,
+                attention_accel=kwargs.get("attention_accel", "default"),
+            )
         import folder_paths
 
         if weight_dtype == "default":
@@ -374,10 +400,13 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
                 "diffusion_models", unet_name
             )
             if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
-                return load_unet_nvfp4_weight_dtype(unet_name, weight_dtype)
+                return load_unet_nvfp4_weight_dtype(
+                    unet_name, weight_dtype,
+                    attention_accel=kwargs.get("attention_accel", "default"),
+                )
         # Never treat SDXL's "ConvRot NVFP4" string as ZI — different being.
         # int8_tensorwise / other: leave to INT8 dispatch / original (core ConvRot).
-        return _prev(self, unet_name, weight_dtype)
+        return _prev(self, unet_name, weight_dtype, **kwargs)
 
     unet_cls.load_unet = load_unet
     unet_cls._hswq_zi_nvfp4_dispatch = True  # type: ignore[attr-defined]
