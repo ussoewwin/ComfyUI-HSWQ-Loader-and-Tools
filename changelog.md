@@ -7,6 +7,18 @@
   </tr>
 </table>
 
+## Version 3.5.1
+
+- **Added**: **SageAttention2 (SA2) acceleration for the UNet Loader** - new **`attention_accel`** selector (`default` / `sa2`) on **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**.
+  - **`default`**: stock ComfyUI attention, nothing patched - identical to previous versions.
+  - **`sa2`**: patches the loaded model's attention with **SageAttention2** (`sageattn`, INT8 QK `per_warp` + FP8 PV, sm120 auto path). SDPA fallback for masks and `head_dim > 256`; kernel failures fall back per call, and coverage is reported as `[HSWQ SA2] attention calls: total=... sa2=... errors=...`.
+- **Supported models (4 patterns, dispatched separately)**: **Z Image ConvRot INT8**, **Z Image ConvRot NVFP4**, **Krea2 ConvRot INT8**, **Krea2 ConvRot NVFP4**. The pattern is resolved from the checkpoint itself (comfy_quant `int8_tensorwise` / `nvfp4` scan + the Krea2 `txtfusion.projector` marker), cross-checked against the selected `weight_dtype`, and the loaded model class is verified again before patching. A mismatch **refuses SA2** and logs a warning instead of mixing patterns.
+  - **Per-model arming**: SA2 is active only while that MODEL's forward runs; other models in the same graph keep stock attention.
+  - **Measured**: attention kernel about **2.3x** faster; end-to-end **-11.4%** on Z Image ConvRot INT8 and **-15.4%** on Z Image ConvRot NVFP4 (RTX 5060 Ti), with `0/20` bifurcated seeds.
+- **Not supported**: **SDXL** (`HSWQ Checkpoint Loader (SDXL)`) has no `attention_accel` option and no SA2 code path - Z Image / Krea2 only.
+- **Note**: do **not** stack with `Patch Sage Attention DM` (ComfyUI-DistorchMemoryManager) - both patch attention. Bypass that node when using `attention_accel=sa2`. Requires the `sageattention` package (imported only when `sa2` is selected).
+- See [Release Notes v3.5.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.1) for details.
+
 ## Version 3.5.0
 
 - **Added**: **HSWQ Model Patch Loader** (`HSWQModelPatchLoaderCustom`) - Load model patches (ControlNet, feature projectors, etc.) with **CPU offload** and **ConvRot INT8** support. INT8 weights stay in VRAM (`QuantizedTensor` / `TensorWiseINT8Layout`, comfy-kitchen `int8_linear` with online ConvRot rotation); `cpu_offload` builds the patch in CPU main memory; compute dtype auto-selects BF16 (Ampere+) / FP16 (Turing). Ported from ComfyUI-NunchakuFluxLoraStacker `ModelPatchLoaderCustom`; apply with the stock apply nodes (`QwenImageDiffsynthControlnet` / `ZImageFunControlnet` / `USOStyleReference`).

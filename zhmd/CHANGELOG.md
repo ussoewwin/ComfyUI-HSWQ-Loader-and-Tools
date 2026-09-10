@@ -7,6 +7,18 @@
   </tr>
 </table>
 
+## Version 3.5.1
+
+- **新增**：**UNet Loader 的 SageAttention2（SA2）加速** —— **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 新增 **`attention_accel`** 选项（`default` / `sa2`）。
+  - **`default`**：ComfyUI 原生 attention，不安装任何补丁 —— 与既往版本完全一致。
+  - **`sa2`**：将已加载模型的 attention 替换为 **SageAttention2**（`sageattn`，INT8 QK `per_warp` + FP8 PV，sm120 自动路径）。mask 与 `head_dim > 256` 自动回退到 SDPA；内核失败按每次调用回退，覆盖率以 `[HSWQ SA2] attention calls: total=... sa2=... errors=...` 输出。
+- **支持模型（4 种模式，分别独立分发）**：**Z Image ConvRot INT8**、**Z Image ConvRot NVFP4**、**Krea2 ConvRot INT8**、**Krea2 ConvRot NVFP4**。模式由检查点本身判定（comfy_quant `int8_tensorwise` / `nvfp4` 扫描 + Krea2 `txtfusion.projector` 标记），再与所选的 `weight_dtype` 交叉校验，并在安装前再次校验已加载模型的类。不一致时**拒绝安装 SA2** 并记录警告，绝不混用模式。
+  - **按模型启用**：SA2 仅在该 MODEL 的 forward 执行期间生效；同一图中的其他模型保持原生 attention。
+  - **实测**：attention 内核约快 **2.3x**；端到端 **-11.4%**（Z Image ConvRot INT8）与 **-15.4%**（Z Image ConvRot NVFP4）（RTX 5060 Ti），bifurcated `0/20`。
+- **不支持**：**SDXL**（`HSWQ Checkpoint Loader (SDXL)`）没有 `attention_accel` 选项，也没有 SA2 代码路径 —— 仅限 Z Image / Krea2。
+- **注意**：**不要**与 `Patch Sage Attention DM`（ComfyUI-DistorchMemoryManager）叠加 —— 两者都会补丁 attention。使用 `attention_accel=sa2` 时请旁路该节点。需要 `sageattention` 包（仅在选择 `sa2` 时导入）。
+- 详情见 [发布说明 v3.5.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.1)。
+
 ## Version 3.5.0
 
 - **新增**：**HSWQ Model Patch Loader（`HSWQModelPatchLoaderCustom`）** - 加载模型补丁（ControlNet、feature projector 等），支持 **CPU offload** 与 **ConvRot INT8**。权重在 VRAM 中保持 INT8（`QuantizedTensor` / `TensorWiseINT8Layout`，comfy-kitchen `int8_linear` 在线 ConvRot 旋转）；`cpu_offload` 可在 CPU 内存中构建补丁；计算 dtype 自动选择 BF16（Ampere+）/ FP16（Turing）。移植自 ComfyUI-NunchakuFluxLoraStacker 的 `ModelPatchLoaderCustom`；可与标准 apply 节点（`QwenImageDiffsynthControlnet` / `ZImageFunControlnet` / `USOStyleReference`）配合使用。
