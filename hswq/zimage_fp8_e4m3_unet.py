@@ -988,20 +988,23 @@ class HSWQFP8E4M3UNetLoader:
         model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
 
         if attention_accel == "sa2":
-            # SageAttention2 acceleration (INT8 QK + FP8 PV, sm120 auto path).
-            # Armed per-MODEL via forward wrapper; FP16/other models unaffected.
+            # SageAttention2 acceleration. The (arch x quant) matrix is
+            # dispatched through explicit per-pattern arm functions:
+            #   Z Image int8 / Z Image nvfp4 / Krea2 int8 / Krea2 nvfp4.
+            # Checkpoint kind is verified from the file itself; a mismatch
+            # refuses SA2 (never mixes patterns silently).
             try:
                 from .hswq_sa2_accel import sa2_arm_for_model
 
-                if sa2_arm_for_model(model):
+                if sa2_arm_for_model(model, unet_path, weight_dtype):
                     print(
-                        f"[HSWQ SA2] SageAttention2 acceleration installed: {unet_name}",
+                        f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
                         flush=True,
                     )
                 else:
                     logging.warning(
-                        "[HSWQ SA2] architecture not supported, running without SA2: %s",
-                        unet_name,
+                        "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
+                        unet_name, weight_dtype,
                     )
             except Exception as e:
                 logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)

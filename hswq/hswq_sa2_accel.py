@@ -1,19 +1,26 @@
 """SageAttention2 (SA2) acceleration for HSWQ-loaded DiT models.
 
-Scope (2026-09-10, Owner directive): Z Image ConvRot INT8 / NVFP4 and
-Krea2 ConvRot INT8 / NVFP4 loaded through ``HSWQFP8E4M3UNetLoader`` with the
-``attention_accel`` selector set to ``sa2``.
+Scope (2026-09-10, Owner directive): the 4 supported checkpoint kinds loaded
+through ``HSWQFP8E4M3UNetLoader`` with ``attention_accel == "sa2"``:
 
-Design (separation principle - no shared/global monkeypatch):
-  * ``sa2_arm_for_model(model)`` wraps the *specific* ``diffusion_model``
-    instance's ``forward`` so SA2 is armed only while THAT model runs.
-  * The armed attention function patches ONLY the modules bound to the
-    architecture that model actually uses (dispatch by class name):
-      - Z Image  -> comfy.ldm.lumina.model      (JointAttention, skip_reshape)
-      - Krea2    -> comfy.ldm.krea2.model       (skip_reshape=True)
-      - Qwen Image -> comfy.ldm.qwen_image.model (skip_reshape=True, reserved)
-    Other architectures keep stock attention; other MODEL objects in the same
-    graph are never affected because their forwards do not arm the flag.
+    1. Z Image  ConvRot INT8
+    2. Z Image  ConvRot NVFP4
+    3. Krea2    ConvRot INT8
+    4. Krea2    ConvRot NVFP4
+
+SEPARATION PRINCIPLE (Owner directive, 2026-09-10 - "4 patterns, absolutely
+no mixing"): the (architecture x quant-format) matrix is dispatched through
+EXPLICIT per-pattern functions. There is one dedicated arm function per
+pattern (``_arm_zimage_int8`` / ``_arm_zimage_nvfp4`` / ``_arm_krea2_int8`` /
+``_arm_krea2_nvfp4``). Detection is done from the checkpoint itself with the
+existing proven probes, cross-checked against the loader option the user
+picked. A mismatch NEVER falls through silently: SA2 is refused and the
+mismatch is logged.
+
+Pattern -> attention module mapping (each pattern patches ONLY its own module):
+
+    Z Image  (int8 / nvfp4) -> comfy.ldm.lumina.model      (NextDiT)
+    Krea2    (int8 / nvfp4) -> comfy.ldm.krea2.model       (SingleStreamDiT)
 
 Layout handling is the validated one (benchmark/zi_traj_compare.py, 2026-09-10):
 stock ``attention_pytorch`` semantics, ``skip_reshape=True`` takes q,k,v as
@@ -37,15 +44,25 @@ _STATE = {
     "t_sa2_ms": 0.0,
     "t_sdpa_ms": 0.0,
     "patched_modules": (),
+    "pattern": None,
 }
 _LOCK = threading.Lock()
 
-# Architecture modules whose from-import binding of optimized_attention_masked
-# must be re-pointed while armed. Dispatch is explicit per arch (no shared path).
-_ARCH_MODULES = {
-    "zimage": "comfy.ldm.lumina.model",
-    "krea2": "comfy.ldm.krea2.model",
-    "qwen_image": "comfy.ldm.qwen_image.model",
+# Pattern -> the ONE arch module whose from-import binding of
+# optimized_attention_masked must be re-pointed while armed.
+# Explicit per pattern; no shared/global patching.
+_PATTERN_ATTENTION_MODULE = {
+    "zimage_int8": "comfy.ldm.lumina.model",
+    "zimage_nvfp4": "comfy.ldm.lumina.model",
+    "krea2_int8": "comfy.ldm.krea2.model",
+    "krea2_nvfp4": "comfy.ldm.krea2.model",
+}
+
+# Loader weight_dtype options mapped to the pattern they declare.
+_DTYPE_PATTERN = {
+    "int8_tensorwise": None,  # could be Z Image or Krea2 -> resolved by probe
+    "Z Image ConvRot NVFP4": "zimage_nvfp4",
+    "Krea2 ConvRot NVFP4": "krea2_nvfp4",
 }
 
 
@@ -60,6 +77,10 @@ def get_stats() -> dict:
     return dict(_STATE)
 
 
+def get_pattern() -> str | None:
+    return _STATE.get("pattern")
+
+
 def _log_stats():
     s = get_stats()
     logger.info(
@@ -72,26 +93,95 @@ def _log_stats():
     )
 
 
-def _detect_arch(diffusion_model) -> str | None:
-    """Detect architecture by the DiT module's class name (explicit dispatch)."""
-    cls_name = type(diffusion_model).__name__.lower()
-    mod_name = type(diffusion_model).__module__.lower()
-    # Z Image (NextDiT in comfy.ldm.lumina) / Krea2 / Qwen Image - check module path first.
-    if "lumina" in mod_name:
-        return "zimage"
-    if "krea2" in mod_name:
-        return "krea2"
-    if "qwen_image" in mod_name or "qwenimage" in mod_name:
-        return "qwen_image"
-    # Fallback by class name only if module path was inconclusive.
-    if "nextdit" in cls_name or "lumina" in cls_name:
-        return "zimage"
-    if "krea" in cls_name:
-        return "krea2"
-    if "qwen" in cls_name:
-        return "qwen_image"
-    return None
+# ---------------------------------------------------------------------------
+# Checkpoint probes (existing proven helpers; each pattern uses its own).
+# ---------------------------------------------------------------------------
 
+def _probe_is_int8(unet_path: str) -> bool:
+    from ..patches.comfy_quant_int8 import checkpoint_looks_like_comfy_quant_int8
+
+    return checkpoint_looks_like_comfy_quant_int8(unet_path)
+
+
+def _probe_is_nvfp4(unet_path: str) -> bool:
+    from ..nodes.nvfp4.nvfp4_conf import checkpoint_looks_like_comfy_quant_nvfp4
+
+    return checkpoint_looks_like_comfy_quant_nvfp4(unet_path)
+
+
+def _probe_is_krea2(unet_path: str) -> bool:
+    from ..patches.comfy_quant_int8 import checkpoint_is_krea2
+
+    return checkpoint_is_krea2(unet_path)
+
+
+def resolve_pattern(unet_path: str, weight_dtype: str) -> str | None:
+    """Resolve the explicit (arch x quant) pattern from the checkpoint itself.
+
+    "Hybrid" NVFP4 checkpoints (Owner's TC/hybrid builds) carry BOTH conf
+    formats: int8_tensorwise on most layers + nvfp4 on the TensorCore/GEMM
+    layers. The discriminator is therefore: any nvfp4 layer => NVFP4 pattern
+    (the int8 layers are that pattern's activation-quantized Linear path, not
+    a different pattern). Cross-checks against the loader option; returns None
+    on any mismatch.
+    """
+    has_nvfp4 = _scan_conf_formats(unet_path).get("nvfp4", 0) > 0
+    is_int8 = _probe_is_int8(unet_path)
+    is_krea2 = _probe_is_krea2(unet_path)
+
+    if has_nvfp4:
+        pattern = "krea2_nvfp4" if is_krea2 else "zimage_nvfp4"
+    elif is_int8:
+        pattern = "krea2_int8" if is_krea2 else "zimage_int8"
+    else:
+        logger.warning("[HSWQ SA2] checkpoint is neither ConvRot INT8 nor ConvRot NVFP4; refusing: %s", unet_path)
+        return None
+
+    # Cross-check against the dtype option the user selected.
+    declared = _DTYPE_PATTERN.get(weight_dtype)
+    if declared is not None and declared != pattern:
+        logger.warning(
+            "[HSWQ SA2] dtype option %r declares pattern %r but checkpoint probes as %r; refusing",
+            weight_dtype, declared, pattern,
+        )
+        return None
+    if weight_dtype == "int8_tensorwise" and has_nvfp4:
+        logger.warning("[HSWQ SA2] dtype int8_tensorwise but checkpoint carries nvfp4 layers; refusing")
+        return None
+
+    return pattern
+
+
+def _scan_conf_formats(unet_path: str) -> dict:
+    """Count comfy_quant conf formats present in the checkpoint (hybrid-safe)."""
+    import collections
+    import json
+
+    from safetensors import safe_open
+
+    cnt = collections.Counter()
+    try:
+        with safe_open(unet_path, framework="pt", device="cpu") as f:
+            for k in f.keys():
+                if not k.endswith(".comfy_quant"):
+                    continue
+                raw = f.get_tensor(k)
+                try:
+                    conf = json.loads(bytes(raw).decode("utf-8"))
+                    fmt = conf.get("format")
+                    if fmt:
+                        cnt[fmt] += 1
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning("[HSWQ SA2] conf scan failed for %s: %s", unet_path, e)
+    return dict(cnt)
+
+
+# ---------------------------------------------------------------------------
+# Shared kernel construction (math-identical for all patterns; the SEPARATION
+# lives in arm/dispatch functions below, not in duplicated kernel bodies).
+# ---------------------------------------------------------------------------
 
 def _make_attention_sage2():
     import time
@@ -103,8 +193,6 @@ def _make_attention_sage2():
     def attention_sage2(q, k, v, heads, mask=None, attn_precision=None,
                         skip_reshape=False, skip_output_reshape=False, **kw):
         if not _STATE["armed"]:
-            # Not armed (model without SA2 running while modules still patched):
-            # delegate to the stock backend captured at arm time.
             return _STATE["_stock_fn"](
                 q, k, v, heads, mask=mask, attn_precision=attn_precision,
                 skip_reshape=skip_reshape, skip_output_reshape=skip_output_reshape,
@@ -158,24 +246,16 @@ def _make_attention_sage2():
     return attention_sage2
 
 
-def _patch_arch_modules(arch: str, attention_sage2) -> list:
-    """Re-point optimized_attention_masked on the core module + the ONE arch
-    module that owns this model. Returns the list of patched module names."""
+def _patch_modules(module_names, attention_sage2) -> list:
     import importlib
 
     import comfy.ldm.modules.attention as comfy_attention
 
     patched = []
-    stock = comfy_attention.optimized_attention_masked
     if _STATE.get("_stock_fn") is None:
-        _STATE["_stock_fn"] = stock
+        _STATE["_stock_fn"] = comfy_attention.optimized_attention_masked
 
-    names = ["comfy.ldm.modules.attention"]
-    target = _ARCH_MODULES.get(arch)
-    if target:
-        names.append(target)
-
-    for mod_name in names:
+    for mod_name in module_names:
         try:
             mod = importlib.import_module(mod_name)
             if hasattr(mod, "optimized_attention_masked"):
@@ -186,7 +266,119 @@ def _patch_arch_modules(arch: str, attention_sage2) -> list:
     return patched
 
 
-def _unpatch_arch_modules(patched_modules):
+def _wrap_forward(model, pattern: str, patched) -> bool:
+    """Arm per-MODEL: wrap this diffusion_model's forward so SA2 is live only
+    while THIS model runs. Returns True on success."""
+    inner = getattr(model, "model", None)
+    dm = getattr(inner, "diffusion_model", None)
+    if dm is None:
+        logger.warning("[HSWQ SA2] no diffusion_model on MODEL; skip")
+        return False
+
+    _STATE["patched_modules"] = tuple(patched)
+    _STATE["pattern"] = pattern
+
+    if getattr(dm, "_hswq_sa2_wrapped", False):
+        _STATE["armed"] = True
+        return True
+
+    original_forward = dm.forward
+
+    def sa2_forward(*args, **kwargs):
+        _STATE["armed"] = True
+        try:
+            return original_forward(*args, **kwargs)
+        finally:
+            _STATE["armed"] = False
+
+    dm.forward = sa2_forward
+    dm._hswq_sa2_wrapped = True
+    dm._hswq_sa2_original_forward = original_forward
+    _STATE["armed"] = True
+    return True
+
+
+# ---------------------------------------------------------------------------
+# EXPLICIT per-pattern arm functions. 4 patterns, 4 functions, zero mixing.
+# Each validates the checkpoint kind AND the loaded model class before arming.
+# ---------------------------------------------------------------------------
+
+def _expected_class_name_ok(pattern: str, dm) -> bool:
+    cls = type(dm).__name__
+    mod = type(dm).__module__
+    if pattern.startswith("zimage"):
+        return "lumina" in mod.lower() and "nextdit" in cls.lower()
+    if pattern.startswith("krea2"):
+        return "krea2" in mod.lower() and "singlestreamdit" in cls.lower()
+    return False
+
+
+def _arm_pattern(model, unet_path: str, pattern: str) -> bool:
+    probes = {
+        "zimage_int8": (lambda: _probe_is_int8(unet_path) and not _probe_is_krea2(unet_path), _probe_is_int8),
+        "zimage_nvfp4": (lambda: _probe_is_nvfp4(unet_path) and not _probe_is_krea2(unet_path), _probe_is_nvfp4),
+        "krea2_int8": (lambda: _probe_is_int8(unet_path) and _probe_is_krea2(unet_path), _probe_is_int8),
+        "krea2_nvfp4": (lambda: _probe_is_nvfp4(unet_path) and _probe_is_krea2(unet_path), _probe_is_nvfp4),
+    }
+    if pattern not in probes:
+        logger.warning("[HSWQ SA2] unknown pattern %r; refusing", pattern)
+        return False
+
+    check, _ = probes[pattern]
+    if not check():
+        logger.warning(
+            "[HSWQ SA2] checkpoint does not match pattern %s; refusing: %s", pattern, unet_path
+        )
+        return False
+
+    attention_module = _PATTERN_ATTENTION_MODULE[pattern]
+    attention_sage2 = _make_attention_sage2()
+    patched = _patch_modules(["comfy.ldm.modules.attention", attention_module], attention_sage2)
+    if not patched:
+        return False
+
+    inner = getattr(model, "model", None)
+    dm = getattr(inner, "diffusion_model", None)
+    if dm is not None and not _expected_class_name_ok(pattern, dm):
+        _unpatch(patched)
+        logger.warning(
+            "[HSWQ SA2] loaded model class %s (%s) does not match pattern %s; refusing",
+            type(dm).__name__, type(dm).__module__, pattern,
+        )
+        return False
+
+    return _wrap_forward(model, pattern, patched)
+
+
+def _arm_zimage_int8(model, unet_path: str) -> bool:
+    """Pattern 1: Z Image ConvRot INT8 -> comfy.ldm.lumina.model."""
+    return _arm_pattern(model, unet_path, "zimage_int8")
+
+
+def _arm_zimage_nvfp4(model, unet_path: str) -> bool:
+    """Pattern 2: Z Image ConvRot NVFP4 -> comfy.ldm.lumina.model."""
+    return _arm_pattern(model, unet_path, "zimage_nvfp4")
+
+
+def _arm_krea2_int8(model, unet_path: str) -> bool:
+    """Pattern 3: Krea2 ConvRot INT8 -> comfy.ldm.krea2.model."""
+    return _arm_pattern(model, unet_path, "krea2_int8")
+
+
+def _arm_krea2_nvfp4(model, unet_path: str) -> bool:
+    """Pattern 4: Krea2 ConvRot NVFP4 -> comfy.ldm.krea2.model."""
+    return _arm_pattern(model, unet_path, "krea2_nvfp4")
+
+
+_PATTERN_ARM = {
+    "zimage_int8": _arm_zimage_int8,
+    "zimage_nvfp4": _arm_zimage_nvfp4,
+    "krea2_int8": _arm_krea2_int8,
+    "krea2_nvfp4": _arm_krea2_nvfp4,
+}
+
+
+def _unpatch(patched_modules):
     import importlib
 
     for mod_name in patched_modules:
@@ -198,59 +390,32 @@ def _unpatch_arch_modules(patched_modules):
             logger.warning("[HSWQ SA2] unpatch %s failed: %s", mod_name, e)
 
 
-def sa2_arm_for_model(model) -> bool:
-    """Arm SA2 for THIS MODEL only (wrap its diffusion_model.forward).
+def sa2_arm_for_model(model, unet_path: str, weight_dtype: str) -> bool:
+    """Arm SA2 for THIS MODEL only, via the explicit per-pattern functions.
 
-    ``model`` is a ComfyUI ModelPatcher as returned by a loader node.
-    Returns True when SA2 was installed, False when the architecture is not
-    supported (loader then just returns the stock model).
+    ``model`` is a ComfyUI ModelPatcher as returned by the loader node.
+    Returns True when SA2 was installed for one of the 4 supported patterns,
+    False when the checkpoint/option combination is not supported (the loader
+    then just returns the stock model).
     """
-    inner = getattr(model, "model", None)
-    dm = getattr(inner, "diffusion_model", None)
-    if dm is None:
-        logger.warning("[HSWQ SA2] no diffusion_model on MODEL; skip")
+    pattern = resolve_pattern(unet_path, weight_dtype)
+    if pattern is None:
         return False
 
-    arch = _detect_arch(dm)
-    if arch is None:
-        logger.warning(
-            "[HSWQ SA2] unsupported architecture %s (%s); SA2 not installed",
-            type(dm).__name__, type(dm).__module__,
-        )
-        return False
-
+    arm_fn = _PATTERN_ARM[pattern]
     with _LOCK:
         _reset_stats()
-        attention_sage2 = _make_attention_sage2()
-        patched = _patch_arch_modules(arch, attention_sage2)
-        if not patched:
-            return False
-        _STATE["patched_modules"] = tuple(patched)
-
-        if getattr(dm, "_hswq_sa2_wrapped", False):
-            # Already wrapped in a previous queue run; keep the wrapper.
-            _STATE["armed"] = True
-            logger.info("[HSWQ SA2] armed for %s (%s)", arch, type(dm).__name__)
-            return True
-
-        original_forward = dm.forward
-
-        def sa2_forward(*args, **kwargs):
-            _STATE["armed"] = True
-            try:
-                return original_forward(*args, **kwargs)
-            finally:
-                _STATE["armed"] = False
-
-        dm.forward = sa2_forward
-        dm._hswq_sa2_wrapped = True
-        dm._hswq_sa2_original_forward = original_forward
-        _STATE["armed"] = True
-        logger.info(
-            "[HSWQ SA2] armed for %s (%s); patched modules: %s",
-            arch, type(dm).__name__, ", ".join(patched),
-        )
-        return True
+        ok = arm_fn(model, unet_path)
+        if ok:
+            logger.info(
+                "[HSWQ SA2] armed pattern=%s dtype=%s; patched: %s",
+                pattern, weight_dtype, ", ".join(_STATE["patched_modules"]),
+            )
+        else:
+            _STATE["pattern"] = None
+            _unpatch(list(_STATE.get("patched_modules") or ()))
+            _STATE["patched_modules"] = ()
+        return ok
 
 
 def sa2_report_stats():
