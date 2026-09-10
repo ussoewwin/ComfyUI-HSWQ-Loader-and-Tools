@@ -522,3 +522,62 @@ resulting head/token scrambling collapsed the 12-step trajectory, which was init
 **Any attention-swap implementation must be validated with a control experiment that returns the
 same math (SDPA inside the override) before speed or quality is judged.** Copy the output shaping of
 the stock implementation exactly. Never publish a collapse verdict without that control.
+
+---
+
+## 10. Re-verification with a validated harness (2026-09-11) - SA3 degrades; work PAUSED
+
+Section 9 invalidated the earlier collapse numbers (0.0556 / 0.0909) because that harness lacked the
+`transpose(1,2)` step. The re-measurement below therefore starts with a **control experiment**, using the
+same layout handling that was validated for the SA2 path.
+
+### 10.1 Control experiment (harness validation - mandatory first step)
+
+| Run | Attention inside the override | Result |
+|---|---|---|
+| A | none (stock attention, reference) | wall 33.46 s |
+| C | SDPA (mathematically identical to stock) | per-step cos min **0.999809**, final **0.999809** => HARNESS CLEAN |
+| B | SA3 (`sageattn3_blackwell`, `per_block_mean=True`) | per-step cos 1.000002 -> **0.765044** |
+
+Because the control reaches ~1.000, the SA3 degradation below is a genuine numeric effect of SA3 and not a
+harness artifact. (Contrast with the invalidated run, where the SDPA control also collapsed to 0.086.)
+
+### 10.2 SA3 measurement (FP16 model only - no quantization, 12 steps, seed 42, 1024x1024, cfg 2.5)
+
+| step | control (cos vs stock) | SA3 (cos vs stock) |
+|---|---|---|
+| 1 | 1.000002 | 1.000002 |
+| 2 | 1.000003 | 0.999694 |
+| 3 | 1.000002 | 0.998093 |
+| 4 | 1.000000 | 0.994854 |
+| 5 | 0.999997 | 0.989061 |
+| 6 | 0.999992 | 0.979289 |
+| 7 | 0.999984 | 0.963279 |
+| 8 | 0.999971 | 0.938652 |
+| 9 | 0.999954 | 0.903040 |
+| 10 | 0.999925 | 0.856243 |
+| 11 | 0.999886 | 0.806606 |
+| 12 | 0.999809 | **0.765044** |
+
+- SA3 coverage: **816/816 attention calls**, 0 fallbacks, 0 errors
+- wall: stock 33.46 s | control 38.62 s | SA3 31.87 s (= **-4.7 %** vs stock; SA2 reaches -15.4 %)
+
+### 10.3 Interpretation
+
+- The degradation is a **monotonic accumulation across steps**, consistent with SA3's standalone per-call
+  error (~1.8 %, cos 0.98192 vs SDPA) accumulating over 30 layers x 12 steps.
+- SA2, measured with the same harness, does not degrade (FP16-only 0.9984; NVFP4 seed42 0.98576; 20-seed
+  mean 0.97468). The difference is the per-call error: SA2 0.999258 vs SA3 0.98192.
+- Section 9 stands as the record of the invalid measurement; this section supersedes it with a validated
+  measurement. The collapse is real, but the magnitude differs (0.765 for FP16-only, not 0.0556).
+
+### 10.4 Status: PAUSED (Owner order, 2026-09-11 01:27)
+
+Improve D is **paused**. Options recorded - none selected:
+
+1. Tune SA3 settings (`per_block_mean=False`, head-dim handling) and re-measure the per-call error
+2. Per-step / per-layer attribution to judge a hybrid (SA3 on layers that tolerate it)
+3. Finalise rejection on the evidence above
+
+No repository file was changed for this test: it ran from a temporary script outside the repo
+(`workspace/.openclaw/tmp/sa3_control.py`), and the SA3 core registration in `attention.py` remains removed.
