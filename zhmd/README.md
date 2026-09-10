@@ -92,7 +92,54 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 - **ConvRot NVFP4 模型**：已发布的包 —— [Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4](https://huggingface.co/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4)
 - **INT8 速度**：Linear 加速依赖 ComfyUI / `comfy_kitchen`；本节点不安装也不开关 Triton
 - **INT8 + LoRA**：关于 INT8 LoRA bake / Status 日志的详情，请见 `md/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md`
-- **VRAM 清理（HSWQ ConvRot INT8 / ConvRot NVFP4 必需）**：当使用 **HSWQ ConvRot INT8** 或 **HSWQ ConvRot NVFP4** 加载时，请务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并开启其 **`HSWQ`** 开关。HSWQ 残留的 GPU/host 内存（以及 NVFP4 运行时池 / CUDA graphs）不�### HSWQ ControlNet Loader (ConvRot INT8)
+- **VRAM 清理（HSWQ ConvRot INT8 / ConvRot NVFP4 必需）**：当使用 **HSWQ ConvRot INT8** 或 **HSWQ ConvRot NVFP4** 加载时，请务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并开启其 **`HSWQ`** 开关。HSWQ 残留的 GPU/host 内存（以及 NVFP4 运行时池 / CUDA graphs）不会被 ComfyUI 的通用卸载完全释放，否则第一次生成之后的第二次生成可能会失败（例如 `quantize_nvfp4` / `PyCapsule` / `pooled TC path failed`）。
+
+### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
+
+<img src="../png/hswqunet.png?v=4" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader" width="400">
+
+标准 ComfyUI UNet 加载器的封装，用于 `diffusion_models` 下的扩散 UNet（**Z Image / ZIT** 及其他 UNet 包）。以 FP8、INT8 与 **ConvRot NVFP4** 权重类型加载 **MODEL**。
+
+**Z Image / ZIT ConvRot NVFP4** **仅支持由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型**。其他第三方 ConvRot NVFP4 UNet 包不在支持范围内。
+
+- **通用 FP8 / INT8**：与库存 UNet 加载器思路相同（HSWQ FP8 E4M3、Scaled FP8，以及在被选择或自动检测到时使用原生 comfy_quant / `int8_tensorwise`）。这些模式不限于 HSWQ 专属权重。
+- **ConvRot NVFP4（Z Image / ZIT）**：将 `weight_dtype` 设为 **`Z Image ConvRot NVFP4`**（Krea2 检查点用 **`Krea2 ConvRot NVFP4`**），或在 UNet safetensors 带有 comfy_quant / HSWQ `nvfp4` 标记时保持 **`default`**。走本扩展 `nodes/nvfp4/` 下的 UNet NVFP4 栈，并使用与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock MixedPrecision GEMM + online act rotate；保留 ConvRot Linear LoRA bake）。**不要**在此期望 SDXL Checkpoint Loader 的 Tensor Core 产品路径——SDXL NVFP4 仍用 Checkpoint Loader；Z Image NVFP4 用本 UNet 加载器。**仅支持由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
+- **INT8 / NVFP4 自动检测**：看起来像 INT8 的包走 INT8 路径；看起来像 NVFP4 的包在 `weight_dtype` 为 `default` 时走 ConvRot NVFP4（NVFP4 分发安装在 INT8 之后，避免混合包被 INT8-only 检测抢走）。
+
+**输入**：`unet_name`、`weight_dtype`（`default` / FP8 选项 / `int8_tensorwise` / `Z Image ConvRot NVFP4` / `Krea2 ConvRot NVFP4`）、`attention_accel`（`default` / `sa2`）。
+
+#### SageAttention2 加速（`attention_accel`）
+
+`attention_accel` 选择加载模型使用的 attention 内核：
+
+| 取值 | 行为 |
+| :--- | :--- |
+| **`default`** | ComfyUI 原生 attention。不安装任何补丁——与既往版本完全一致。 |
+| **`sa2`** | **SageAttention2**（`sageattn`，INT8 QK `per_warp` + FP8 PV，sm120 自动路径）。attention 内核约快 **2.3x**；实测端到端收益为 **-11.4%**（Z Image ConvRot INT8，20 种子基准）与 **-15.4%**（Z Image ConvRot NVFP4，同进程 A/B）。 |
+
+**支持模型（4 种模式，分别独立分发）：**
+
+| `weight_dtype` + 检查点 | 架构 | 被补丁的 attention 模块 |
+| :--- | :--- | :--- |
+| **Z Image ConvRot INT8** | NextDiT（`comfy.ldm.lumina`） | `comfy.ldm.lumina.model` |
+| **Z Image ConvRot NVFP4** | NextDiT（`comfy.ldm.lumina`） | `comfy.ldm.lumina.model` |
+| **Krea2 ConvRot INT8** | SingleStreamDiT（`comfy.ldm.krea2`） | `comfy.ldm.krea2.model` |
+| **Krea2 ConvRot NVFP4** | SingleStreamDiT（`comfy.ldm.krea2`） | `comfy.ldm.krea2.model` |
+
+- **检查点验证**：模式由检查点本身判定（comfy_quant `int8_tensorwise` / `nvfp4` 扫描 + Krea2 `txtfusion.projector` 标记），再与你选择的 `weight_dtype` 交叉校验。不一致时**拒绝安装 SA2** 并记录警告，绝不混用模式。安装前还会再次校验已加载模型的类。
+- **按模型启用**：SA2 仅在该 MODEL 的 forward 执行期间启用。同一图中的其他模型（例如 FP16 基准）保持原生 attention。
+- **回退**：mask 与 `head_dim > 256`（Krea2 `txtfusion`、Qwen3-VL）自动回退到 SDPA；内核失败按每次调用回退。覆盖率在控制台以 `[HSWQ SA2] attention calls: total=... sa2=... errors=...` 输出。
+- **不支持**：**SDXL**（`HSWQ Checkpoint Loader (SDXL)`）没有 `attention_accel` 选项，也没有 SA2 代码路径。仅限 Z Image / Krea2。
+- **不要叠加** `Patch Sage Attention DM`（ComfyUI-DistorchMemoryManager）：两者都会补丁 attention。使用本加载器的 `attention_accel=sa2` 时请旁路该节点。
+- **依赖**：`sageattention` 包（仅在选择 `sa2` 时导入，因此 `default` 不依赖它）。
+
+本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。本扩展保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff）以及 `nodes/nvfp4/` 下的 **NVFP4** UNet 补丁。
+
+- **Z Image / ZIT ConvRot NVFP4 兼容性**：**仅限**由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的 UNet 包
+
+**VRAM 清理**：加载 **ConvRot NVFP4**（以及 HSWQ INT8）UNet 时，请在工作流末尾放置 [https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并打开 **`HSWQ`**——原因与 SDXL Checkpoint Loader 一节相同。
+
+### HSWQ ControlNet Loader (ConvRot INT8)
 
 <img src="../png/convrot_int8_controlnet.png" alt="HSWQ ControlNet Loader (ConvRot INT8)" width="400">
 
@@ -112,37 +159,6 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 - **输入**：`control_net_name`（来自 `models/controlnet` 目录的 safetensors ControlNet 模型）
 - **输出**：`CONTROL_NET`
 - **分类**：加载器 (`loaders`)
-- **上位替代**：可完全替代 ComfyUI 内置的 “Load ControlNet Model” 节点 —— 自动识别 ConvRot INT8、FP8、BF16 与 FP16 检查点，无需手动切换Rot Linear LoRA bake）。**不要**在此期望 SDXL Checkpoint Loader 的 Tensor Core 产品路径——SDXL NVFP4 仍用 Checkpoint Loader；Z Image NVFP4 用本 UNet 加载器。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
-- **INT8 / NVFP4 自动检测**：看起来像 INT8 的包走 INT8 路径；看起来像 NVFP4 的包在 `weight_dtype` 为 `default` 时走 ConvRot NVFP4（NVFP4 分发安装在 INT8 之后，避免混合包被 INT8-only 检测抢走）。
-
-**输入**：`unet_name`、`weight_dtype`（`default` / FP8 选项 / `int8_tensorwise` / `ConvRot NVFP4`）。
-
-本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。本扩展保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff）以及 `nodes/nvfp4/` 下的 **NVFP4** UNet 补丁。
-
-- **Z Image / ZIT ConvRot NVFP4 兼容性**：**仅限**由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的 UNet 包
-
-**VRAM 清理**：加载 **ConvRot NVFP4**（以及 HSWQ INT8）UNet 时，请在工作流末尾放置 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并打开 **`HSWQ`**——原因与 SDXL Checkpoint Loader 一节相同。
-
-### HSWQ Load ConvRot INT8 ControlNet Model
-
-<img src="../png/convrot_int8_controlnet.png" alt="HSWQ Load ConvRot INT8 ControlNet Model" width="400">
-
-用于加载 **ConvRot / TensorWise INT8 量化 ControlNet 检查点**（如 Qwen Image Fun ControlNet）的 ComfyUI 加载器节点。将 ControlNet 权重以 8-bit 精度（`QuantizedTensor` / `TensorWiseINT8Layout`）直接保持在显存（VRAM）中，并通过 `comfy_kitchen` 的高速 `int8_linear` 内核与在线激活旋转（`convrot`）执行推理。
-
-ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `weight_dtype(sd)`（对于量化模型为 `torch.int8`），从而触发 PyTorch 梯度创建错误（`Only Tensors of floating point and complex dtype can require gradients`）且忽略 `comfy_quant` 元数据。本节点通过强制以 `torch.bfloat16` 构建模块图并显式注入适配 `int8_tensorwise` 的 `MixedPrecisionOps`，彻底解决了这两个问题。
-
-#### 特性
-
-- **原生 INT8 显存保持**：权重在显存中以 `TensorWiseINT8Layout` 保持 8-bit 精度，显著降低显存占用
-- **高速执行**：前向计算调用 `comfy_kitchen` 的 `int8_linear` GEMM 内核，并对 ConvRot 层执行在线激活旋转
-- **ComfyUI 原生兼容**：输出标准 `CONTROL_NET` 对象，完全兼容原生 `Apply ControlNet` 等下游节点
-- **无缝兼容传统 FP16 / BF16 / FP8（完全上位替代）**：与传统的未量化及 FP8 ControlNet 模型完全向后兼容。当加载不含 INT8 `comfy_quant` 层的检查点时，自动直接调用 ComfyUI 原生 `load_controlnet_state_dict`，无需在工作流中针对不同格式切换加载器节点
-
-#### 使用说明
-
-- **输入**：`control_net_name`（来自 `models/controlnet` 目录的 safetensors ControlNet 模型）
-- **输出**：`CONTROL_NET`
-- **分类**：`HSWQ-ussoewwin`
 - **上位替代**：可完全替代 ComfyUI 内置的 “Load ControlNet Model” 节点 —— 自动识别 ConvRot INT8、FP8、BF16 与 FP16 检查点，无需手动切换
 
 ### HSWQ Ultimate SD Upscale

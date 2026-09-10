@@ -23,7 +23,7 @@ HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HS
 | :--- | :--- |
 | **HSWQ ConvRot INT8 (SDXL V3.1)** | ComfyUI `int8_tensorwise` packs; load via **HSWQ Checkpoint Loader (SDXL)** (`weight_dtype`: `int8_tensorwise` / INT8 auto-detect). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **HSWQ ConvRot NVFP4 (SDXL)** | ComfyUI `nvfp4` packs (Linear→NVFP4, Conv2d→INT8 + ConvRot); load via the **same** **HSWQ Checkpoint Loader (SDXL)** (`weight_dtype`: `ConvRot NVFP4`, or `default` with NVFP4 auto-detect). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
-| **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet packs (often Linear NVFP4 + INT8 protect); load via **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `ConvRot NVFP4`, or `default` with NVFP4 auto-detect). Uses the bench-matched **Comfy parity** path (stock GEMM + online act rotate), not the SDXL Tensor Core product path. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
+| **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet packs (often Linear NVFP4 + INT8 protect); load via **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `Z Image ConvRot NVFP4` / `Krea2 ConvRot NVFP4`, or `default` with NVFP4 auto-detect; `attention_accel`: `default` / `sa2`). Uses the bench-matched **Comfy parity** path (stock GEMM + online act rotate), not the SDXL Tensor Core product path. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **FP8 (E4M3)** | HSWQ **FP8 development has ended** (technical docs remain upstream). Loaders here may still accept existing FP8 weights where ComfyUI supports them |
 | **Z Image 8-bit** | HSWQ-specific Z Image INT8 development / publication **ended**. Prefer **native ConvRot INT8** for Z Image (typically SSIM > 0.99). HSWQ INT8 continues for **SDXL**. **Z Image ConvRot NVFP4** is supported via the UNet loader above |
 
@@ -96,17 +96,42 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 ### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
 
-<img src="png/hswqunet.png?v=3" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader" width="400">
+<img src="png/hswqunet.png?v=4" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader" width="400">
 
 Standard ComfyUI UNet loader wrapper for diffusion models under `diffusion_models` (**Z Image / ZIT** and other UNet packs). Loads **MODEL** with FP8, INT8, and **ConvRot NVFP4** weight dtypes.
 
 **Z Image / ZIT ConvRot NVFP4** is **supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)**. Other third-party ConvRot NVFP4 UNet packs are out of scope.
 
 - **General FP8 / INT8**: Same idea as the stock UNet loader (HSWQ FP8 E4M3, Scaled FP8, and native comfy_quant / `int8_tensorwise` when selected or auto-detected). Not limited to HSWQ-only weights for those modes.
-- **ConvRot NVFP4 (Z Image / ZIT)**: Select `weight_dtype` = **`ConvRot NVFP4`**, or leave **`default`** when the UNet safetensors has comfy_quant / HSWQ `nvfp4` markers. Routes to this extension’s UNet NVFP4 stack under `nodes/nvfp4/` with the **Comfy parity** path used by `hswq/benchmark` (stock MixedPrecision GEMM + online act rotate; ConvRot Linear LoRA bake kept). **Do not** expect the SDXL Checkpoint Loader’s Tensor Core product path here — SDXL NVFP4 stays on the Checkpoint Loader; Z Image NVFP4 stays on this UNet loader. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).**
+- **ConvRot NVFP4 (Z Image / ZIT)**: Select `weight_dtype` = **`Z Image ConvRot NVFP4`** (or **`Krea2 ConvRot NVFP4`** for Krea2 checkpoints), or leave **`default`** when the UNet safetensors has comfy_quant / HSWQ `nvfp4` markers. Routes to this extension’s UNet NVFP4 stack under `nodes/nvfp4/` with the **Comfy parity** path used by `hswq/benchmark` (stock MixedPrecision GEMM + online act rotate; ConvRot Linear LoRA bake kept). **Do not** expect the SDXL Checkpoint Loader’s Tensor Core product path here — SDXL NVFP4 stays on the Checkpoint Loader; Z Image NVFP4 stays on this UNet loader. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).**
 - **INT8 / NVFP4 auto-detect**: INT8-looking packs use the INT8 path; NVFP4-looking packs use the ConvRot NVFP4 path when `weight_dtype` is `default` (NVFP4 dispatch is installed after INT8 so mixed packs are not stolen by INT8-only detect).
 
-**Inputs**: `unet_name`, `weight_dtype` (`default` / FP8 options / `int8_tensorwise` / `ConvRot NVFP4`).
+**Inputs**: `unet_name`, `weight_dtype` (`default` / FP8 options / `int8_tensorwise` / `Z Image ConvRot NVFP4` / `Krea2 ConvRot NVFP4`), `attention_accel` (`default` / `sa2`).
+
+#### SageAttention2 acceleration (`attention_accel`)
+
+`attention_accel` selects the attention kernel used by the loaded model:
+
+| Value | Behaviour |
+| :--- | :--- |
+| **`default`** | Stock ComfyUI attention. Nothing is patched - identical to previous versions. |
+| **`sa2`** | **SageAttention2** (`sageattn`, INT8 QK `per_warp` + FP8 PV, sm120 auto path). Roughly **2.3x** faster attention kernel; measured end-to-end gains are **-11.4%** (Z Image ConvRot INT8, 20-seed bench) and **-15.4%** (Z Image ConvRot NVFP4, same-process A/B). |
+
+**Supported models (4 patterns, dispatched separately):**
+
+| `weight_dtype` + checkpoint | Architecture | Attention module patched |
+| :--- | :--- | :--- |
+| **Z Image ConvRot INT8** | NextDiT (`comfy.ldm.lumina`) | `comfy.ldm.lumina.model` |
+| **Z Image ConvRot NVFP4** | NextDiT (`comfy.ldm.lumina`) | `comfy.ldm.lumina.model` |
+| **Krea2 ConvRot INT8** | SingleStreamDiT (`comfy.ldm.krea2`) | `comfy.ldm.krea2.model` |
+| **Krea2 ConvRot NVFP4** | SingleStreamDiT (`comfy.ldm.krea2`) | `comfy.ldm.krea2.model` |
+
+- **Checkpoint-verified**: the pattern is resolved from the checkpoint itself (comfy_quant `int8_tensorwise` / `nvfp4` scan + the Krea2 `txtfusion.projector` marker), then cross-checked against the `weight_dtype` you selected. A mismatch **refuses SA2** and logs a warning rather than mixing patterns. The loaded model class is verified again before the patch is applied.
+- **Per-model arming**: SA2 is armed only while that MODEL's forward runs. Other models in the same graph (e.g. an FP16 baseline) keep stock attention.
+- **Fallbacks**: masks and `head_dim > 256` (Krea2 `txtfusion`, Qwen3-VL) fall back to SDPA automatically; kernel failures fall back per call. Coverage is reported in the console as `[HSWQ SA2] attention calls: total=... sa2=... errors=...`.
+- **Not supported**: **SDXL** (`HSWQ Checkpoint Loader (SDXL)`) has no `attention_accel` option and no SA2 code path. Z Image / Krea2 only.
+- **Do not stack** with `Patch Sage Attention DM` (ComfyUI-DistorchMemoryManager): both patch attention. Bypass that node when the loader's `attention_accel=sa2` is used.
+- **Requires** the `sageattention` package (imported only when `sa2` is selected, so `default` never depends on it).
 
 This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear speed is left to **ComfyUI + `comfy_kitchen`** (`int8_linear`: cuda → triton → eager). This extension keeps INT8 **load compatibility** patches (Conv2d / LoRA / ControlLora / handoff) and the **NVFP4** UNet patches under `nodes/nvfp4/`.
 
