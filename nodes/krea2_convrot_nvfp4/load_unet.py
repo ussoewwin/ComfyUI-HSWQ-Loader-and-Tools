@@ -95,13 +95,11 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="defau
                     flush=True,
                 )
             else:
-                import logging
                 logging.warning(
                     "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
                     unet_name, weight_dtype,
                 )
         except Exception as e:
-            import logging
             logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
 
     return (model,)

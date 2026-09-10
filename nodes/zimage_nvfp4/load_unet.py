@@ -242,6 +242,7 @@ def _install_permanent_dynamic_load_guard() -> None:
     _guarded_load._hswq_zi_rearm_guard_prev = cur  # type: ignore[attr-defined]
     Dynamic.load = _guarded_load
 
+
 def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="default"):
     """Load Z Image / ZIT UNet with ConvRot NVFP4 (TC if calibrated, else parity)."""
     _patch_load_model_weights_warnings()
@@ -325,13 +326,11 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="defau
                     flush=True,
                 )
             else:
-                import logging
                 logging.warning(
                     "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
                     unet_name, weight_dtype,
                 )
         except Exception as e:
-            import logging
             logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
 
     return (model,)
