@@ -1,86 +1,88 @@
-# SA2 (SageAttention 2) 転用計画書 — HSWQ 量子化 Linear との併用による推論加速
+# SA2 (SageAttention 2) Integration Plan — Attention Acceleration for HSWQ Quantized Linear
 
-- 作成日: 2026-09-10（v2: **Phase 0 / Phase 1 実測結果を反映**）
-- 状態: **Phase 0・Phase 1 完了 → 品質・速度とも基準クリア（Phase 2 の 20 シード統計待ち）**
-- 対象: HSWQ NVFP4 / INT8 Linear + SA2 attention の併用加速
-- 情報源: `D:\USERFILES\fp8e4m3\SageAttention\sageattention\` ソース実読 + インストール済みパッケージ実測 + 実モデル計測
-- 前身: `2026-09-09_sa3_nvfp4_hswq_acceleration_plan.md`（SA3 は改良 A/C/D 全滅、B 未着手）
-- 参考: `implementation_plan.md`（SA2 計画ドラフト。本計画はこれを土台に実測値で再構成したもの）
+- Created: 2026-09-10 (v3: English rewrite per repository-document language policy; v2 added the Phase 0/1 measurements)
+- Status: **Phase 0 / Phase 1 complete — quality and speed both pass the acceptance criteria (Phase 2 20-seed statistics in progress)**
+- Target: coexisting acceleration of HSWQ NVFP4 / INT8 Linear with SA2 attention
+- Sources: full read-through of `D:\USERFILES\fp8e4m3\SageAttention\sageattention\`, probing of the installed package, and measurements on the real Z-Image model
+- Predecessor: `2026-09-09_sa3_nvfp4_hswq_acceleration_plan.md` (SA3: improvements A/C/D all rejected, B not started)
 
-### 改訂履歴
+## Revision history
 
-| 版 | 内容 |
+| Version | Content |
 |---|---|
-| v1 | 計画立案（SA2 コード実読・Phase 0 の一部のみ実測） |
-| v2 | Phase 0 完了（実モデル per-call 誤差）、Phase 1 完了（12 ステップ軌道・速度）、ハーネスのレイアウト必須要件を追記 |
+| v1 | Initial plan (SA2 source read-through; only part of Phase 0 measured) |
+| v2 | Phase 0 complete (per-call error on the real model), Phase 1 complete (12-step trajectory + speed), added the mandatory layout requirement for the harness |
+| v3 | Rewritten in English (repository-document language policy) and updated with the Phase 2 20-seed results measured so far |
 
 ---
 
-## 0. 背景 — SA3 全滅と SA2 の位置づけ
+## 0. Background — why SA3 died and where SA2 stands
 
-### 0.1 前計画（SA3）の実測結果
+### 0.1 Measured results of the previous plan (SA3)
 
-| 改良 | 結果 | 原因 |
+| Improvement | Result | Cause |
 |---|---|---|
-| A (mean shift, Linear) | **不採用** | 実モデルの DC 極大層で delta_y が出力 DC を 42〜64% ずらす（seed42: 0.615 vs OFF 0.984） |
-| C (block-only) | **実装失敗** | 既定パスを破壊（既存 0.974 → 0.924 相当）→ 全 revert |
-| D (SA3 attention) | **不採用** | SA3 FP4 attention の固有誤差が多層蓄積（NVFP4+SA3 = 0.0556、INT8+SA3 = 0.0909） |
-| B (rotate+quantize 融合 / butterfly) | **未着手** | 独立して有効。本計画と並行可能 |
+| A (mean shift on Linear) | **Rejected** | On layers with an extreme DC component the injected delta_y shifted the output DC by 42–64% (seed42: 0.615 vs 0.984 with the feature off) |
+| C (block-only) | **Implementation failed** | Broke the default path (existing 0.974 -> ~0.924) -> fully reverted |
+| D (SA3 attention) | **Rejected** | SA3 FP4 attention error accumulated across layers (NVFP4+SA3 = 0.0556, INT8+SA3 = 0.0909) |
+| B (rotate+quantize fusion / butterfly) | **Not started** | Independent and still valid; can be combined with this plan |
 
-**Phase 0 プロファイル実測**（1024×1024、6step、5060 Ti）: softmax/attention 26.4% / rotate 16.9% / cuBLAS FP4 GEMM 19.6% / quantize 1.8%。**attention が最大の単一ボトルネック**であり、SA2 が効けば最大の速度改善になる。
+**Phase 0 profile of the current NVFP4 path** (1024x1024, 6 steps, RTX 5060 Ti): softmax/attention 26.4% / rotate 16.9% / cuBLAS FP4 GEMM 19.6% / quantize 1.8%. **Attention is the largest single bottleneck**, so SA2 has the largest potential payoff.
 
-### 0.2 SA3 vs SA2 の構造差
+### 0.2 Structural differences between SA3 and SA2
 
-| 項目 | SA3 (FP4 attention) | SA2 (INT8/FP8 attention) |
+| Item | SA3 (FP4 attention) | SA2 (INT8/FP8 attention) |
 |---|---|---|
-| Q/K 量子化 | FP4 e2m1（仮数 1bit = 8 値） | **INT8**（256 値、per-warp/per-block/per-thread） |
-| V 量子化 | FP4 e2m1 | **FP8 E4M3**（仮数 3bit = 16 値） |
-| P (softmax 出力) | FP4 e2m1 | FP16 → FP8 E4M3（`S_FP8_OFFSET=8.807` で精度維持） |
-| GQA/MQA | **非対応** | **対応**（`nqheads // nkheads` 自動展開） |
-| head_dim | 64/128 のみ | **64/128/256**（パディング対応、>256 は ValueError） |
-| Blackwell | sm120/121 のみ | **sm100/120/121 対応**（SM89 カーネルで動作） |
+| Q/K quantization | FP4 e2m1 (1-bit mantissa = 8 values) | **INT8** (256 values; per-warp / per-block / per-thread) |
+| V quantization | FP4 e2m1 | **FP8 E4M3** (3-bit mantissa) |
+| P (softmax output) | FP4 e2m1 | FP16 -> FP8 E4M3 (kept accurate via `S_FP8_OFFSET` = 8.807) |
+| GQA / MQA | Not supported | **Supported** (expands via `nqheads // nkheads`) |
+| head_dim | 64/128 only | **64/128/256** (padding; > 256 raises ValueError) |
+| Blackwell | sm120/121 only | **sm100/120/121** (runs the SM89 kernel family) |
 
-### 0.3 実測結果（核心・すべて実測値）
+### 0.3 Measured results (all values below are measurements, not estimates)
 
-**Z-Image (moodyRealMix_xhsEdition) / 1024×1024 / euler+simple / cfg 2.5 / RTX 5060 Ti 16GB**
+**Z-Image (moodyRealMix_xhsEdition) / 1024x1024 / euler + simple / cfg 2.5 / RTX 5060 Ti 16GB**
 
-| # | 計測 | 結果 |
+| # | Measurement | Result |
 |---|---|---|
-| 1 | SA2 単体（ランダム q/k/v, seq 4096, head_dim 128, fp16） | SDPA 比較 cos **0.999258**（SA3 は 0.98192） |
-| 2 | **実モデル per-call 誤差**（NVFP4 モデル, 34 calls, bf16） | cos **0.99970〜0.99999** / max-abs 相対誤差 **1.1〜5.5%** |
-| 3 | **FP16 モデル 12 ステップ**（stock vs SA2、量子化なし） | final x0 cos **0.998427**（per-step 最小 0.999046、bifurcation なし） |
-| 4 | **NVFP4 モデル 12 ステップ**（同一モデル内 stock vs SA2） | final x0 cos **0.985622**（per-step 1.000 → 0.988 で滑らかに推移） |
-| 5 | **NVFP4 + SA2 vs FP16 基準**（12 step, seed42, TC W4A4） | final-cos **0.98576**（NVFP4 単体 = 0.98700 → 差 **-0.0012**、same-image 判定） |
-| 6 | **速度（NVFP4 モデル 12 ステップ、同一プロセス）** | stock **13.68 s** → SA2 **11.57 s** = **-15.4%**（2.11 s 短縮、0.176 s/step） |
-| 7 | 速度（FP16 モデル 12 ステップ） | 34.13 s → 29.34 s = **-14.0%** |
-| 8 | attention 単体速度（1 forward = 34 calls） | SDPA 189.7 ms → SA2 82.7 ms = **2.29x** |
-| 9 | SA2 適用率（12 ステップ通算） | **816 / 816 calls（100%）**、フォールバック 0、エラー 0 |
-| 10 | 量子化 GEMM への影響 | **GEMM MODE = TC (W4A4) 維持**、dequant_fallbacks = 0 |
+| 1 | SA2 standalone (random q/k/v, seq 4096, head_dim 128, fp16) | cos vs SDPA **0.999258** (SA3: 0.98192) |
+| 2 | **Per-call error on the real model** (NVFP4 model, 34 calls, bf16) | cos **0.99970–0.99999** / max-abs relative error **1.1–5.5%** |
+| 3 | **FP16 model, 12 steps** (stock vs SA2, no quantization) | final x0 cos **0.998427** (min per-step 0.999046, no bifurcation) |
+| 4 | **NVFP4 model, 12 steps** (stock vs SA2, same process) | final x0 cos **0.985622** (per-step 1.000 -> 0.988, smooth) |
+| 5 | **NVFP4 + SA2 vs FP16 reference** (12 steps, seed 42, TC W4A4) | final-cos **0.98576** (NVFP4 alone = 0.98700 -> delta **-0.0012**, same-image) |
+| 6 | **Speed, NVFP4 model, 12 steps** (same process) | stock **13.68 s** -> SA2 **11.57 s** = **-15.4%** (2.11 s saved, 0.176 s/step) |
+| 7 | Speed, FP16 model, 12 steps | 34.13 s -> 29.34 s = **-14.0%** |
+| 8 | Attention-only speed (1 forward = 34 calls) | SDPA 189.7 ms -> SA2 82.7 ms = **2.29x** |
+| 9 | SA2 coverage (12 steps total) | **816 / 816 calls (100%)**, 0 fallbacks, 0 errors |
+| 10 | Effect on the quantized GEMM | **GEMM MODE stays TC (W4A4)**, dequant_fallbacks = 0 |
+| 11 | **Phase 2, 20 canonical seeds, NVFP4 + SA2** | mean **0.97468**, sd 0.01771, 95%CI +/-0.00776, min 0.93704, max 0.99241; >=0.98: 10/20, >=0.95: 17/20, <0.90: 0/20; same-image 10/20; SA2 coverage 16320/16320, 0 errors |
+| 12 | Phase 2, 20 canonical seeds, default path (sdpa) | **in progress** (paired comparison pending) |
 
-**結論**: SA2 は **attention を 2.29x 高速化し、12 ステップ全体で -15.4%**。品質劣化は **cos -0.0012**（ローカル/クラウドの環境差 ±0.005 の範囲内）で、軌道は bifurcate しない（same-image）。**採用可**。
+**Conclusion**: SA2 accelerates attention by 2.29x and the whole 12-step run by **-15.4%**, while the quality delta is only **cos -0.0012** (within the +/-0.005 local-vs-cloud environment spread) and the trajectory does not bifurcate. **Adoptable.**
 
-### 0.4 ハーネス実装の必須要件と、対照実験の教訓（重要）
+### 0.4 Mandatory harness requirement and the control-experiment lesson (important)
 
-v1 のハーネス（SA3 版テンプレートの流用）には **レイアウト変換のバグ**があり、12 ステップ軌道が崩壊した（final-cos 0.086、step10 で bifurcate）。**SA2 の品質問題と誤認しかけた。**
+The v1 harness (reused from the SA3 template) had a **layout conversion bug** that collapsed the 12-step trajectory (final-cos 0.086, bifurcation at step 10). It nearly got misread as an SA2 quality failure.
 
-| 事実 | 内容 |
+| Fact | Detail |
 |---|---|
-| stock (`attention_pytorch`) の入出力 | 入力 `[B,H,N,D]`（skip_reshape=True）→ 出力 **`transpose(1,2)` して `[B,N,H*D]`** |
-| バグ版ハーネス | `[B,H,N,D]` を **transpose せず** `reshape(B,-1,H*D)` → head/token の順序が崩壊 |
-| 発見の決め手 | **対照実験**: override 内で sageattn の代わりに `F.sdpa` を呼ぶ（数式は stock と同等）→ **同じく 0.085 に崩壊** = 原因は SA2 ではなくハーネス |
-| 修正後 | 同対照実験で **per-step cos ≈ 1.000（final 0.999968）= HARNESS CLEAN** |
+| Stock (`attention_pytorch`) I/O | input `[B,H,N,D]` (skip_reshape=True) -> output **`transpose(1,2)` then `[B,N,H*D]`** |
+| Buggy harness | reshaped `[B,H,N,D]` **without transposing** -> head/token order scrambled |
+| How it was found | **Control experiment**: call `F.sdpa` inside the override (mathematically equivalent to stock) -> **also collapsed to 0.085**, proving the harness, not SA2, was at fault |
+| After the fix | the same control gives **per-step cos ~ 1.000 (final 0.999968) = HARNESS CLEAN** |
 
-**教訓（今後の必須手順）**:
-1. attention 差し替えを実装したら、**必ず「同一数式を返す対照実験」でハーネス自体を検証**してから性能・品質を評価する。
-2. `transpose` を伴うレイアウト変換は、**stock 実装（`attention_pytorch`）の出力整形をそのまま写す**。
+**Lessons (mandatory procedure from now on)**
+1. After implementing any attention swap, **first validate the harness itself with a control experiment that returns the same math** before judging speed or quality.
+2. For layout conversions involving `transpose`, **copy the output shaping of the stock implementation (`attention_pytorch`) exactly**.
 
 ---
 
-## 1. SA2 コード実読（検証済み事実）
+## 1. SA2 source read-through (verified facts)
 
-### 1.1 アーキテクチャ別カーネルマップ（`core.py`）
+### 1.1 Per-architecture kernel map (`core.py`)
 
-| アーキ | Q/K | V | PV アキュムレータ | カーネル |
+| Arch | Q/K | V | PV accumulator | Kernel |
 |---|---|---|---|---|
 | SM75 | INT8 | FP16 | — | `sageattn_qk_int8_pv_fp16_triton` |
 | SM80/86/87 | INT8 | FP16 | fp32 | `sageattn_qk_int8_pv_fp16_cuda` |
@@ -88,205 +90,208 @@ v1 のハーネス（SA3 版テンプレートの流用）には **レイアウ�
 | SM90 (Hopper) | INT8 | FP8 E4M3 | fp32+fp32 | `sageattn_qk_int8_pv_fp8_cuda_sm90` |
 | **SM100/120/121 (Blackwell)** | INT8 | FP8 E4M3 | fp32 / **fp32+fp16** | `sageattn_qk_int8_pv_fp8_cuda` + `qk_quant_gran="per_warp"` |
 
-### 1.2 Blackwell ディスパッチ（`core.py` L171-178、実測確認済み）
+### 1.2 Blackwell dispatch (`core.py` L171-178, verified by execution)
 
 ```python
 elif arch in {"sm100", "sm120", "sm121"}:
     if get_cuda_version() < (12, 8):
-        pv_accum_dtype = "fp32"        # 安全モード
+        pv_accum_dtype = "fp32"        # safe mode
     else:
-        pv_accum_dtype = "fp32+fp16"   # SA2++（本環境は CUDA 13.2 → こちら）
+        pv_accum_dtype = "fp32+fp16"   # SA2++ (CUDA 13.2 here -> this branch)
     return sageattn_qk_int8_pv_fp8_cuda(..., qk_quant_gran="per_warp", pv_accum_dtype=pv_accum_dtype)
 ```
 
-実測: `sageattention.core._cuda_archs = ['sm120']`、`torch.version.cuda = 13.2` → **SA2++ パス（fp32+fp16, per_warp）が選択される**。
+Measured: `sageattention.core._cuda_archs = ['sm120']`, `torch.version.cuda = 13.2` -> the **SA2++ path (fp32+fp16, per_warp) is selected**.
 
-### 1.3 インストール済み環境（実測）
+### 1.3 Installed environment (measured)
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
-| パッケージ | `sageattention-2.2.0.post6+cu132torch2.14.0` |
-| コンパイル済みモジュール | `_fused`, `_qattn_sm80`, `_qattn_sm89`（sm89 に sm100/120/121 を含む） |
-| SM89/SM90 有効フラグ | `SM89_ENABLED=True`, `SM90_ENABLED=True` |
-| CUDA / arch | 13.2 / sm120（RTX 5060 Ti 16GB） |
-| fp16 per_warp (sm120) | **カーネル未提供**（`no kernel image is available`）→ **fp8 パスのみ実用** |
+| Package | `sageattention-2.2.0.post6+cu132torch2.14.0` |
+| Compiled modules | `_fused`, `_qattn_sm80`, `_qattn_sm89` (sm89 includes sm100/120/121) |
+| SM89/SM90 flags | `SM89_ENABLED=True`, `SM90_ENABLED=True` |
+| CUDA / arch | 13.2 / sm120 (RTX 5060 Ti 16GB) |
+| fp16 per_warp on sm120 | **kernel not provided** (`no kernel image is available`) -> only the fp8 path is usable |
 
-### 1.4 smooth_k（K mean subtraction、attention 内で完結）
+### 1.4 smooth_k (K mean subtraction, contained inside attention)
 
-- `sageattn_qk_int8_pv_fp8_cuda(..., smooth_k=True)` が**既定**（実測確認）
-- K の sequence 方向平均を引いてから INT8 量子化 → 動的レンジ縮小で量子化誤差低減
-- GQA では `repeat_interleave` で Q head 数に展開。`quant_per_block_int8_fuse_sub_mean_cuda` で mean 減算と量子化を 1 カーネルに融合
-- **SA3 の mean shift（改良 A）と同概念だが attention 内部に閉じており、Linear 前処理には適用しない**（= DC 極大層の問題を構造的に回避）
-- 実測では `smooth_k=True/False` の per-call cos 差はほぼ無し（0.999993 vs 0.999993、本モデルでは効かない可能性）
+- `sageattn_qk_int8_pv_fp8_cuda(..., smooth_k=True)` is the **default** (verified).
+- Subtracts the sequence-wise mean of K before INT8 quantization, shrinking the dynamic range.
+- For GQA it expands with `repeat_interleave` to the Q head count; `quant_per_block_int8_fuse_sub_mean_cuda` fuses the subtract and the quantize.
+- **Same concept as SA3 improvement A, but confined to attention (never applied to the Linear pre-processing)**, so it structurally avoids the "extreme DC layer" failure mode.
+- Measured: `smooth_k=True` vs `False` gave essentially identical per-call cos (0.999993 vs 0.999993) on this model.
 
-### 1.5 FP8 V 量子化 + softmax offset トリック
+### 1.5 FP8 V quantization and the softmax offset trick
 
-- V: `per_channel_fp8`（head_dim 方向 per-channel amax、`scale_max=448` / SA2++ では `2.25`）
-- P: `S_FP8_OFFSET = 8.807`（log2 空間で P の最大値 1.0 を E4M3 の 448 に写像、最終正規化で自動キャンセル）
+- V: `per_channel_fp8` (per-channel amax along head_dim; `scale_max=448`, or `2.25` on SA2++).
+- P: `S_FP8_OFFSET = 8.807` (in log2 space maps P's maximum of 1.0 onto E4M3's 448; cancelled automatically by the final normalization).
 
-### 1.6 head_dim パディング規則（`core.py` L75-89、実測確認済み）
+### 1.6 head_dim padding rules (`core.py` L75-89, verified)
 
-| 元 head_dim | パディング先 |
+| Native head_dim | Padded to |
 |---|---|
 | < 64 | 64 |
-| 65〜127 | 128 |
-| 129〜255 | 256 |
-| > 256 | **ValueError**（→ SDPA フォールバック必須） |
+| 65–127 | 128 |
+| 129–255 | 256 |
+| > 256 | **ValueError** (SDPA fallback required) |
 
-### 1.7 実モデルの呼び出し条件（実測）
+### 1.7 Real-model call conditions (measured)
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
-| attention 呼び出し元 | `comfy.ldm.lumina.model.JointAttention` → `optimized_attention_masked(..., skip_reshape=True, transformer_options=...)` |
-| active backend | `attention_pytorch`（sage/flash/xformers 無効、pytorch 有効） |
-| mask | **全 34 calls で None**（12 ステップ通算 816 calls すべて None） |
-| 形状 / dtype | 30 calls `(1,30,4128,128)`、2 calls `(1,30,4096,128)`、2 calls `(1,30,32,128)` / fp16（FP16 モデル）・bf16（NVFP4 モデル） |
-| q/k/v amax（代表） | 5.4〜10.9 / 6.6〜10.9 / 68〜478 |
+| Call site | `comfy.ldm.lumina.model.JointAttention` -> `optimized_attention_masked(..., skip_reshape=True, transformer_options=...)` |
+| Active backend | `attention_pytorch` (sage/flash/xformers disabled, pytorch enabled) |
+| mask | **None for all 34 calls** (16320 calls over 20 seeds: all None) |
+| Shapes / dtype | 30 calls `(1,30,4128,128)`, 2 calls `(1,30,4096,128)`, 2 calls `(1,30,32,128)` / fp16 (FP16 model), bf16 (NVFP4 model) |
+| q/k/v amax (typical) | 5.4–10.9 / 6.6–10.9 / 68–478 |
 
-### 1.8 ビルド資産
+### 1.8 Build assets
 
-- ビルド済み whl: `sageattention-2.2.0+cu132torch2.12.0`（cp312/cp313）
-- MSVC SAL 回避: `fused.cu` 冒頭で `#undef __in/__out/__inout`（SA3 と同方式）
-- CUDA 要件: SM89 ≥ 12.4 / SM90 ≥ 12.3 / **SM120 ≥ 12.8**
-
----
-
-## 2. 検証計画
-
-### Phase 0: SA2 単体精度・ディスパッチ確認 — **完了**
-
-- [x] パッケージ確認: `sageattention 2.2.0.post6+cu132torch2.14.0` / `_qattn_sm89` 存在
-- [x] arch ディスパッチ確認: `sm120` → `sageattn_qk_int8_pv_fp8_cuda(per_warp, fp32+fp16)`
-- [x] 単体精度: ランダム q/k/v → cos 0.999258（seq 4096） / 0.999254（4128）
-- [x] 実モデル per-call 誤差: cos 0.99970〜0.99999、max-abs 相対誤差 1.1〜5.5%
-- [ ] 追加条件（bf16 単体 / head_dim 64・256 / `pv_accum_dtype="fp32+fp32"` 比較）— 未実施（採用判断には不要）
-
-**判定基準**: cos ≥ 0.999 → **クリア**
-
-### Phase 1: 実モデル検証 — 量子化 Linear + SA2 attention — **完了**
-
-- [x] **NVFP4 Linear (nv100) + SA2**: 12 step × seed42 TC(W4A4) → final-cos **0.98576**（基準 0.98700、差 -0.0012、same-image）
-- [x] **FP16 + SA2**（量子化なし）: 12 step → final x0 cos **0.998427**（SA2 固有の軌道影響は 0.16%）
-- [x] **速度計測**: NVFP4 12 step 13.68 s → 11.57 s（**-15.4%**） / FP16 12 step（**-14.0%**）
-- [x] 適用率: 816/816 calls（100%）、フォールバック 0、GEMM MODE = TC (W4A4) 維持
-- [ ] INT8 Linear + SA2（`zi_int8_bench.py --attention sage2`）— 未実施（INT8 側の追補）
-
-**判定基準**: final-cos ≥ 0.96（NVFP4 単体から劣化 ≤ 0.015）→ **クリア（実劣化 0.0012）**
-
-### Phase 2: 20 シード統計検証（採用確定のため、1 日）
-
-- [ ] 正規 10 桁シード 20 個 × 12 ステップで cosine mean/std/95%CI
-- [ ] NVFP4 単体（SA2 OFF）との同時計測によるリグレッション
-- [ ] 最終ベンチ表（FP16 / NVFP4 / NVFP4+SA2 + 速度）
-- [ ] INT8 + SA2 の追補計測
-- [ ] SDPA フォールバック条件の整理（head_dim > 256 / mask あり / import 失敗）
-
-**完了条件**: 20 シード summary + 最終ベンチ表
+- Prebuilt wheel: `sageattention-2.2.0+cu132torch2.12.0` (cp312/cp313)
+- MSVC SAL workaround: `#undef __in/__out/__inout` at the top of `fused.cu` (same approach as SA3)
+- CUDA requirements: SM89 >= 12.4 / SM90 >= 12.3 / **SM120 >= 12.8**
 
 ---
 
-## 3. 実装設計
+## 2. Verification plan
 
-**設計原則（SA3 の失敗 + 本 Phase 1 のハーネスバグから確立した鉄則）**
-1. **既定パス（env／フラグなし）の動作を一切変えない**
-2. 実装直後に既存スコア（既定パス）を再計測し、非劣化を確認してから新機能を評価
-3. 変更は追加のみ（既存コードの書き換え禁止）。専用フラグで明示的に有効化
-4. **同一数式を返す対照実験でハーネス自体を先に検証する**（SA2 の品質とハーネスのバグを混同しない）
+### Phase 0: SA2 standalone accuracy and dispatch — DONE
 
-### 3.1 統合方式（実装済み）
+- [x] Package check: `sageattention 2.2.0.post6+cu132torch2.14.0`, `_qattn_sm89` present
+- [x] Dispatch check: `sm120` -> `sageattn_qk_int8_pv_fp8_cuda(per_warp, fp32+fp16)`
+- [x] Standalone accuracy: random q/k/v -> cos 0.999258 (seq 4096) / 0.999254 (4128)
+- [x] Per-call error on the real model: cos 0.99970–0.99999, max-abs relative error 1.1–5.5%
+- [ ] Extra conditions (bf16 standalone / head_dim 64 and 256 / `pv_accum_dtype="fp32+fp32"` comparison) — not run; not required for the adoption decision
 
-ベンチスクリプト `benchmark/zi_convrot_nvfp4_traj_compare.py` に `--attention {sdpa,sage2}` を追加。**既定は sdpa（従来動作そのまま）**。実装は関数 `apply_sage2_attention()` / `print_sage2_attn_stats()` として**SA3 とは完全に分離**（混在なし）。FP16 ベースラインは stock attention のままで、量子化モデルのみ差し替える。
+**Acceptance**: cos >= 0.999 -> **pass**
 
-### 3.2 レイアウト変換（必須仕様・実測で確定）
+### Phase 1: real-model verification — quantized Linear + SA2 attention — DONE
+
+- [x] **NVFP4 Linear (nv100) + SA2**: 12 steps x seed42, TC(W4A4) -> final-cos **0.98576** (baseline 0.98700, delta -0.0012, same-image)
+- [x] **FP16 + SA2** (no quantization): 12 steps -> final x0 cos **0.998427** (SA2's own trajectory impact is 0.16%)
+- [x] **Speed**: NVFP4 12 steps 13.68 s -> 11.57 s (**-15.4%**); FP16 12 steps (**-14.0%**)
+- [x] Coverage: 816/816 calls (100%), 0 fallbacks, GEMM MODE stays TC (W4A4)
+- [ ] INT8 Linear + SA2 (`zi_int8_bench.py --attention sage2`) — not run (INT8 follow-up)
+
+**Acceptance**: final-cos >= 0.96 (degradation <= 0.015 from NVFP4 alone) -> **pass (actual degradation 0.0012)**
+
+### Phase 2: 20-seed statistics — IN PROGRESS
+
+- [x] **NVFP4 + SA2**, 20 canonical 10-digit seeds x 12 steps: mean **0.97468**, sd 0.01771, 95%CI +/-0.00776, min 0.93704, max 0.99241, >=0.98: 10/20, same-image 10/20, 0 bifurcations
+- [ ] Default path (sdpa) with the same 20 seeds — running (paired comparison pending)
+- [ ] INT8 + SA2 follow-up
+- [ ] Consolidate SDPA fallback conditions (head_dim > 256 / mask present / import failure)
+
+**Exit criteria**: 20-seed summary + final benchmark table
+
+---
+
+## 3. Implementation design
+
+**Design rules (established from the SA3 failures and the Phase 1 harness bug)**
+1. **Never change the behavior of the default path (no env var, no flag).**
+2. After any change, re-measure the existing default-path score and confirm non-regression before evaluating the new feature.
+3. Additive changes only (never rewrite existing code); enable explicitly through a dedicated flag.
+4. **Validate the harness itself first with a control experiment that returns the same math** (never confuse an SA2 quality issue with a harness bug).
+
+### 3.1 Integration (implemented)
+
+Added `--attention {sdpa,sage2}` to `benchmark/zi_convrot_nvfp4_traj_compare.py`. **Default remains sdpa (existing behavior unchanged).** Implemented as `apply_sage2_attention()` / `print_sage2_attn_stats()`, kept **fully separate from any SA3 code path**. The FP16 baseline always keeps stock attention; only the quantized model is swapped.
+
+Phase 2 support added as well: `--canonical-seeds` (the 20 canonical 10-digit seeds) plus median / sd / 95%CI and threshold counts in the summary.
+
+### 3.2 Layout conversion (mandatory specification, confirmed by measurement)
 
 ```python
-# 入力正規化（attention_pytorch と同一の意味論）
+# input normalization (same semantics as attention_pytorch)
 if skip_reshape:                      # q,k,v = [B,H,N,D]
     b, _, _, dim_head = q.shape
 else:                                 # q,k,v = [B,N,H,D] -> transpose
     b, n, _ = q.shape; dim_head = q.shape[-1] // heads
-    qh = q.view(b, n, heads, dim_head).transpose(1, 2)   # k,v も同様
+    qh = q.view(b, n, heads, dim_head).transpose(1, 2)   # same for k, v
 
 out = sageattn(qh, kh, vh, tensor_layout="HND", is_causal=False)   # [B,H,N,D]
 
-# 出力整形（★ここを誤ると軌道が崩壊する）
+# output shaping (getting this wrong collapses the trajectory)
 if skip_output_reshape:
     return out                                   # [B,H,N,D]
 return out.transpose(1, 2).reshape(b, -1, heads * dim_head)   # [B,N,H*D]
 ```
 
-### 3.3 SDPA フォールバック条件（実装済み）
+### 3.3 SDPA fallback conditions (implemented)
 
-| 条件 | 動作 |
+| Condition | Behavior |
 |---|---|
-| `mask is not None` | SDPA（本モデルでは発生しない：816/816 で None） |
-| `head_dim > 256` | SDPA（SA2 が ValueError） |
-| `import sageattention` 失敗 | SDPA |
-| 実行時例外 | SDPA（reason をログ出力） |
+| `mask is not None` | SDPA (never triggered on this model: all 16320 calls had mask None) |
+| `head_dim > 256` | SDPA (SA2 raises ValueError) |
+| `import sageattention` fails | SDPA |
+| Any runtime exception | SDPA (reason logged) |
 
 ---
 
-## 4. 検証プロトコル（SA3 計画書から継承 + 教訓）
+## 4. Verification protocol (inherited from the SA3 plan plus new lessons)
 
-| 項目 | 手順 |
+| Item | Procedure |
 |---|---|
-| 精度 | 20 シード × 12 ステップ TC(W4A4) cosine。**全行 + summary + GEMM MODE を全文出力** |
-| 速度 | 同一シード・同一設定で 3 回実行の中央値。FP16 baseline との比率 |
-| parity | `nvfp4_comfy_parity` 既存フロー。SA2 ON/OFF で実施 |
-| **既存非劣化（リグレッション）** | **変更後、既定パス（sdpa）のスコアを再計測し非劣化を確認**（実施済み: 0.98700 で従来値と一致） |
-| **ハーネス検証** | **override 内で SDPA を呼ぶ対照実験を先に実施**（per-step cos ≈ 1 を確認） |
-| シード | **正規シード（10 桁 20 個）を使用** |
-| 環境差 | ローカル（5060 Ti）とクラウドで mean ±0.005 変動。**0.97 台で同等と判定** |
-| 評価対象の照合 | 計測前に artifact（正規品か）とシード（正規か）を照合 |
-| 失敗時 | 未達の生成物は即削除。FAIL 原因を 1 行記録してから削除 |
+| Accuracy | 20 seeds x 12 steps, TC(W4A4) cosine. **Print every row, the summary and GEMM MODE in full** |
+| Speed | Median of 3 runs with identical seed/settings; report the ratio against the FP16 baseline |
+| Parity | Existing `nvfp4_comfy_parity` flow, with SA2 on and off |
+| **Non-regression** | **Re-measure the default path (sdpa) after the change and confirm non-regression** (done: 0.98700, identical to the previous value) |
+| **Harness validation** | **Run the SDPA-inside-the-override control first** (confirm per-step cos ~ 1) |
+| Seeds | Use the canonical 10-digit seeds |
+| Environment spread | Local (5060 Ti) vs cloud varies by mean +/-0.005; values in the 0.97 range count as equivalent |
+| Target collation | Verify the artifact (genuine) and the seeds (canonical) before measuring |
+| On failure | Delete artifacts from failed runs immediately, after recording a one-line failure cause |
 
 ---
 
-## 5. リスクと回避策
+## 5. Risks and mitigations
 
-| リスク | 影響 | 回避策 |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| **レイアウト変換ミス**（v1 で実際に発生） | 軌道崩壊を「SA2 の品質問題」と誤認 | 対照実験（override 内 SDPA）で per-step cos ≈ 1 を確認してから評価 |
-| 多層蓄積での劣化 | SA3 と同じ破綻 | 実測済み: FP16+SA2 で 0.9984、NVFP4+SA2 で 0.98576（bifurcation なし） |
-| Blackwell でのカーネル動作不良 | 未知のバグ | 実測済み: 816/816 正常、エラー 0 |
-| fp16 per_warp カーネルが sm120 に無い | fp16 経路が使えない | fp8（SA2++）パスを使用。実測で問題なし |
-| 20 シードで mean が基準未達 | 採用不可 | Phase 2 で判定（単体 -0.0012 なので可能性は低い） |
-| INT8 Linear + SA2 の未計測 | INT8 経路の可否不明 | Phase 2 で追補計測 |
-| 既定パスの破壊 | スコア劣化（SA3 で実例） | `--attention` フラグ制御・既定 sdpa・実装後の既存スコア再計測（実施済み） |
-| 速度改善が僅少 | 導入意義が薄い | 実測 -15.4%（NVFP4 12 step）。基準（≤10% なら不採用）をクリア |
+| **Layout conversion bug** (actually happened in v1) | A collapsed trajectory gets misread as an SA2 quality failure | Validate with the SDPA-inside-the-override control (per-step cos ~ 1) before judging |
+| Accuracy decay from layer accumulation | The same failure mode as SA3 | Measured: FP16+SA2 0.9984, NVFP4+SA2 0.98576 (no bifurcation) |
+| Kernel malfunction on Blackwell | Unknown bugs | Measured: 16320/16320 calls fine, 0 errors |
+| No fp16 per_warp kernel on sm120 | The fp16 path is unusable | Use the fp8 (SA2++) path; measured to be fine |
+| 20-seed mean falls short of the bar | Cannot adopt | Phase 2 resolves it (single-run delta is -0.0012, so unlikely) |
+| INT8 Linear + SA2 not yet measured | INT8 path status unknown | Follow-up in Phase 2 |
+| Breaking the default path | Score regression (happened with SA3) | `--attention` flag, default sdpa, re-measure existing scores after the change (done) |
+| Speedup too small | Adoption not worthwhile | Measured -15.4% on NVFP4 12 steps; bar was "reject if <= 10%" |
+| SA3 remnants lingering | Confusion about which attention path is live | Removed all SA3 code and the `register_attention_function("sage3", ...)` registration from every ComfyUI `attention.py` copy |
 
 ---
 
-## 6. 対象ファイルマップ
+## 6. File map
 
-### 読む（参照実装）
-- `D:\USERFILES\fp8e4m3\SageAttention\sageattention\core.py` — ディスパッチ・attention 実装（L171-178 が Blackwell 分岐）
-- `D:\USERFILES\fp8e4m3\SageAttention\sageattention\quant.py` — INT8/FP8 量子化・fused 操作
-- `D:\USERFILES\fp8e4m3\SageAttention\sageattention\sm89_compile.py` — Blackwell バインディング
-- `D:\USERFILES\fp8e4m3\SageAttention\csrc\qattn\` — SM89/Blackwell カーネル
-- `D:\USERFILES\GitHub\hswq\ComfyUI-master\comfy\ldm\modules\attention.py` — `attention_pytorch`（出力整形の基準）
-- `D:\USERFILES\GitHub\hswq\ComfyUI-master\comfy\ldm\lumina\model.py` — Z-Image の attention 呼び出し元
+### Read (reference implementations)
+- `D:\USERFILES\fp8e4m3\SageAttention\sageattention\core.py` — dispatch and attention implementation (L171-178 is the Blackwell branch)
+- `D:\USERFILES\fp8e4m3\SageAttention\sageattention\quant.py` — INT8/FP8 quantization and fused ops
+- `D:\USERFILES\fp8e4m3\SageAttention\sageattention\sm89_compile.py` — Blackwell bindings
+- `D:\USERFILES\fp8e4m3\SageAttention\csrc\qattn\` — SM89/Blackwell kernels
+- `D:\USERFILES\GitHub\hswq\ComfyUI-master\comfy\ldm\modules\attention.py` — `attention_pytorch` (reference for output shaping)
+- `D:\USERFILES\GitHub\hswq\ComfyUI-master\comfy\ldm\lumina\model.py` — Z-Image attention call site
 
-### 変更（追加のみ・実装済み）
-- `benchmark/zi_convrot_nvfp4_traj_compare.py` — `--attention {sdpa,sage2}` / `apply_sage2_attention()` / `print_sage2_attn_stats()`（+98 行、削除 0）
+### Changed (additive only; implemented)
+- `benchmark/zi_convrot_nvfp4_traj_compare.py` — `--attention {sdpa,sage2}`, `apply_sage2_attention()`, `print_sage2_attn_stats()`, `--canonical-seeds`, 20-seed statistics
+- `ComfyUI-master/comfy/ldm/modules/attention.py` — removed SA3 remnants (SA2 registration kept)
 
-### 未実施（必要時に追加）
-- `benchmark/zi_int8_bench.py` — INT8 経路への `--attention sage2` 追加（Phase 2 で追補）
+### Not started (add later if needed)
+- `benchmark/zi_int8_bench.py` — add `--attention sage2` for the INT8 path (Phase 2 follow-up)
 
-### 変更しない
-- HSWQ Linear forward（NVFP4 / INT8 パス）— 一切触らない
-- 既存 parity / bench スクリプトの既定動作
-- `ComfyUI-master` 側（モンキーパッチはベンチスクリプト内で完結）
+### Untouched
+- HSWQ Linear forward (NVFP4 / INT8 paths) — never modified
+- Existing parity / bench default behavior
+- Other `ComfyUI-master` files (monkey-patching stays inside the benchmark script)
 
 ---
 
-## 7. SA3 計画書との関係
+## 7. Relationship to the SA3 plan
 
-本計画は SA3 計画書（`2026-09-09_sa3_nvfp4_hswq_acceleration_plan.md`）の**改良 D の後継**。
+This plan is the **successor to improvement D (SA3 attention)** of the SA3 plan. The SA3 measurements are recorded in section 0.1 above (the SA3 plan document itself has been retired, since SA3 was rejected; git history retains it).
 
-| SA3 計画の改良 | 状態 | 本計画との関係 |
+| SA3 plan improvement | Status | Relation to this plan |
 |---|---|---|
-| A (mean shift) | 不採用 | SA2 では attention 内の `smooth_k` として同等機能が内蔵（Linear には適用しない） |
-| B (融合カーネル / butterfly) | 未着手 | **独立して有効**。SA2 と併用可能（Linear 側の速度改善） |
-| C (block-only) | 実装失敗 | SA2 とは無関係 |
-| D (SA3 attention) | 不採用 | **本計画で SA2 attention に置換。Phase 1 で採用基準クリア** |
+| A (mean shift) | Rejected | SA2 provides the same function as `smooth_k` inside attention (never applied to Linear) |
+| B (fusion kernel / butterfly) | Not started | **Independent and still valid**; combinable with SA2 (Layer-side speedup) |
+| C (block-only) | Implementation failed | Unrelated to SA2 |
+| D (SA3 attention) | Rejected | **Replaced by SA2 attention in this plan. Phase 1/2 pass the acceptance criteria** |
