@@ -3070,6 +3070,45 @@ def apply_comfy_quant_int8_patches() -> bool:
 KREA2_MODEL_FLAG = "_hswq_is_krea2"
 
 
+_SDXL_FAST_MOD = None
+
+
+def _load_sdxl_convrot_fast():
+    """Load the SDXL-only fast-path file by path WITHOUT registering it in
+    sys.modules, so no other model family ever sees it as an import.
+    Called only from the SDXL-guarded branches below."""
+    global _SDXL_FAST_MOD
+    if _SDXL_FAST_MOD is None:
+        import importlib.util
+        import os as _os
+
+        path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                             "sdxl_convrot_fast.py")
+        spec = importlib.util.spec_from_file_location(
+            "_hswq_sdxl_convrot_fast_private", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.set_helpers_loader(_load_native_convert_int8_helpers)
+        _SDXL_FAST_MOD = mod
+    return _SDXL_FAST_MOD
+
+
+def _model_is_sdxl_unet(model) -> bool:
+    """True only for the SDXL UNet (UNetModel from openaimodel with ADM).
+
+    Used to gate SDXL-only code paths; no side effects.
+    """
+    inner = getattr(model, "model", None)
+    dm = getattr(inner, "diffusion_model", None)
+    if dm is None:
+        return False
+    if type(dm).__name__ != "UNetModel":
+        return False
+    if "openaimodel" not in type(dm).__module__.lower():
+        return False
+    return getattr(dm, "adm_in_channels", None) is not None
+
+
 def model_is_krea2(model) -> bool:
     """Krea2 check taken from ComfyUI's own architecture detection.
 
@@ -3245,6 +3284,11 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="defaul
         with _int8_quant_conv_scope():
             model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
         summarize_int8_lora_capability(model)
+        # SDXL-only fast path: dedicated module + dedicated guard.
+        # This branch also serves Z Image (UNet-style checkpoints), so the SDXL
+        # check runs BEFORE the import: non-SDXL never imports the module.
+        if is_convrot and needs_conv2d and _model_is_sdxl_unet(model):
+            _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(model)
 
         if attention_accel == "sa2":
             # SageAttention2 on the loaded INT8 model (pattern zimage_int8 or
@@ -3331,6 +3375,10 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
                 )
             model, clip, _v = out[:3]
             summarize_int8_lora_capability(model)
+            if _model_is_sdxl_unet(model):
+                _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(
+                    model, log_prefix="[SDXL INT8]"
+                )
             return (model, clip)
 
         if weight_dtype == "fp8_e4m3fn":
