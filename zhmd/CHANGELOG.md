@@ -7,6 +7,13 @@
   </tr>
 </table>
 
+## Version 3.5.2
+
+- **新增**：**SDXL ConvRot INT8 内核快速路径** —— SDXL ConvRot INT8 的 Linear/Conv2d 路径改为使用**池化输出缓冲区**旋转激活（`torch.matmul(..., out=)`，使用激活自身的 dtype，不再提升到 fp32），并关闭 **CUDA fused ConvRot 内核**（实测既更慢、轨迹也更漂移）。该快速路径**仅限 SDXL 且完全分离**：实现位于专用模块 `nodes/sdxl_int8/sdxl_convrot_fast.py`；`patches/comfy_quant_int8.py` 仅新增一个 SDXL 判定函数、一个私有（不注册到 `sys.modules`）加载器与两处 SDXL 门控调用；`nodes/native_convert_int8.py` 无任何改动。内核仅在被 arm 的 SDXL forward 期间替换，并在 `finally` 中恢复为完全相同的对象；若已安装的 `comfy_kitchen` 调用点与审计模式不符，fail-closed 调用点审计将**拒绝对该模型 arm**。Z Image / Krea2 / FLUX / SD1.5 / SAM3 / ControlNet / Qwen 以及所有 NVFP4 路径均不受影响（对它们而言该模块从不被 import 或加载）。
+  - **实测**（参考检查点，25 步 × 6 种子，单进程）：INT8/FP16 **1.069x（更慢）→ 0.894x（更快）**；单独 rotate 成本 **257.3 → 52.5 ms/step**；fused ConvRot 开启实测 2.89 it/s、平均余弦 **0.934**，对比关闭时 2.97 it/s / 0.958，因此保持关闭。
+  - 技术说明书：`md/HSWQ_SDXL_INT8_CONVROT_FASTPATH_TECHNICAL_GUIDE.md`
+- 详情见 [发布说明 v3.5.2](v3.5.2.md)。
+
 ## Version 3.5.1
 
 - **新增**：**UNet Loader 的 SageAttention2（SA2）加速** —— **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 新增 **`attention_accel`** 选项（`default` / `sa2`）。

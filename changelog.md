@@ -7,6 +7,13 @@
   </tr>
 </table>
 
+## Version 3.5.2
+
+- **Added**: **SDXL ConvRot INT8 kernel fast path** - the SDXL ConvRot INT8 Linear/Conv2d path now rotates activations with a pooled output buffer (`torch.matmul(..., out=)`, activation dtype, no fp32 promotion) and runs with the **CUDA fused ConvRot kernels OFF**, which were measured both slower and trajectory-drifting. The fast path is **SDXL-only and fully separated**: it lives in the dedicated module `nodes/sdxl_int8/sdxl_convrot_fast.py`, `patches/comfy_quant_int8.py` gains only a SDXL classifier, a private (non-`sys.modules`) loader and two SDXL-guarded call sites, and `nodes/native_convert_int8.py` is unchanged. Kernels are swapped only inside an armed SDXL forward and the exact original objects are restored in a `finally`; a fail-closed call-site audit refuses to arm if the installed `comfy_kitchen` call sites do not match the audited pattern. Z Image / Krea2 / FLUX / SD1.5 / SAM3 / ControlNet / Qwen and all NVFP4 paths are untouched (the module is never imported or loaded for them).
+  - **Measured** (reference checkpoint, 25 steps x 6 seeds, one process): INT8/FP16 **1.069x (slower) -> 0.894x (faster)**; isolated rotate cost **257.3 -> 52.5 ms/step**; fused ConvRot ON measured 2.89 it/s with mean cosine **0.934** vs fused OFF 2.97 it/s / 0.958, hence fused stays OFF.
+  - Technical manual: [`md/HSWQ_SDXL_INT8_CONVROT_FASTPATH_TECHNICAL_GUIDE.md`](md/HSWQ_SDXL_INT8_CONVROT_FASTPATH_TECHNICAL_GUIDE.md)
+- See [Release Notes v3.5.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.2) for details.
+
 ## Version 3.5.1
 
 - **Added**: **SageAttention2 (SA2) acceleration for the UNet Loader** - new **`attention_accel`** selector (`default` / `sa2`) on **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**.
