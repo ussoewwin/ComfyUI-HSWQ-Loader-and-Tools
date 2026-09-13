@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """SDXL-only ConvRot INT8 kernel fast path.
 
-**Scope: SDXL ConvRot INT8 only.** This module exists so that the fast path does
+**Scope: SDXL ConvRot INT8 only (nodes/sdxl_int8/).** This module exists so that the fast path does
 not live in any shared module: `patches/comfy_quant_int8.py` and
 `nodes/native_convert_int8.py` keep their original code, and only the SDXL load
 branches call `arm_sdxl_convrot_fast()`.
