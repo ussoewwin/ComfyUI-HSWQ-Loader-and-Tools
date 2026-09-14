@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.3
+
+- **Fixed**: **Krea2 text encoder (Qwen3-VL-4B) ConvRot INT8 crash on image-conditioned encode** - `NoCapableBackendError: No backend can handle 'dequantize_int8_embedding': eager: q: dtype torch.float16 not in {torch.int8}`. ComfyUI's `cast_bias_weight()` CPU branch (active under dynamic-VRAM loading: module has `_v` and the target device is CPU) hands the quantized `Embedding` forward an **already-dequantized plain fp16 table**, while the `int8_tensorwise` branch still routes it through the INT8 `TensorWiseINT8Layout.dequantize_embedding` gather, whose `comfy_kitchen` backend requires an int8 `q`. `patches/comfy_quant_int8.py` now installs a safe `dequantize_embedding` replacement inside `_patch_comfy_kitchen_int8_gemm_fallback()`: for genuine int8/uint8 storage it delegates to the original kitchen op (normal path and performance unchanged), and for a non-int8 (already-dequantized) table it gathers the rows directly with no scale/ConvRot re-application. The fix is a generic robustness fallback, not family-specific: it covers any `int8_tensorwise` embedding reached through that CPU branch (Krea2/Qwen3-VL `visual.pos_embed`, the language-model `embed_tokens`, ...), and models without INT8 embeddings are unaffected.
+- See [Release Notes v3.5.3](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.3) for details.
+
 ## Version 3.5.2
 
 - **Added**: **SDXL ConvRot INT8 kernel fast path** - the SDXL ConvRot INT8 Linear/Conv2d path now rotates activations with a pooled output buffer (`torch.matmul(..., out=)`, activation dtype, no fp32 promotion) and runs with the **CUDA fused ConvRot kernels OFF**. The fast path is **SDXL-only and fully separated**: it lives in the dedicated module `nodes/sdxl_int8/sdxl_convrot_fast.py`, `patches/comfy_quant_int8.py` gains only a SDXL classifier, a private (non-`sys.modules`) loader and two SDXL-guarded call sites, and `nodes/native_convert_int8.py` is unchanged. Kernels are swapped only inside an armed SDXL forward and the exact original objects are restored in a `finally`; a fail-closed call-site audit refuses to arm if the installed `comfy_kitchen` call sites do not match the audited pattern. Z Image / Krea2 / FLUX / SD1.5 / SAM3 / ControlNet / Qwen and all NVFP4 paths are untouched (the module is never imported or loaded for them).

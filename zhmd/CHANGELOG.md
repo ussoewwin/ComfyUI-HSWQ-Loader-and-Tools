@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.3
+
+- **修复**：**Krea2 文本编码器（Qwen3-VL-4B）ConvRot INT8 在图像条件编码时崩溃** —— `NoCapableBackendError: No backend can handle 'dequantize_int8_embedding': eager: q: dtype torch.float16 not in {torch.int8}`。ComfyUI 的 `cast_bias_weight()` CPU 分支（动态 VRAM 加载下生效：模块带有 `_v` 且目标设备为 CPU）会把**已经反量化后的 fp16 表**交给量化 `Embedding` 的 forward，而 `int8_tensorwise` 分支仍将其送入 INT8 的 `TensorWiseINT8Layout.dequantize_embedding` gather，其 `comfy_kitchen` 后端要求 `q` 为 int8。现在 `patches/comfy_quant_int8.py` 会在 `_patch_comfy_kitchen_int8_gemm_fallback()` 内安装安全的 `dequantize_embedding` 替换：真正的 int8/uint8 存储仍委派给原生 kitchen 算子（正常路径与性能完全不变），非 int8（已反量化）表则直接按行 gather，不再重复应用 scale/ConvRot。该修复是通用健壮性回退而非特定模型专属：覆盖任何经由该 CPU 分支到达的 `int8_tensorwise` 嵌入（Krea2/Qwen3-VL 的 `visual.pos_embed`、语言模型的 `embed_tokens` 等），不含 INT8 嵌入的模型不受影响。
+- 详情见 [发布说明 v3.5.3](v3.5.3.md)。
+
 ## Version 3.5.2
 
 - **新增**：**SDXL ConvRot INT8 内核快速路径** —— SDXL ConvRot INT8 的 Linear/Conv2d 路径改为使用**池化输出缓冲区**旋转激活（`torch.matmul(..., out=)`，使用激活自身的 dtype，不再提升到 fp32），并关闭 **CUDA fused ConvRot 内核**。该快速路径**仅限 SDXL 且完全分离**：实现位于专用模块 `nodes/sdxl_int8/sdxl_convrot_fast.py`；`patches/comfy_quant_int8.py` 仅新增一个 SDXL 判定函数、一个私有（不注册到 `sys.modules`）加载器与两处 SDXL 门控调用；`nodes/native_convert_int8.py` 无任何改动。内核仅在被 arm 的 SDXL forward 期间替换，并在 `finally` 中恢复为完全相同的对象；若已安装的 `comfy_kitchen` 调用点与审计模式不符，fail-closed 调用点审计将**拒绝对该模型 arm**。Z Image / Krea2 / FLUX / SD1.5 / SAM3 / ControlNet / Qwen 以及所有 NVFP4 路径均不受影响（对它们而言该模块从不被 import 或加载）。
