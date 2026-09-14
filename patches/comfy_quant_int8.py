@@ -2425,6 +2425,36 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
             return w_float.to(output_dtype)
 
         TensorWiseINT8Layout.dequantize = _safe_dequantize
+        # 3. dequantize_embedding fallback. comfy.ops.cast_bias_weight() has a
+        # CPU branch (dynamic VRAM: hasattr(s, "_v") and the target device is
+        # CPU) that returns an ALREADY-dequantized plain tensor:
+        #     weight = s.weight.to(dtype=dtype, copy=True)
+        #     if isinstance(weight, QuantizedTensor):
+        #         weight = weight.dequantize()
+        # The Embedding forward still routes that table through the INT8 layout
+        # gather, so the kitchen op rejects the fp16 ``q``:
+        #     NoCapableBackendError: dequantize_int8_embedding:
+        #         eager: q: dtype torch.float16 not in {torch.int8}
+        # Keep the genuine INT8 gather untouched (delegate to the kitchen op);
+        # for a non-INT8 table the rows are already scale-applied and ConvRot
+        # un-rotated, so gather them directly.
+        try:
+            _orig_dequantize_embedding = TensorWiseINT8Layout.dequantize_embedding
+            if not getattr(_orig_dequantize_embedding.__func__, "_hswq_safe_embed", False):
+                def _safe_dequantize_embedding(cls, qdata, params, indices):
+                    if qdata.dtype in (torch.int8, torch.uint8):
+                        return _orig_dequantize_embedding.__func__(cls, qdata, params, indices)
+                    rows = torch.nn.functional.embedding(indices, qdata)
+                    out_dtype = getattr(params, "orig_dtype", None) or rows.dtype
+                    return rows.to(dtype=out_dtype)
+                _safe_dequantize_embedding = classmethod(_safe_dequantize_embedding)
+                _safe_dequantize_embedding.__func__._hswq_safe_embed = True
+                _safe_dequantize_embedding.__func__._hswq_orig_embed = _orig_dequantize_embedding
+                TensorWiseINT8Layout.dequantize_embedding = _safe_dequantize_embedding
+                applied.append("TensorWiseINT8Layout.dequantize_embedding fallback")
+        except Exception as e:
+            logger.debug("[HSWQ INT8] dequantize_embedding patch failed: %s", e)
+
         _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.linear.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_linear_tensorwise
         _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.mm.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_mm_tensorwise
         _LAYOUT_DISPATCH_TABLE.setdefault(torch.ops.aten.addmm.default, {})[TensorWiseINT8Layout] = _safe_handle_int8_addmm_tensorwise
