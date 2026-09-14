@@ -139,6 +139,28 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 **VRAM 清理**：加载 **ConvRot NVFP4**（以及 HSWQ INT8）UNet 时，请在工作流末尾放置 [https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并打开 **`HSWQ`**——原因与 SDXL Checkpoint Loader 一节相同。
 
+### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)
+
+<img src="png/distorch.png" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)" width="400">
+
+上述 loader 的 DisTorch2 版本：可将**整个 UNet** 放到显存之外（virtual VRAM + donor device，例如 `cpu`），使超出显存的模型包也能运行。后端移植自 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（GPL-3.0），见 `distorch_2.py`。
+
+**当前支持：仅 Krea2 ConvRot INT8。** 其他 `weight_dtype` 尚未在 DisTorch2 下验证。
+
+**在 16GB 级 GPU（例如 RTX 5060 Ti 16GB）上，本 DisTorch2 节点比普通的 HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader 更快。**
+
+要发挥 DisTorch 的速度，`virtual_vram_gb` 必须**不小于 UNet 的体积**——对 **Krea2 ConvRot INT8** 即**至少 14GB**。这又需要大量系统内存：**最低 64GB**。
+
+**输入**：与上述 loader 相同，另加 DisTorch2 的分配输入（`compute_device` / `virtual_vram_gb` / `donor_device` / `expert_mode_allocations` / `eject_models`），以及 **`hswq_bake`**：
+
+| 取值 | 行为 |
+| :--- | :--- |
+| **`OFF`** | 走 stock ComfyUI 路径（DynamicVRAM）。跳过 HSWQ 补丁（LoRA bake / parity / mp stack），offload 的权重进入 DynamicVRAM host buffer（**共享显存**）。**对 Krea2 ConvRot INT8 而言这是更快的一侧。** |
+| **`ON`** | 走 HSWQ 路径（HSWQ LoRA bake + legacy patcher，使 DisTorch 放置生效）。该模式是为**将来开发的 Hybrid ConvRot NVFP4** 准备的（需要 HSWQ 自身的 LoRA 处理）。在 Krea2 ConvRot INT8 上比 `OFF` 慢。 |
+
+`hswq_bake` 也由普通的 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 提供；在那里 `ON` 只固定 legacy patcher 行为，且没有 DisTorch 分配输入。
+
+
 ### HSWQ ControlNet Loader (ConvRot INT8)
 
 <img src="../png/convrot_int8_controlnet.png" alt="HSWQ ControlNet Loader (ConvRot INT8)" width="400">

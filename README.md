@@ -139,6 +139,28 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 **VRAM purge**: For **ConvRot NVFP4** (and HSWQ INT8) UNet loads, place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the end of the workflow with **`HSWQ`** on — same reason as the SDXL Checkpoint Loader section.
 
+### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)
+
+<img src="png/distorch.png" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)" width="400">
+
+DisTorch2 variant of the loader above: the **whole UNet** can live outside VRAM (virtual VRAM + a donor device such as `cpu`), so packs larger than the GPU can still run. Backend ported from [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU) (GPL-3.0) - see `distorch_2.py`.
+
+**Current support: Krea2 ConvRot INT8 only.** Other `weight_dtype` choices are not verified with DisTorch2 yet.
+
+**On a 16 GB-class GPU (e.g. RTX 5060 Ti 16GB), the DisTorch2 loader is faster than the plain HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader.**
+
+To get DisTorch's speed, `virtual_vram_gb` must be **at least the size of the UNet** - for **Krea2 ConvRot INT8** that is **14 GB or more**. That in turn requires a large amount of system RAM: **64 GB minimum**.
+
+**Inputs**: the same loader inputs as above, plus the DisTorch2 allocation inputs (`compute_device`, `virtual_vram_gb`, `donor_device`, `expert_mode_allocations`, `eject_models`) and **`hswq_bake`**:
+
+| Value | Behaviour |
+| :--- | :--- |
+| **`OFF`** | Stock ComfyUI path under DynamicVRAM. The HSWQ patches (LoRA bake / parity / mp stack) are skipped, so offloaded weights sit in the DynamicVRAM host buffer (**shared VRAM**). **This is the faster mode for Krea2 ConvRot INT8.** |
+| **`ON`** | HSWQ path (HSWQ LoRA bake + legacy patcher, so DisTorch placement runs). This mode is intended for the **planned Hybrid ConvRot NVFP4** support, where HSWQ's own LoRA handling is required. Slower than `OFF` on Krea2 ConvRot INT8. |
+
+`hswq_bake` is also exposed by the plain **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**; `ON` there only pins the legacy patcher behaviour, and no DisTorch allocation inputs are present.
+
+
 ### HSWQ ControlNet Loader (ConvRot INT8)
 
 <img src="png/convrot_int8_controlnet.png" alt="HSWQ ControlNet Loader (ConvRot INT8)" width="400">
