@@ -1554,6 +1554,8 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
             full_load=full_load,
             dirty=dirty,
         )
+        if not bool(getattr(self.model, "_hswq_bake_enabled", True)):
+            return result
         # INT8 LoRA bake only — never touch Nunchaku SVDQ (class is often Lumina2).
         if _model_is_nunchaku_svdq(self.model):
             return result
@@ -3181,7 +3183,7 @@ def tag_krea2_model(model) -> bool:
     return True
 
 
-def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="default"):
+def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="default", hswq_bake=True):
     import logging
     import torch
     import folder_paths
@@ -3202,16 +3204,28 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="defaul
         # Krea2 does not need or want Z Image parity - it uses stock MixedPrecision -
         # but the leftover wrapper makes forward_parity fire Hadamard rotations every
         # step, causing progressive slowdown (4s/step -> 16s -> 22s -> 26s across runs).
-        try:
-            from ..nodes.nvfp4.comfy_quant_nvfp4 import (
-                _clear_zimage_parity_contamination_for_sdxl,
+        # UI toggle: hswq_bake ON = HSWQ path (HSWQ patches).
+        # OFF = stock ComfyUI path (DynamicVRAM / shared VRAM, no HSWQ patches).
+        _aimdo_dynamic = not bool(hswq_bake)
+        if _aimdo_dynamic:
+            # DynamicVRAM (comfy-aimdo): run the stock ComfyUI path exactly like
+            # upstream ComfyUI-MultiGPU. HSWQ parity/mp-stack/LoRA-bake are skipped
+            # (they fight the mmap/vbar representation; measured 2x slowdown).
+            logging.info(
+                "[HSWQ INT8] Krea2 ConvRot INT8: DynamicVRAM (comfy-aimdo) active -> "
+                "stock path (HSWQ parity/mp-stack/LoRA-bake skipped, upstream parity)"
             )
+        else:
+            try:
+                from ..nodes.nvfp4.comfy_quant_nvfp4 import (
+                    _clear_zimage_parity_contamination_for_sdxl,
+                )
 
-            _clear_zimage_parity_contamination_for_sdxl()
-        except Exception as e:
-            logging.warning(
-                "[HSWQ INT8] clear Z Image NVFP4 contamination for Krea2 failed: %s", e
-            )
+                _clear_zimage_parity_contamination_for_sdxl()
+            except Exception as e:
+                logging.warning(
+                    "[HSWQ INT8] clear Z Image NVFP4 contamination for Krea2 failed: %s", e
+                )
         model_options = {}
         # Krea2 ConvRot INT8 needs the SAME low-rank residual LoRA bake +
         # forward as Krea2 ConvRot NVFP4 (INT8 8-bit requant rounds away small
@@ -3219,7 +3233,7 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="defaul
         # projector only - never other DiT (FLUX), SDXL, or Z Image ConvRot INT8.
         is_krea2 = checkpoint_is_krea2(unet_path)
         krea2_bake_ok = False
-        if is_krea2:
+        if is_krea2 and not _aimdo_dynamic:
             try:
                 from ..nodes.krea2_convrot_nvfp4.comfy_quant_nvfp4 import (
                     apply_comfy_quant_nvfp4_patches,
@@ -3265,6 +3279,15 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="defaul
             flush=True,
         )
         model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
+        # Stamp the HSWQ-path choice so the Dynamic.load bake hooks (built at
+        # import time) can be skipped on the stock path.
+        try:
+            _bk = bool(hswq_bake)
+            setattr(model, "_hswq_bake_enabled", _bk)
+            if getattr(model, "model", None) is not None:
+                setattr(model.model, "_hswq_bake_enabled", _bk)
+        except Exception:
+            pass
         if krea2_bake_ok:
             # Stamp for the Krea2 bake hook (mirrors the NVFP4 loader stamp; the
             # inner-model stamp survives ModelPatcher clones made by LoRA nodes).
@@ -3459,6 +3482,7 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
                 return load_unet_hswq_weight_dtype(
                     unet_name, weight_dtype,
                     attention_accel=kwargs.get("attention_accel", "default"),
+                    hswq_bake=kwargs.get("hswq_bake", True),
                 )
             # default: auto-detect INT8 checkpoints only; otherwise original FP path.
             import folder_paths
@@ -3468,6 +3492,7 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
                 return load_unet_hswq_weight_dtype(
                     unet_name, weight_dtype,
                     attention_accel=kwargs.get("attention_accel", "default"),
+                    hswq_bake=kwargs.get("hswq_bake", True),
                 )
             return _orig_load_unet(self, unet_name, weight_dtype, **kwargs)
 

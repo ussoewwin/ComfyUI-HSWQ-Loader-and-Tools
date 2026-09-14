@@ -120,14 +120,19 @@ def build_distorch2_unet_loader(base_cls):
         def override(self, *args, **kwargs):
             out = super().override(*args, **kwargs)
             try:
-                patcher = out[0]
-                if patcher is not None and getattr(patcher, "is_dynamic", None) and patcher.is_dynamic():
-                    patcher = patcher.clone(disable_dynamic=True)
-                    logger.info(
-                        "[HSWQ DisTorch2] legacy ModelPatcher for this load: DisTorch block "
-                        "placement / GPU-addressable offload is otherwise skipped by DynamicVRAM"
-                    )
-                    return (patcher,) + tuple(out[1:])
+                # UI toggle: hswq_bake ON = HSWQ path -> legacy patcher (DisTorch
+                # placement + HSWQ bake). OFF = stock path -> keep the model dynamic
+                # so offloaded weights live in the HostBuffer (shared VRAM).
+                _hswq_path = bool(kwargs.get("hswq_bake", True))
+                if _hswq_path:
+                    patcher = out[0]
+                    if patcher is not None and getattr(patcher, "is_dynamic", None) and patcher.is_dynamic():
+                        patcher = patcher.clone(disable_dynamic=True)
+                        logger.info(
+                            "[HSWQ DisTorch2] legacy ModelPatcher for this load: DisTorch block "
+                            "placement / GPU-addressable offload is otherwise skipped by DynamicVRAM"
+                        )
+                        return (patcher,) + tuple(out[1:])
             except Exception:
                 logger.exception("[HSWQ DisTorch2] legacy-patcher switch failed; keeping the dynamic patcher")
             return out

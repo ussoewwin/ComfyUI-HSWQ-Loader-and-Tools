@@ -827,6 +827,8 @@ def install_krea2_nvfp4_lora_bake(force: bool = False) -> bool:
             full_load=full_load,
             dirty=dirty,
         )
+        if not bool(getattr(self.model, "_hswq_bake_enabled", True)):
+            return result
         run_krea2_nvfp4_lora_bake_on_patcher(
             self, device_to=device_to, reason="Dynamic.load"
         )

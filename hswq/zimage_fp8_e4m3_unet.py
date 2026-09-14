@@ -963,6 +963,7 @@ class HSWQFP8E4M3UNetLoader:
                                   "Z Image ConvRot NVFP4",
                                   "Krea2 ConvRot NVFP4",
                               ],),
+                                  "hswq_bake": ("BOOLEAN", {"default": True, "tooltip": "ON = HSWQ path (HSWQ LoRA bake + legacy patcher; required for HSWQ-only formats such as Hybrid ConvRot NVFP4). OFF = stock ComfyUI path under DynamicVRAM (faster; offloaded weights land in shared VRAM)."}),
                              }}
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "load_unet"
@@ -970,7 +971,7 @@ class HSWQFP8E4M3UNetLoader:
     CATEGORY = "advanced/loaders"
     TITLE = "HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader"
 
-    def load_unet(self, unet_name, weight_dtype, attention_accel="default"):
+    def load_unet(self, unet_name, weight_dtype, attention_accel="default", **kwargs):
         model_options = {}
         if weight_dtype == "fp8_e4m3fn":
             model_options["dtype"] = torch.float8_e4m3fn
