@@ -695,6 +695,22 @@ try:
 except Exception as e:
     logger.exception("[HSWQ NVFP4] install_nvfp4_option_dispatch: %s", e)
 
+# DisTorch2 variant of the HSWQ UNet Loader: the whole UNet can be held on CPU
+# (virtual VRAM, donor_device=cpu) when a run heavily exceeds VRAM.
+# Backend ported from ComfyUI-MultiGPU (pollockjj, GPL-3.0) - see distorch_2.py.
+try:
+    from .nodes.hswq_unet_distorch2 import build_distorch2_unet_loader
+    # DisTorch2 wrapper on the dispatched HSWQ UNet loader (Krea2 / Z Image
+    # ConvRot INT8 + NVFP4 routing and the INT8 LoRA bake stay consistent).
+    _hswq_distorch2_base = NODE_CLASS_MAPPINGS.get("HSWQFP8E4M3UNetLoader") or HSWQFP8E4M3UNetLoader
+    NODE_CLASS_MAPPINGS["HSWQUNetLoaderDisTorch2"] = build_distorch2_unet_loader(_hswq_distorch2_base)
+    logger.info(
+        "Registered HSWQ UNet Loader (DisTorch2) build=hswq-base+distorch2 base=%s",
+        getattr(_hswq_distorch2_base, "__name__", _hswq_distorch2_base),
+    )
+except Exception as e:
+    logger.exception("HSWQ UNet Loader (DisTorch2) not registered: %s", e)
+
 # SDXL LoRA Stack V3 (INT8 / NVFP4 / standard via load_lora_for_models bake path)
 try:
     from .nodes.lora.sdxl_v3 import GENERATED_NODES as _SDXL_LORA_V3_NODES
