@@ -117,6 +117,26 @@ def build_distorch2_unet_loader(base_cls):
     class HSWQUNetLoaderDisTorch2(wrapped):
         """DisTorch2 wrapper; forces the placement-capable patcher for the load."""
 
+        @classmethod
+        def INPUT_TYPES(s):
+            inputs = super().INPUT_TYPES()
+            _req = inputs.setdefault("required", {})
+            # DisTorch2 版不显示 SA2 选项（attention_accel）
+            _req.pop("attention_accel", None)
+            _req["hswq_bake"] = (
+                "BOOLEAN",
+                {
+                    "default": True,
+                    "tooltip": (
+                        "ON = HSWQ path (HSWQ LoRA bake + legacy patcher; required for "
+                        "HSWQ-only formats such as Hybrid ConvRot NVFP4). OFF = stock "
+                        "ComfyUI path under DynamicVRAM (faster; offloaded weights land "
+                        "in shared VRAM)."
+                    ),
+                },
+            )
+            return inputs
+
         def override(self, *args, **kwargs):
             out = super().override(*args, **kwargs)
             try:

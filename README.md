@@ -146,6 +146,8 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 DisTorch2 variant of the loader above: the **whole UNet** can live outside VRAM (virtual VRAM + a donor device such as `cpu`), so packs larger than the GPU can still run. Backend ported from [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU) (GPL-3.0) - see `distorch_2.py`.
 
+**Why this DisTorch2 node exists**: [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU) already ships a DisTorch2 loader, but it has **no HSWQ ConvRot NVFP4 support**. This node exists so that the **large HSWQ ConvRot NVFP4 packs (planned)** can be run together with DisTorch offload.
+
 **Current support: Krea2 ConvRot INT8 only.** Other `weight_dtype` choices are not verified with DisTorch2 yet.
 
 **On a 16 GB-class GPU (e.g. RTX 5060 Ti 16GB), the DisTorch2 loader is faster than the plain HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader.**
@@ -159,7 +161,6 @@ To get DisTorch's speed, `virtual_vram_gb` must be **at least the size of the UN
 | **`OFF`** | Stock ComfyUI path under DynamicVRAM. The HSWQ patches (LoRA bake / parity / mp stack) are skipped, so offloaded weights sit in the DynamicVRAM host buffer (**shared VRAM**). **This is the faster mode for Krea2 ConvRot INT8.** |
 | **`ON`** | HSWQ path (HSWQ LoRA bake + legacy patcher, so DisTorch placement runs). This mode is intended for the **planned Hybrid ConvRot NVFP4** support, where HSWQ's own LoRA handling is required. Slower than `OFF` on Krea2 ConvRot INT8. |
 
-`hswq_bake` is also exposed by the plain **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**; `ON` there only pins the legacy patcher behaviour, and no DisTorch allocation inputs are present.
 
 
 ### HSWQ ControlNet Loader (ConvRot INT8)
