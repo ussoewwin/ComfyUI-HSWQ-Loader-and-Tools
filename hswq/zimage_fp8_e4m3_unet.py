@@ -963,10 +963,6 @@ class HSWQFP8E4M3UNetLoader:
                                   "Z Image ConvRot NVFP4",
                                   "Krea2 ConvRot NVFP4",
                               ],),
-                              "attention_accel": ([
-                                  "default",
-                                  "sa2",
-                              ],),
                              }}
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "load_unet"
