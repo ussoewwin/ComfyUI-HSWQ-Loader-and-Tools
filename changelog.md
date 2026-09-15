@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.4
+
+- **Added**: **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)** - a DisTorch2 variant of the UNet loader (backend ported from [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU), GPL-3.0) that can hold the whole UNet outside VRAM (virtual VRAM + a donor device such as `cpu`). Currently verified for **Krea2 ConvRot INT8** only; intended for the planned large HSWQ **ConvRot NVFP4** packs.
+- See [Release Notes v3.5.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.4) for details.
+
 ## Version 3.5.3
 
 - **Fixed**: **Krea2 text encoder (Qwen3-VL-4B) ConvRot INT8 crash on image-conditioned encode** - `NoCapableBackendError: No backend can handle 'dequantize_int8_embedding': eager: q: dtype torch.float16 not in {torch.int8}`. ComfyUI's `cast_bias_weight()` CPU branch (active under dynamic-VRAM loading: module has `_v` and the target device is CPU) hands the quantized `Embedding` forward an **already-dequantized plain fp16 table**, while the `int8_tensorwise` branch still routes it through the INT8 `TensorWiseINT8Layout.dequantize_embedding` gather, whose `comfy_kitchen` backend requires an int8 `q`. `patches/comfy_quant_int8.py` now installs a safe `dequantize_embedding` replacement inside `_patch_comfy_kitchen_int8_gemm_fallback()`: for genuine int8/uint8 storage it delegates to the original kitchen op (normal path and performance unchanged), and for a non-int8 (already-dequantized) table it gathers the rows directly with no scale/ConvRot re-application. The fix is a generic robustness fallback, not family-specific: it covers any `int8_tensorwise` embedding reached through that CPU branch (Krea2/Qwen3-VL `visual.pos_embed`, the language-model `embed_tokens`, ...), and models without INT8 embeddings are unaffected.

@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.4
+
+- **新增**：**HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)** —— UNet 加载器的 DisTorch2 版本（后端移植自 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)，GPL-3.0），可将**整个 UNet** 放到显存之外（virtual VRAM + donor device，例如 `cpu`）。当前仅验证 **Krea2 ConvRot INT8**；面向**将来开发的大尺寸 HSWQ ConvRot NVFP4**。
+- 详情见 [发布说明 v3.5.4](v3.5.4.md)。
+
 ## Version 3.5.3
 
 - **修复**：**Krea2 文本编码器（Qwen3-VL-4B）ConvRot INT8 在图像条件编码时崩溃** —— `NoCapableBackendError: No backend can handle 'dequantize_int8_embedding': eager: q: dtype torch.float16 not in {torch.int8}`。ComfyUI 的 `cast_bias_weight()` CPU 分支（动态 VRAM 加载下生效：模块带有 `_v` 且目标设备为 CPU）会把**已经反量化后的 fp16 表**交给量化 `Embedding` 的 forward，而 `int8_tensorwise` 分支仍将其送入 INT8 的 `TensorWiseINT8Layout.dequantize_embedding` gather，其 `comfy_kitchen` 后端要求 `q` 为 int8。现在 `patches/comfy_quant_int8.py` 会在 `_patch_comfy_kitchen_int8_gemm_fallback()` 内安装安全的 `dequantize_embedding` 替换：真正的 int8/uint8 存储仍委派给原生 kitchen 算子（正常路径与性能完全不变），非 int8（已反量化）表则直接按行 gather，不再重复应用 scale/ConvRot。该修复是通用健壮性回退而非特定模型专属：覆盖任何经由该 CPU 分支到达的 `int8_tensorwise` 嵌入（Krea2/Qwen3-VL 的 `visual.pos_embed`、语言模型的 `embed_tokens` 等），不含 INT8 嵌入的模型不受影响。
