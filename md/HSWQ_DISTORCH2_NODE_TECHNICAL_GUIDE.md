@@ -77,7 +77,7 @@ The whole UNet can live outside VRAM (virtual VRAM + a donor device), so packs l
 ### ②-5. Requirements and performance
 
 - **Verified**: **Krea2 ConvRot INT8 only** (other `weight_dtype` choices are not verified with DisTorch2)
-- **16 GB-class GPU** (e.g. RTX 5060 Ti 16GB): faster than the plain UNet loader when `virtual_vram_gb` is at least the UNet size
+- **16 GB-class GPU** (e.g. RTX 5060 Ti 16GB): a **simple generation is faster with the plain UNet loader** (no offload overhead). This node is faster **only when the workload is heavy** - high resolution, many LoRAs, ControlNet, other complex combinations - because it loses less speed. Set `virtual_vram_gb` to at least the UNet size.
 - **System RAM**: **64 GB minimum** (offloaded weights are held on the host side)
 
 ### ②-6. Behaviour split (`hswq_bake`)
