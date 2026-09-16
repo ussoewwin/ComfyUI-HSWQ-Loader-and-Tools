@@ -150,9 +150,9 @@ DisTorch2 variant of the loader above: the **whole UNet** can live outside VRAM 
 
 **Current support: Krea2 ConvRot INT8 only.** Other `weight_dtype` choices are not verified with DisTorch2 yet.
 
-**On a 16 GB-class GPU (e.g. RTX 5060 Ti 16GB), the DisTorch2 loader is faster than the plain HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader.**
+**Speed - this node is not unconditionally faster than the plain loader.** On a 16 GB-class GPU (e.g. RTX 5060 Ti 16GB), a **simple generation is faster with the plain HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**. It is **only when the workload gets heavy** - **high resolution, many LoRAs, ControlNet and other complex combinations** - that this node is faster than the plain loader, because it loses less speed.
 
-To get DisTorch's speed, `virtual_vram_gb` must be **at least the size of the UNet** - for **Krea2 ConvRot INT8** that is **14 GB or more**. That in turn requires a large amount of system RAM: **64 GB minimum**.
+**To get the best out of DisTorch, `virtual_vram_gb` should be **at least the size of the UNet** - for **Krea2 ConvRot INT8** that is **14 GB or more**. That in turn requires a large amount of system RAM: **64 GB minimum**.
 
 **Inputs**: the same loader inputs as above, plus the DisTorch2 allocation inputs (`compute_device`, `virtual_vram_gb`, `donor_device`, `expert_mode_allocations`, `eject_models`) and **`hswq_bake`**:
 

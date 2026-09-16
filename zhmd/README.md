@@ -150,9 +150,9 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 **当前支持：仅 Krea2 ConvRot INT8。** 其他 `weight_dtype` 尚未在 DisTorch2 下验证。
 
-**在 16GB 级 GPU（例如 RTX 5060 Ti 16GB）上，本 DisTorch2 节点比普通的 HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader 更快。**
+**速度 —— 本节点并非无条件比普通加载器更快。** 在 16GB 级 GPU（例如 RTX 5060 Ti 16GB）上，**简单生成用普通的 HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader 更快**。**只有当负载变重时** —— **高分辨率、多个 LoRA、ControlNet 及其他复杂组合** —— **本节点才比普通加载器更快**，因为它的速度下降更少。
 
-要发挥 DisTorch 的速度，`virtual_vram_gb` 必须**不小于 UNet 的体积**——对 **Krea2 ConvRot INT8** 即**至少 14GB**。这又需要大量系统内存：**最低 64GB**。
+**要发挥 DisTorch 的效果，`virtual_vram_gb` 应**不小于 UNet 的体积** —— 对 **Krea2 ConvRot INT8** 即**至少 14GB**。这又需要大量系统内存：**最低 64GB**。
 
 **输入**：与上述 loader 相同，另加 DisTorch2 的分配输入（`compute_device` / `virtual_vram_gb` / `donor_device` / `expert_mode_allocations` / `eject_models`），以及 **`hswq_bake`**：
 
