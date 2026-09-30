@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.5
+
+- **修复**：**comfy_kitchen 0.2.36 下 INT8 Linear 崩溃** —— `comfy_kitchen` 0.2.36（2026-09-30）为 `backends.cuda.int8_linear` 新增了 `input_act_weight` / `input_act_eps` / `residual` / `residual_scale` 四个参数，ComfyUI 本体 `comfy/ops.py`（`linear_input_act`）已改为传入它们。而 HSWQ 的未对齐 GEMM 回退包装器仍保留旧的 8 参数签名，导致每次 INT8 Linear 调用都抛出 `TypeError: _safe_cuda_int8_linear() got an unexpected keyword argument 'input_act_weight'`（已在 Z Image / Lumina2 ConvRot NVFP4 LoRA + USDU 路径复现）。`patches/comfy_quant_int8.py` 中的包装器现可接收这四个新参数以及 `**extra_kwargs`，并仅转发已安装 `int8_linear` 实际声明的参数（通过 `inspect.signature` 探测），因此新旧 `comfy_kitchen` 均可正常工作。反量化回退路径现也像原生算子一样应用 `input_act` 与 `residual`。INT8 权重仍以 INT8 常驻 VRAM，仅未对齐路径会反量化，行为与以往一致。
+- 详情见 [发布说明 v3.5.5](v3.5.5.md)。
+
 ## Version 3.5.4
 
 - **新增**：**HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)** —— UNet 加载器的 DisTorch2 版本（后端移植自 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)，GPL-3.0），可将**整个 UNet** 放到显存之外（virtual VRAM + donor device，例如 `cpu`）。当前仅验证 **Krea2 ConvRot INT8**；面向**将来开发的大尺寸 HSWQ ConvRot NVFP4**。

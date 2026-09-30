@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.5
+
+- **Fixed**: **INT8 Linear crash on comfy_kitchen 0.2.36** - `comfy_kitchen` 0.2.36 (2026-09-30) extended the `backends.cuda.int8_linear` signature with `input_act_weight` / `input_act_eps` / `residual` / `residual_scale`, and ComfyUI core `comfy/ops.py` (`linear_input_act`) now passes them. The HSWQ unaligned-GEMM fallback wrapper still declared the old 8-argument signature, so every INT8 Linear call raised `TypeError: _safe_cuda_int8_linear() got an unexpected keyword argument 'input_act_weight'` (reproduced on the Z Image / Lumina2 ConvRot NVFP4 LoRA + USDU path). The wrapper in `patches/comfy_quant_int8.py` now accepts the four new arguments plus `**extra_kwargs`, and forwards only the parameters the installed `int8_linear` actually declares (introspected via `inspect.signature`), so both old and new `comfy_kitchen` work. The dequantized fallback now also applies `input_act` and `residual` like the real op. INT8 checkpoints stay INT8 in VRAM; only the unaligned path dequantizes, as before.
+- See [Release Notes v3.5.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.5) for details.
+
 ## Version 3.5.4
 
 - **Added**: **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)** - a DisTorch2 variant of the UNet loader (backend ported from [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU), GPL-3.0) that can hold the whole UNet outside VRAM (virtual VRAM + a donor device such as `cpu`). Currently verified for **Krea2 ConvRot INT8** only; intended for the planned large HSWQ **ConvRot NVFP4** packs.
