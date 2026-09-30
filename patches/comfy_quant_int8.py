@@ -2188,6 +2188,8 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
 
         orig_cuda_int8_linear = getattr(ck_cuda, "int8_linear", None)
         if orig_cuda_int8_linear is not None and not getattr(orig_cuda_int8_linear, "_hswq_safe_int8", False):
+            import inspect as _hswq_inspect
+            _orig_param_names = set(_hswq_inspect.signature(orig_cuda_int8_linear).parameters)
             def _safe_cuda_int8_linear(
                 x: torch.Tensor,
                 weight: torch.Tensor,
@@ -2197,40 +2199,73 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
                 convrot: bool = False,
                 convrot_groupsize: int = 256,
                 input_act: str | None = None,
+                input_act_weight: torch.Tensor | None = None,
+                input_act_eps: float = 0.0,
+                residual: torch.Tensor | None = None,
+                residual_scale: torch.Tensor | None = None,
+                **extra_kwargs,
             ) -> torch.Tensor:
                 orig_shape = x.shape
                 x_2d = x if x.dim() == 2 and x.is_contiguous() else x.reshape(-1, x.shape[-1]).contiguous()
-                k = x_2d.shape[-1]
                 n = weight.shape[0]
                 out_dt = out_dtype or x.dtype
                 is_2d_output = len(orig_shape) == 2
 
-                # Hardware unaligned check (cuBLAS GEMM requires K % 4 == 0 and N % 4 == 0)
-                if k % 4 != 0 or n % 4 != 0 or not x.is_cuda:
+                def _dequantized_linear():
                     ws = weight_scale.to(device=x.device, dtype=torch.float32)
                     w_float = weight.to(device=x.device, dtype=torch.float32) * (ws if ws.numel() == 1 else ws.view(-1, 1))
                     b_arg = bias.to(device=x.device, dtype=out_dt) if bias is not None else None
-                    res = torch.nn.functional.linear(x_2d.to(dtype=out_dt), w_float.to(dtype=out_dt), b_arg)
+                    x_act = x_2d.to(dtype=out_dt)
+                    if input_act not in (None, "none"):
+                        _apply_act = getattr(ck_cuda, "_apply_input_act", None)
+                        if _apply_act is not None:
+                            try:
+                                x_act = _apply_act(
+                                    x_act, input_act, input_act_weight, float(input_act_eps)
+                                ).to(dtype=out_dt)
+                            except Exception:
+                                pass
+                    res = torch.nn.functional.linear(x_act, w_float.to(dtype=out_dt), b_arg)
+                    if residual is not None:
+                        _apply_res = getattr(ck_cuda, "_apply_residual", None)
+                        if _apply_res is not None:
+                            try:
+                                res = _apply_res(res, residual.reshape(res.shape), residual_scale)
+                            except Exception:
+                                pass
                     return res if is_2d_output else res.reshape(*orig_shape[:-1], n)
 
+                # Hardware unaligned check (cuBLAS GEMM requires K % 4 == 0 and N % 4 == 0)
+                if x_2d.shape[-1] % 4 != 0 or n % 4 != 0 or not x.is_cuda:
+                    return _dequantized_linear()
+
+                call_kwargs = {
+                    "x": x,
+                    "weight": weight,
+                    "weight_scale": weight_scale,
+                    "bias": bias,
+                    "out_dtype": out_dtype,
+                    "convrot": convrot,
+                    "convrot_groupsize": convrot_groupsize,
+                }
+                for _name, _value in (
+                    ("input_act", input_act),
+                    ("input_act_weight", input_act_weight),
+                    ("input_act_eps", input_act_eps),
+                    ("residual", residual),
+                    ("residual_scale", residual_scale),
+                ):
+                    if _name in _orig_param_names:
+                        call_kwargs[_name] = _value
+                for _name, _value in extra_kwargs.items():
+                    if _name in _orig_param_names:
+                        call_kwargs[_name] = _value
+
                 try:
-                    return orig_cuda_int8_linear(
-                        x=x,
-                        weight=weight,
-                        weight_scale=weight_scale,
-                        bias=bias,
-                        out_dtype=out_dtype,
-                        convrot=convrot,
-                        convrot_groupsize=convrot_groupsize,
-                        input_act=input_act,
-                    )
+                    return orig_cuda_int8_linear(**call_kwargs)
                 except Exception as e:
-                    logger.debug("[HSWQ INT8] cuda.int8_linear fallback (k=%d, n=%d): %s", k, n, e)
-                    ws = weight_scale.to(device=x.device, dtype=torch.float32)
-                    w_float = weight.to(device=x.device, dtype=torch.float32) * (ws if ws.numel() == 1 else ws.view(-1, 1))
-                    b_arg = bias.to(device=x.device, dtype=out_dt) if bias is not None else None
-                    res = torch.nn.functional.linear(x_2d.to(dtype=out_dt), w_float.to(dtype=out_dt), b_arg)
-                    return res if is_2d_output else res.reshape(*orig_shape[:-1], n)
+                    logger.debug("[HSWQ INT8] cuda.int8_linear fallback (k=%d, n=%d): %s", x_2d.shape[-1], n, e)
+                    return _dequantized_linear()
 
             _safe_cuda_int8_linear._hswq_safe_int8 = True
             ck_cuda.int8_linear = _safe_cuda_int8_linear
