@@ -41,6 +41,18 @@ from .nvfp4_runtime import (
 
 logger = logging.getLogger(__name__)
 
+# Case-C real-quant fallback (env-gated; default off). On TC-gate refusal,
+# convert the layer one-way to INT8 (kitchen TensorWiseINT8Layout) instead of
+# baking to dense float. LoRA-safe by construction: residual path adds
+# post-forward (basis-invariant), requantize-bake path uses layout-agnostic
+# dequantize() + base requantize_from_float() which work on INT8 QT.
+from .realquant_fallback import (
+    apply_realquant_fallback,
+    realquant_fallback_enabled,
+    patched_tc_forward_pooled,
+)
+_tc_forward_pooled = patched_tc_forward_pooled(_tc_forward_pooled)
+
 
 def _console(msg: str) -> None:
     print(msg, flush=True)
