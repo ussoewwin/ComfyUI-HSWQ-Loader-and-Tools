@@ -32,7 +32,7 @@
 
 ### 0.3 Shared infra
 
-- DisTorch2 (`distorch_2.py`, MultiGPU port), SA2 (`hswq/hswq_sa2_accel.py`, pattern resolved by checkpoint probe with cross-check L118-152), VAE tiled, torch compile (inductor-configured `nodes/hswq_torch_compile.py`), mgpu memory logging.
+- DisTorch2 (`distorch/distorch_2.py`, MultiGPU port), SA2 (`hswq/hswq_sa2_accel.py`, pattern resolved by checkpoint probe with cross-check L118-152), VAE tiled, torch compile (inductor-configured `nodes/hswq_torch_compile.py`), mgpu memory logging.
 - GPU assumption: Blackwell consumer (RTX 5060 Ti measured in prior plans; SM>=100 gate `is_blackwell_gpu`).
 
 ### 0.4 Prior-plan context (from `md/2026-09-10_sa2_attention_acceleration_plan.md`)

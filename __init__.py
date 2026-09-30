@@ -697,7 +697,7 @@ except Exception as e:
 
 # DisTorch2 variant of the HSWQ UNet Loader: the whole UNet can be held on CPU
 # (virtual VRAM, donor_device=cpu) when a run heavily exceeds VRAM.
-# Backend ported from ComfyUI-MultiGPU (pollockjj, GPL-3.0) - see distorch_2.py.
+# Backend ported from ComfyUI-MultiGPU (pollockjj, GPL-3.0) - see distorch/distorch_2.py.
 try:
     from .nodes.hswq_unet_distorch2 import build_distorch2_unet_loader
     # DisTorch2 wrapper on the dispatched HSWQ UNet loader (Krea2 / Z Image

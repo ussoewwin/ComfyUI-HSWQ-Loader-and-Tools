@@ -144,7 +144,7 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 <img src="png/distorch.png" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)" width="400">
 
-上述 loader 的 DisTorch2 版本：可将**整个 UNet** 放到显存之外（virtual VRAM + donor device，例如 `cpu`），使超出显存的模型包也能运行。后端移植自 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（GPL-3.0），见 `distorch_2.py`。
+上述 loader 的 DisTorch2 版本：可将**整个 UNet** 放到显存之外（virtual VRAM + donor device，例如 `cpu`），使超出显存的模型包也能运行。后端移植自 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（GPL-3.0），见 `distorch/distorch_2.py`。
 
 **为何需要本节点**：[ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU) 已经提供 DisTorch2 加载器，但它**不支持 HSWQ 的 ConvRot NVFP4**。本节点存在的目的，是让**将来开发的大尺寸 HSWQ ConvRot NVFP4** 能够配合 DisTorch 使用。
 
@@ -386,7 +386,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 * **HSWQ Ultimate SD Upscale**（`usdu_bundle/`、`nodes/nunchaku_usdu.py`、相关 USDU 补丁）以 [ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)（ssitu，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ssitu 原作版权保留；本仓库内的独有部分 © ussoewwin
 * **HSWQ Torch Compile**（`nodes/hswq_torch_compile.py`）以 ComfyUI-KJNodes torch.compile 节点（[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)，GPL-3.0）为基底开发，并加入了**独有改良与功能**。KJNodes 原作版权保留；本仓库内的独有部分 © ussoewwin。该 KJ 来源**不**适用于 HSWQ 量化方法本身
 * **HSWQ Batched Detailer (SEGS)**（`nodes/hswq_batched_detailer.py`、`nodes/batched_detailer_lib/`）以 [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) Detailer (SEGS)（ltdrdata，GPL-3.0）为基底开发，并加入了**独有改良与功能**——**尤其为维持 HSWQ 兼容性**。Impact Pack 原作版权保留；本仓库内的独有部分 © ussoewwin。运行本节点**不需要**安装 Impact Pack
-* **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)**（`distorch_2.py`、`nodes/hswq_unet_distorch2.py`）以 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（pollockjj，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ComfyUI-MultiGPU 原作版权保留；本仓库内的独有部分 © ussoewwin。移植文件是上游代码的修改副本（GPL-3.0 section 5a 声明）
+* **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)**（`distorch/distorch_2.py`、`nodes/hswq_unet_distorch2.py`）以 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（pollockjj，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ComfyUI-MultiGPU 原作版权保留；本仓库内的独有部分 © ussoewwin。移植文件是上游代码的修改副本（GPL-3.0 section 5a 声明）
 * 您可在 GPL-3.0 条款下自由**使用、修改和分发**本软件。
 * 当您分发本软件或其修改版时，您**必须**：
   * 保留版权与许可声明（含第三方 / 衍生作品声明，例如 ssitu UltimateSDUpscale、KJNodes、Impact Pack 与 ComfyUI-MultiGPU）

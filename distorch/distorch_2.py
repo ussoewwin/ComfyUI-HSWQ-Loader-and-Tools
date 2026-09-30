@@ -20,8 +20,8 @@ from collections import defaultdict
 logger = logging.getLogger("SDXL")
 import comfy.model_management as mm
 import comfy.model_patcher
-from .device_utils import get_device_list
-from .model_management_mgpu import multigpu_memory_log
+from ..device_utils import get_device_list
+from ..model_management_mgpu import multigpu_memory_log
 
 
 

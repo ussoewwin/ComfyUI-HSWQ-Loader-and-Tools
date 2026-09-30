@@ -17,7 +17,7 @@ logger = logging.getLogger("SDXL")
 
 def _create_distorch_safetensor_v2_override(cls, device_param_name, device_setter_func, apply_device_kwarg_workaround, eject_models_default=True):
     """Internal factory function creating DisTorch2 override class with parameterized device selection behavior."""
-    from .distorch_2 import register_patched_safetensor_modelpatcher
+    from .distorch.distorch_2 import register_patched_safetensor_modelpatcher
     from .model_management_mgpu import force_full_system_cleanup
     
     class NodeOverrideDisTorchSafetensorV2(cls):
@@ -173,7 +173,7 @@ def override_class_with_distorch_safetensor_v2_clip_no_device(cls):
 def override_class_with_distorch_gguf(cls):
     """DisTorch V1 Legacy wrapper - maintains V1 UI but calls V2 backend"""
     from . import set_current_device, get_current_device
-    from .distorch_2 import register_patched_safetensor_modelpatcher
+    from .distorch.distorch_2 import register_patched_safetensor_modelpatcher
     
     class NodeOverrideDisTorchGGUFLegacy(cls):
         @classmethod
@@ -241,7 +241,7 @@ def override_class_with_distorch_gguf(cls):
 def override_class_with_distorch_gguf_v2(cls):
     """DisTorch V2 wrapper for GGUF models"""
     from . import set_current_device, get_current_device
-    from .distorch_2 import register_patched_safetensor_modelpatcher
+    from .distorch.distorch_2 import register_patched_safetensor_modelpatcher
     
     class NodeOverrideDisTorchGGUFv2(cls):
         @classmethod
@@ -306,7 +306,7 @@ def override_class_with_distorch_gguf_v2(cls):
 def override_class_with_distorch_clip(cls):
     """DisTorch V1 wrapper for CLIP models - calls V2 backend"""
     from . import set_current_text_encoder_device, get_current_text_encoder_device
-    from .distorch_2 import register_patched_safetensor_modelpatcher
+    from .distorch.distorch_2 import register_patched_safetensor_modelpatcher
     
     class NodeOverrideDisTorchClip(cls):
         @classmethod
@@ -373,7 +373,7 @@ def override_class_with_distorch_clip(cls):
 def override_class_with_distorch_clip_no_device(cls):
     """DisTorch V1 wrapper for Triple/Quad CLIP models - calls V2 backend"""
     from . import set_current_text_encoder_device, get_current_text_encoder_device
-    from .distorch_2 import register_patched_safetensor_modelpatcher
+    from .distorch.distorch_2 import register_patched_safetensor_modelpatcher
     
     class NodeOverrideDisTorchClipNoDevice(cls):
         @classmethod
