@@ -7,7 +7,13 @@
   </tr>
 </table>
 
+## Version 3.5.6
+
+- **Fixed**: **INT8 Linear dtype mismatch on the CPU text-encoder path** - with `comfy_kitchen` **0.2.36** (ComfyUI 2026-09-30), `TensorWiseINT8Layout.dequantize()` now restores the dequantized tensor to **`params.orig_dtype`** (bfloat16). The HSWQ INT8 **unaligned-GEMM fallback** in `patches/comfy_quant_int8.py` then passed a **bfloat16 weight** together with the **float32 activation** to `torch.nn.functional.linear()`, raising `self and mat2 must have the same dtype, but got Float and BFloat16`. Triggered whenever the CLIP/text encoder runs on **CPU** (e.g. `CLIPLoaderMultiGPU` with `device=cpu` - reproduced on a Qwen-Image ConvRot INT8 text encoder). The fallback now casts weight/bias to the resolved `out_dtype` (activation dtype) before `F.linear`. **CPU-only regression**: the CUDA aligned path uses the real `int8_linear` kernel and was never affected; INT8 weights still stay INT8 in VRAM, and only the fallback path dequantizes.
+- See [Release Notes v3.5.6](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.6) for details.
+
 ## Version 3.5.5
+
 
 - **Fixed**: **INT8 Linear crash on comfy_kitchen 0.2.36** - `comfy_kitchen` 0.2.36 (2026-09-30) extended the `backends.cuda.int8_linear` signature with `input_act_weight` / `input_act_eps` / `residual` / `residual_scale`, and ComfyUI core `comfy/ops.py` (`linear_input_act`) now passes them. The HSWQ unaligned-GEMM fallback wrapper still declared the old 8-argument signature, so every INT8 Linear call raised `TypeError: _safe_cuda_int8_linear() got an unexpected keyword argument 'input_act_weight'` (reproduced on the Z Image / Lumina2 ConvRot NVFP4 LoRA + USDU path). The wrapper in `patches/comfy_quant_int8.py` now accepts the four new arguments plus `**extra_kwargs`, and forwards only the parameters the installed `int8_linear` actually declares (introspected via `inspect.signature`), so both old and new `comfy_kitchen` work. The dequantized fallback now also applies `input_act` and `residual` like the real op. INT8 checkpoints stay INT8 in VRAM; only the unaligned path dequantizes, as before.
 - See [Release Notes v3.5.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.5) for details.
