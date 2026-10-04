@@ -9,9 +9,10 @@
 
 ## Version 3.5.6
 
-- **菫ｮ螟・*・・*CPU 譁・悽郛也∝勣霍ｯ蠕・ｸ顔噪 INT8 Linear dtype 荳堺ｸ閾ｴ** 窶披・菴ｿ逕ｨ `comfy_kitchen` **0.2.36**・・omfyUI 2026-09-30・画慮・形TensorWiseINT8Layout.dequantize()` 邇ｰ蝨ｨ莨壽滑蜿埼㍼蛹門錘逧・ｼ驥乗△螟堺ｸｺ **`params.orig_dtype`**・・float16・峨り・`patches/comfy_quant_int8.py` 荳ｭ HSWQ 逧・INT8 **髱槫ｯｹ鮨・GEMM 蝗樣**莨壽滑 **bfloat16 譚・㍾** 霑槫酔 **float32 豼豢ｻ** 莨扈・`torch.nn.functional.linear()`・梧鴨蜃ｺ `self and mat2 must have the same dtype, but got Float and BFloat16`縲ょｽ・CLIP/譁・悽郛也∝勣霑占｡悟惠 **CPU** 譌ｶ隗ｦ蜿托ｼ井ｾ句ｦ・`CLIPLoaderMultiGPU` 隶ｾ `device=cpu` 窶披・蟾ｲ蝨ｨ Qwen-Image ConvRot INT8 譁・悽郛也∝勣荳雁､咲鴫・峨ら鴫蝨ｨ蝗樣蝨ｨ隹・畑 `F.linear` 荵句燕莨壽滑 weight/bias 霓ｬ謐｢荳ｺ隗｣譫仙・逧・`out_dtype`・域ｿ豢ｻ dtype・峨・*莉・CPU 蝗槫ｽ・*・咾UDA 蟇ｹ鮨占ｷｯ蠕・ｵｰ逵滓ｭ｣逧・`int8_linear` 蜀・ｸ・御ｻ惹ｸ榊女蠖ｱ蜩搾ｼ姜NT8 譚・㍾莉堺ｻ･ INT8 蟶ｸ鬩ｻ VRAM・悟宵譛牙屓騾霍ｯ蠕・ｼ壼渚驥丞喧縲・- 隸ｦ諠・ｧ・[蜿大ｸ・ｯｴ譏・v3.5.6](v3.5.6.md)縲・
-## Version 3.5.5
+- **修复**：**CPU 文本编码器路径上的 INT8 Linear dtype 不一致** —— 使用 `comfy_kitchen` **0.2.36**（ComfyUI 2026-09-30）时，`TensorWiseINT8Layout.dequantize()` 现在会把反量化后的张量恢复为 **`params.orig_dtype`**（bfloat16）。而 `patches/comfy_quant_int8.py` 中 HSWQ 的 INT8 **非对齐 GEMM 回退**会把 **bfloat16 权重** 连同 **float32 激活** 传给 `torch.nn.functional.linear()`，抛出 `self and mat2 must have the same dtype, but got Float and BFloat16`。当 CLIP/文本编码器运行在 **CPU** 时触发（例如 `CLIPLoaderMultiGPU` 设 `device=cpu` —— 已在 Qwen-Image ConvRot INT8 文本编码器上复现）。现在回退在调用 `F.linear` 之前会把 weight/bias 转换为解析出的 `out_dtype`（激活 dtype）。**仅 CPU 回归**：CUDA 对齐路径走真正的 `int8_linear` 内核，从不受影响；INT8 权重仍以 INT8 常驻 VRAM，只有回退路径会反量化。
+- 详情见 [发布说明 v3.5.6](v3.5.6.md)。
 
+## Version 3.5.5
 
 - **修复**：**comfy_kitchen 0.2.36 下 INT8 Linear 崩溃** —— `comfy_kitchen` 0.2.36（2026-09-30）为 `backends.cuda.int8_linear` 新增了 `input_act_weight` / `input_act_eps` / `residual` / `residual_scale` 四个参数，ComfyUI 本体 `comfy/ops.py`（`linear_input_act`）已改为传入它们。而 HSWQ 的未对齐 GEMM 回退包装器仍保留旧的 8 参数签名，导致每次 INT8 Linear 调用都抛出 `TypeError: _safe_cuda_int8_linear() got an unexpected keyword argument 'input_act_weight'`（已在 Z Image / Lumina2 ConvRot NVFP4 LoRA + USDU 路径复现）。`patches/comfy_quant_int8.py` 中的包装器现可接收这四个新参数以及 `**extra_kwargs`，并仅转发已安装 `int8_linear` 实际声明的参数（通过 `inspect.signature` 探测），因此新旧 `comfy_kitchen` 均可正常工作。反量化回退路径现也像原生算子一样应用 `input_act` 与 `residual`。INT8 权重仍以 INT8 常驻 VRAM，仅未对齐路径会反量化，行为与以往一致。
 - 详情见 [发布说明 v3.5.5](v3.5.5.md)。
