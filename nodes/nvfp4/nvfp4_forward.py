@@ -51,7 +51,6 @@ from .realquant_fallback import (
     realquant_fallback_enabled,
     patched_tc_forward_pooled,
 )
-_tc_forward_pooled = patched_tc_forward_pooled(_tc_forward_pooled)
 
 
 def _console(msg: str) -> None:
@@ -328,6 +327,9 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
         logger.warning("[HSWQ NVFP4] pooled TC path failed: %s", e)
         _DEQUANT_FALLBACKS += 1
         return None
+
+
+_tc_forward_pooled = patched_tc_forward_pooled(_tc_forward_pooled)
 
 
 def make_nvfp4_linear_forward(stock_forward):
