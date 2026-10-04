@@ -2286,15 +2286,35 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
         dequantize_args = ck_base.dequantize_args
         _dtype_code = ck_int8._dtype_code
 
+        def _dq_linear_dtype_safe(_a, _k):
+            # [HSWQ-FIX 2026-10-04] Dequantized int8 weights come back as params.orig_dtype
+            # (e.g. bfloat16) while the activation may be float32 (CPU path), which makes
+            # F.linear raise "self and mat2 must have the same dtype". Cast weight/bias to the
+            # activation dtype so the fallback works on CPU as well as CUDA.
+            _a2 = list(dequantize_args(_a))
+            _k2 = dequantize_args(_k)
+            _x = _a2[0]
+            _dt = getattr(_k2, 'get', lambda *_: None)('out_dtype', None) or _x.dtype
+            _a2[0] = _x.to(_dt)
+            if len(_a2) > 1 and torch.is_tensor(_a2[1]):
+                _a2[1] = _a2[1].to(_dt)
+            if len(_a2) > 2 and torch.is_tensor(_a2[2]):
+                _a2[2] = _a2[2].to(_dt)
+            if 'out_dtype' in _k2:
+                _k2.pop('out_dtype')
+            return _a2, _k2
+
         def _safe_handle_int8_linear_tensorwise(qt, args, kwargs):
             input_tensor = args[0]
             weight = args[1]
             bias = args[2] if len(args) > 2 else None
 
             if not isinstance(weight, QuantizedTensor) or getattr(weight, "_layout_cls", None) != "TensorWiseINT8Layout":
-                return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+                _a, _k = _dq_linear_dtype_safe(args, kwargs)
+                return torch.nn.functional.linear(*_a, **_k)
             if getattr(weight._params, "transposed", False):
-                return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+                _a, _k = _dq_linear_dtype_safe(args, kwargs)
+                return torch.nn.functional.linear(*_a, **_k)
 
             if isinstance(input_tensor, QuantizedTensor):
                 input_tensor = input_tensor.dequantize()
@@ -2304,7 +2324,8 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
             n = weight_qdata.shape[0]
 
             if not input_tensor.is_cuda or k % 4 != 0 or n % 4 != 0:
-                return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+                _a, _k = _dq_linear_dtype_safe(args, kwargs)
+                return torch.nn.functional.linear(*_a, **_k)
 
             out_dtype = kwargs.get("out_dtype", input_tensor.dtype)
             convrot = getattr(weight._params, "convrot", False)
@@ -2324,7 +2345,8 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
                 )
             except Exception as e:
                 logger.debug("[HSWQ INT8] int8_linear fallback (k=%d, n=%d): %s", k, n, e)
-                return torch.nn.functional.linear(*dequantize_args(args), **dequantize_args(kwargs))
+                _a, _k = _dq_linear_dtype_safe(args, kwargs)
+                return torch.nn.functional.linear(*_a, **_k)
 
         def _safe_handle_int8_mm_tensorwise(qt, args, kwargs):
             input_tensor = args[0]
