@@ -167,6 +167,15 @@ try:
 except Exception:
     logger.exception("SAM3 INT8 load patches failed to install")
 
+# ComfyUI v0.38 auto fast-disk guard: make a native aimdo file-read failure
+# fall back to ComfyUI's mmap copy path instead of surfacing as an exception
+# that re-triggers the read and aborts the process (Fatal Python error: Aborted).
+try:
+    from .patches.comfy_aimdo_fastdisk_guard import apply_comfy_aimdo_fastdisk_guard
+    apply_comfy_aimdo_fastdisk_guard()
+except Exception:
+    logger.exception("ComfyUI v0.38 fast-disk recovery guard failed to install")
+
 # Model Patch CPU-offload apply patch: keeps ZImageControlPatch on CPU when a
 # MODEL_PATCH was loaded with cpu_offload=True (ported ModelPatchLoaderCustom).
 try:
