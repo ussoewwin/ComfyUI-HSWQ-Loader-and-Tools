@@ -180,8 +180,9 @@ class _Owner:
         return self._tid is not None and threading.get_ident() == self._tid
 
     def call(self, fn, *args, timeout=None, **kwargs):
-        """Run fn on the owner thread unless we are already on it."""
-        if self.on_owner():
+        """Run fn on the owner thread unless we are already on it, or the
+        calling thread is capturing a CUDA graph (must stay inline)."""
+        if self.on_owner() or _capturing_here():
             return fn(*args, **kwargs)
         box = {"event": threading.Event(), "result": None, "error": None}
         self._queue.put(("call", fn, args, kwargs, box))
@@ -220,6 +221,30 @@ def get_owner():
         if _OWNER is None:
             _OWNER = _Owner()
     return _OWNER
+
+
+def _capturing_here() -> bool:
+    """True when the CALLING thread is inside a CUDA graph capture.
+
+    comfy-aimdo (malloc graphs) and some samplers (RES4LYF) capture CUDA
+    graphs; the native reader is designed to record those copies into the
+    capture of the capturing thread. Routing such a call to the owner thread
+    (or synchronising mid-capture) invalidates the capture ("operation
+    failed due to a previous error during capture"), which then surfaces as
+    sticky CUDA_ERROR_ILLEGAL_ADDRESS. While capturing, run inline exactly
+    as stock ComfyUI does.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+        fn = getattr(torch.cuda, "is_current_stream_capturing", None)
+        if fn is None:
+            return False
+        return bool(fn())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 _MARK = "_hswq_aimdo_owner_routed"
@@ -333,12 +358,43 @@ def _patch_host_buffer(owner) -> bool:
         def read_file_to_device_routed(file_obj, file_offset, size, stream, device_ptr,
                                        device, mark_cold=True):
             def _do():
-                result = orig_read_file_to_device(file_obj, file_offset, size, stream,
-                                                  device_ptr, device, mark_cold)
+                if _capturing_here():
+                    # Inside a CUDA graph capture: record the copy into the
+                    # capture exactly like stock ComfyUI, do NOT route and do
+                    # NOT synchronize (a sync during capture invalidates it).
+                    return orig_read_file_to_device(file_obj, file_offset, size,
+                                                    stream, device_ptr, device,
+                                                    mark_cold)
+                try:
+                    orig_read_file_to_device(file_obj, file_offset, size, stream,
+                                             device_ptr, device, mark_cold)
+                except RuntimeError as exc:
+                    # The native single-slot reader can be left holding an
+                    # unretired completion event ("active slot N already has a
+                    # completion event"), which would make EVERY following read
+                    # fail in cascade. Reset the reader slot and retry once.
+                    name = getattr(file_obj, "name", "?")
+                    logger.warning(
+                        "[HSWQ FastDisk] read failed file=%s off=%s size=%s (%s); "
+                        "resetting reader slot and retrying once",
+                        name, file_offset, size, exc,
+                    )
+                    try:
+                        cleanup = hb.cleanup_file_reader
+                        cleanup = getattr(cleanup, "_hswq_original",
+                                          getattr(cleanup, "_hswq_fastdisk_original",
+                                                  cleanup))
+                        cleanup()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _drain_device_copy(device_ptr)
+                    # second attempt; if it fails again, propagate so comfy's
+                    # mmap readinto fallback materialises the data correctly
+                    orig_read_file_to_device(file_obj, file_offset, size, stream,
+                                             device_ptr, device, mark_cold)
                 # drain async file->VRAM copy before returning so the next read
                 # cannot hit the still-occupied reader slot
                 _drain_device_copy(device_ptr)
-                return result
 
             return owner.call(_do)
 
@@ -365,6 +421,10 @@ def _patch_host_buffer(owner) -> bool:
             def read_file_slice_routed(self, file_obj, file_offset, size, offset=0,
                                        stream=0, device_ptr=0, device=-1):
                 def _do():
+                    if _capturing_here():
+                        return orig_slice(self, file_obj, file_offset, size,
+                                          offset=offset, stream=stream,
+                                          device_ptr=device_ptr, device=device)
                     result = orig_slice(self, file_obj, file_offset, size, offset=offset,
                                        stream=stream, device_ptr=device_ptr, device=device)
                     _drain_device_copy(device_ptr)
