@@ -3,17 +3,15 @@
 Root cause (confirmed against the native source and by direct measurement):
 
 comfy_aimdo keeps its device context in a THREAD-LOCAL (``g_devctx``,
-src/control.c) and the file reader plus the VBAR slot table live inside that
-context. The native reader in particular is single-slot and is bound to the
-thread that first drives it:
+src/control.c) and the file reader plus the VBAR slot table live inside it:
 
-  * the FIRST thread to issue a native aimdo operation wins the binding.
-  * a second thread that later drives the reader fails - even with a lock
-    serialising the calls - with "hostbuf_file_reader_read failed" and the
-    native log "active slot N already has a completion event".
-  * issuing every native aimdo op (init_devices, VBAR alloc/fault/unpin, and the
-    file reads) from ONE thread succeeds: measured 1200/1200, including with
-    multiple streams and NULL-stream reads.
+  * the first thread to drive a native aimdo op wins the binding; a second
+    thread then fails - even with a lock serialising the calls - because its
+    thread-local context has a different slot table ("hostbuf_file_reader_read
+    failed", "active slot N already has a completion event") and VBAR
+    (cuMemMap) operations report "invalid argument".
+  * issuing every native aimdo op from ONE thread succeeds (measured 600/600 -
+    1200/1200, including several streams).
 
 v0.38 enables fast-disk for every loader and ComfyUI's parallel load / prefetch
 drives reads and VBAR faults from several threads, so the non-bound threads
@@ -23,11 +21,11 @@ fail. During sampling that surfaces as a CUDA illegal memory access and
 Fix (make fast-disk work; no mmap fallback on the happy path):
 
   * a dedicated owner thread performs control.init_devices() plus a warm-up read
-    at prestartup, so it binds the reader before any other thread touches aimdo.
-  * every native aimdo operation - VBAR alloc/fault/unpin/prioritize and the
-    three file-read entry points - is marshalled onto that thread. Reads are
-    issued on the NULL stream and synchronised before returning, so the copy is
-    complete whatever stream/thread the caller uses.
+    at prestartup, so it binds aimdo before any other thread touches it.
+  * every native aimdo op - VBAR alloc/fault/unpin/prioritize and the three
+    file-read entry points - is marshalled onto that thread.
+  * the read is issued with the CALLER's stream passed through unchanged, so it
+    stays correct under CUDA graph capture; no forced synchronise.
   * a genuine read failure is converted to a recoverable result instead of an
     unrecoverable C-level abort.
 
@@ -44,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 _APPLIED = False
 
-_READER = None
-_READER_LOCK = threading.Lock()
+_OWNER = None
+_OWNER_LOCK = threading.Lock()
 
 
 class _Owner:
@@ -121,6 +119,15 @@ class _Owner:
         except Exception as exc:  # noqa: BLE001
             return "ERR:%s" % exc
 
+    def run(self, fn, *args, timeout=None, **kwargs):
+        box = {"event": threading.Event(), "result": None, "error": None}
+        self._queue.put(("call", fn, args, kwargs, box))
+        if not box["event"].wait(timeout):
+            raise RuntimeError("hswq-aimdo-owner timeout")
+        if box["error"] is not None:
+            raise box["error"]
+        return box["result"]
+
     def run_init(self, fn, *args, timeout=120, **kwargs):
         box = {"event": threading.Event(), "result": None, "error": None}
         self._queue.put(("init", fn, args, kwargs, box))
@@ -130,25 +137,15 @@ class _Owner:
             raise box["error"]
         return box["result"]
 
-    def run(self, fn, *args, timeout=None, **kwargs):
-        box = {"event": threading.Event(), "result": None, "error": None}
-        self._queue.put((("init" if getattr(fn, "_hswq_init_op", False) else "call"),
-                         fn, args, kwargs, box))
-        if not box["event"].wait(timeout):
-            raise RuntimeError("hswq-aimdo-owner timeout")
-        if box["error"] is not None:
-            raise box["error"]
-        return box["result"]
-
 
 def get_owner():
-    global _READER
-    if _READER is not None:
-        return _READER
-    with _READER_LOCK:
-        if _READER is None:
-            _READER = _Owner()
-    return _READER
+    global _OWNER
+    if _OWNER is not None:
+        return _OWNER
+    with _OWNER_LOCK:
+        if _OWNER is None:
+            _OWNER = _Owner()
+    return _OWNER
 
 
 def _wrap_control_init(owner) -> bool:
@@ -169,7 +166,6 @@ def _wrap_control_init(owner) -> bool:
 
             routed._hswq_owner_routed = True
             routed._hswq_owner_original = orig
-            routed._hswq_init_op = True
             return routed
 
         setattr(control, name, make())
@@ -204,12 +200,11 @@ def _wrap_vbar(owner) -> bool:
 
     VBAR = getattr(mvbar, "ModelVBAR", None)
     if VBAR is not None:
-        # NOTE: do NOT wrap ModelVBAR.fault / ModelVBAR.unpin here - the
-        # module-level vbar_fault / vbar_unpin (also wrapped above) call those
-        # methods, so wrapping both would re-enter the owner queue from the
-        # owner thread itself and deadlock.
-        for name in ("alloc", "prioritize", "free_memory",
-                     "loaded_size", "set_watermark", "set_watermark_limit"):
+        # Do NOT wrap ModelVBAR.fault / ModelVBAR.unpin: the module-level
+        # vbar_fault / vbar_unpin (wrapped above) call those methods, so
+        # wrapping both would re-enter the owner queue from the owner thread.
+        for name in ("alloc", "prioritize", "free_memory", "loaded_size",
+                     "set_watermark", "set_watermark_limit"):
             original = getattr(VBAR, name, None)
             if original is None or getattr(original, "_hswq_owner_routed", False):
                 continue
@@ -228,22 +223,12 @@ def _wrap_vbar(owner) -> bool:
     return changed
 
 
-def _read_via_owner(owner, fn, file_obj, file_offset, size, device_ptr, device, mark_cold):
-    """Execute a device read on the owner thread with the NULL stream."""
-    def _do():
-        result = fn(file_obj, file_offset, size, 0, device_ptr, device, mark_cold)
-        try:
-            import torch
-
-            torch.cuda.synchronize()
-        except Exception:  # noqa: BLE001
-            pass
-        return result
-
-    return owner.run(_do)
-
-
 def _wrap_reads(owner) -> bool:
+    """Route the native read entry points onto the owner thread.
+
+    The caller's stream is passed through unchanged (CUDA-graph safe); the owner
+    thread runs the native read and returns once the copy is enqueued.
+    """
     try:
         import comfy_aimdo.host_buffer as hb
     except ImportError:
@@ -257,8 +242,8 @@ def _wrap_reads(owner) -> bool:
     ):
         def read_file_to_device_routed(file_obj, file_offset, size, stream, device_ptr,
                                        device, mark_cold=True):
-            return _read_via_owner(owner, orig_read_file_to_device, file_obj,
-                                   file_offset, size, device_ptr, device, mark_cold)
+            return owner.run(orig_read_file_to_device, file_obj, file_offset, size,
+                             stream, device_ptr, device, mark_cold)
 
         read_file_to_device_routed._hswq_owner_routed = True
         read_file_to_device_routed._hswq_owner_original = orig_read_file_to_device
@@ -274,20 +259,9 @@ def _wrap_reads(owner) -> bool:
             def read_file_slice_routed(self, file_obj, file_offset, size, offset=0,
                                        stream=0, device_ptr=0, device=-1):
                 device = -1 if device is None else int(device)
-
-                def _do():
-                    result = orig_read_file_slice(self, file_obj, file_offset, size,
-                                                  offset=offset, stream=0,
-                                                  device_ptr=device_ptr, device=device)
-                    try:
-                        import torch
-
-                        torch.cuda.synchronize()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    return result
-
-                return owner.run(_do)
+                return owner.run(orig_read_file_slice, self, file_obj, file_offset,
+                                 size, offset=offset, stream=stream,
+                                 device_ptr=device_ptr, device=device)
 
             read_file_slice_routed._hswq_owner_routed = True
             read_file_slice_routed._hswq_owner_original = orig_read_file_slice
