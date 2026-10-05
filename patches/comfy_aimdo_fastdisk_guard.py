@@ -1,31 +1,37 @@
-"""ComfyUI v0.38 fast-disk support: single native aimdo owner thread.
+"""ComfyUI v0.38 fast-disk support: one owner thread for all comfy_aimdo native ops.
 
-Root cause (confirmed against the native source and by direct measurement):
+Root cause (confirmed against the comfy-aimdo native sources and by measurement):
 
-comfy_aimdo keeps its device context in a THREAD-LOCAL (``g_devctx``,
-src/control.c) and the file reader plus the VBAR slot table live inside it:
+comfy-aimdo keeps its per-device context in a THREAD-LOCAL (``g_devctx``,
+src/control.c). The file reader slot table, the VBAR/HostBuffer/VRAM reservation
+machinery and the fault path (which calls ``plat_current_stream()``) all resolve
+that thread-local context. Consequences on this machine (RTX 5060 Ti, Windows):
 
-  * the first thread to drive a native aimdo op wins the binding; a second
-    thread then fails - even with a lock serialising the calls - because its
-    thread-local context has a different slot table ("hostbuf_file_reader_read
-    failed", "active slot N already has a completion event") and VBAR
-    (cuMemMap) operations report "invalid argument".
-  * issuing every native aimdo op from ONE thread succeeds (measured 600/600 -
-    1200/1200, including several streams).
+  * the first thread that drives the native reader owns its single completion
+    slot. A second thread that overlaps a read trips
+    "hostbuf_file_reader_retire_active: active slot N already has a completion
+    event"; a device copy then fails with CUDA_ERROR_ILLEGAL_ADDRESS
+    (result=700) and the process dies with "Fatal Python error: Aborted".
+  * allocating/extending a HostBuffer or a ModelVBAR/VRAMBuffer from a thread
+    that never bound the context fails outright
+    ("HostBuffer.extend failed", "cuMemMap ... invalid argument",
+    "VRAM Allocation failed (non OOM)") - measured.
+  * routing only the *reads* is not enough: ComfyUI's parallel load / prefetch
+    also creates and faults the buffers on worker threads.
 
-v0.38 enables fast-disk for every loader and ComfyUI's parallel load / prefetch
-drives reads and VBAR faults from several threads, so the non-bound threads
-fail. During sampling that surfaces as a CUDA illegal memory access and
-"Fatal Python error: Aborted".
+So every native comfy-aimdo call - device init, buffer create/extend/free, VBAR
+prioritize/fault/unpin and the file reads - must run on ONE thread.
 
 Fix (make fast-disk work; no mmap fallback on the happy path):
 
   * a dedicated owner thread performs control.init_devices() plus a warm-up read
-    at prestartup, so it binds aimdo before any other thread touches it.
-  * every native aimdo op - VBAR alloc/fault/unpin/prioritize and the three
-    file-read entry points - is marshalled onto that thread.
-  * the read is issued with the CALLER's stream passed through unchanged, so it
-    stays correct under CUDA graph capture; no forced synchronise.
+    at prestartup, so it binds the thread-local context before any other thread
+    touches comfy-aimdo.
+  * every native comfy-aimdo entry point is marshalled onto that thread. Calls
+    already running on the owner execute inline (thread-id bypass) so wrapped
+    functions that call wrapped functions never re-enter the queue.
+  * the caller's stream is passed through unchanged (CUDA-graph capture safe);
+    no forced stream change and no forced global sync.
   * a genuine read failure is converted to a recoverable result instead of an
     unrecoverable C-level abort.
 
@@ -54,6 +60,7 @@ class _Owner:
         self._ready = threading.Event()
         self._warmup_event = threading.Event()
         self._warmup_result = None
+        self._tid = None
         self._native_read = None
         try:
             import comfy_aimdo.host_buffer as _hb
@@ -61,7 +68,6 @@ class _Owner:
             self._native_read = getattr(_hb, "read_file_to_device", None)
         except Exception:
             self._native_read = None
-        self._tid = None
         self._thread = threading.Thread(
             target=self._loop, name="hswq-aimdo-owner", daemon=True
         )
@@ -124,13 +130,10 @@ class _Owner:
     def on_owner(self):
         return self._tid is not None and threading.get_ident() == self._tid
 
-    def call(self, fn, *args, **kwargs):
-        # Execute on the owner thread, unless we are already on it.
+    def call(self, fn, *args, timeout=None, **kwargs):
+        """Run fn on the owner thread unless we are already on it."""
         if self.on_owner():
             return fn(*args, **kwargs)
-        return self.run(fn, *args, **kwargs)
-
-    def run(self, fn, *args, timeout=None, **kwargs):
         box = {"event": threading.Event(), "result": None, "error": None}
         self._queue.put(("call", fn, args, kwargs, box))
         if not box["event"].wait(timeout):
@@ -138,6 +141,17 @@ class _Owner:
         if box["error"] is not None:
             raise box["error"]
         return box["result"]
+
+    def call_best_effort(self, fn, *args, **kwargs):
+        """Like call() but falls back to inline execution when the owner is
+        gone, and never raises (used for __del__ finalizers)."""
+        try:
+            if self.on_owner() or not self._thread.is_alive():
+                return fn(*args, **kwargs)
+            return self.call(fn, *args, timeout=30, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[HSWQ FastDisk] best-effort native call skipped: %s", exc)
+            return None
 
     def run_init(self, fn, *args, timeout=120, **kwargs):
         box = {"event": threading.Event(), "result": None, "error": None}
@@ -159,87 +173,103 @@ def get_owner():
     return _OWNER
 
 
-def _wrap_control_init(owner) -> bool:
+_MARK = "_hswq_aimdo_owner_routed"
+
+
+def _route_methods(owner, cls, method_names, best_effort_names=()):
+    """Wrap the named methods of cls so they run on the owner thread."""
+    changed = False
+    for name in method_names:
+        original = getattr(cls, name, None)
+        if original is None or getattr(original, _MARK, False):
+            continue
+
+        def make(orig=original):
+            def routed(self, *args, **kwargs):
+                return owner.call(orig, self, *args, **kwargs)
+
+            setattr(routed, _MARK, True)
+            routed.__name__ = name
+            routed._hswq_original = orig
+            return routed
+
+        setattr(cls, name, make())
+        changed = True
+
+    for name in best_effort_names:
+        original = getattr(cls, name, None)
+        if original is None or getattr(original, _MARK, False):
+            continue
+
+        def make(orig=original):
+            def routed(self, *args, **kwargs):
+                return owner.call_best_effort(orig, self, *args, **kwargs)
+
+            setattr(routed, _MARK, True)
+            routed.__name__ = name
+            routed._hswq_original = orig
+            return routed
+
+        setattr(cls, name, make())
+        changed = True
+
+    return changed
+
+
+def _route_functions(owner, module, func_names):
+    """Wrap module-level callables so they run on the owner thread."""
+    changed = False
+    for name in func_names:
+        original = getattr(module, name, None)
+        if original is None or not callable(original) or getattr(original, _MARK, False):
+            continue
+
+        def make(orig=original):
+            def routed(*args, **kwargs):
+                return owner.call(orig, *args, **kwargs)
+
+            setattr(routed, _MARK, True)
+            routed.__name__ = name
+            routed._hswq_original = orig
+            return routed
+
+        setattr(module, name, make())
+        changed = True
+    return changed
+
+
+def _patch_control(owner) -> bool:
     try:
         import comfy_aimdo.control as control
     except ImportError:
         return False
 
     changed = False
+
+    # init_devices / init_device: run on the owner AND trigger warm-up.
     for name in ("init_devices", "init_device"):
         original = getattr(control, name, None)
-        if original is None or getattr(original, "_hswq_owner_routed", False):
+        if original is None or getattr(original, _MARK, False):
             continue
 
         def make(orig=original):
             def routed(*args, **kwargs):
                 return owner.run_init(orig, *args, **kwargs)
 
-            routed._hswq_owner_routed = True
-            routed._hswq_owner_original = orig
+            setattr(routed, _MARK, True)
+            routed.__name__ = name
+            routed._hswq_original = orig
             return routed
 
         setattr(control, name, make())
         changed = True
+
+    # get_devctx returns the thread-local context; it must be read on the owner.
+    changed |= _route_functions(owner, control, ("get_devctx",))
     return changed
 
 
-def _wrap_vbar(owner) -> bool:
-    """Route VBAR operations onto the owner thread."""
-    try:
-        import comfy_aimdo.model_vbar as mvbar
-    except ImportError:
-        return False
-
-    changed = False
-
-    for name in ("vbar_fault", "vbar_unpin"):
-        original = getattr(mvbar, name, None)
-        if original is None or getattr(original, "_hswq_owner_routed", False):
-            continue
-
-        def make(orig=original):
-            def routed(*args, **kwargs):
-                return owner.run(orig, *args, **kwargs)
-
-            routed._hswq_owner_routed = True
-            routed._hswq_owner_original = orig
-            return routed
-
-        setattr(mvbar, name, make())
-        changed = True
-
-    VBAR = getattr(mvbar, "ModelVBAR", None)
-    if VBAR is not None:
-        # Do NOT wrap ModelVBAR.fault / ModelVBAR.unpin: the module-level
-        # vbar_fault / vbar_unpin (wrapped above) call those methods, so
-        # wrapping both would re-enter the owner queue from the owner thread.
-        for name in ("alloc", "prioritize", "free_memory", "loaded_size",
-                     "set_watermark", "set_watermark_limit"):
-            original = getattr(VBAR, name, None)
-            if original is None or getattr(original, "_hswq_owner_routed", False):
-                continue
-
-            def make(orig=original):
-                def routed(self, *args, **kwargs):
-                    return owner.run(orig, self, *args, **kwargs)
-
-                routed._hswq_owner_routed = True
-                routed._hswq_owner_original = orig
-                return routed
-
-            setattr(VBAR, name, make())
-            changed = True
-
-    return changed
-
-
-def _wrap_reads(owner) -> bool:
-    """Route the native read entry points onto the owner thread.
-
-    The caller's stream is passed through unchanged (CUDA-graph safe); the owner
-    thread runs the native read and returns once the copy is enqueued.
-    """
+def _patch_host_buffer(owner) -> bool:
     try:
         import comfy_aimdo.host_buffer as hb
     except ImportError:
@@ -247,50 +277,73 @@ def _wrap_reads(owner) -> bool:
 
     changed = False
 
-    orig_read_file_to_device = getattr(hb, "read_file_to_device", None)
-    if orig_read_file_to_device is not None and not getattr(
-        orig_read_file_to_device, "_hswq_owner_routed", False
-    ):
-        def read_file_to_device_routed(file_obj, file_offset, size, stream, device_ptr,
-                                       device, mark_cold=True):
-            return owner.call(orig_read_file_to_device, file_obj, file_offset, size,
-                             stream, device_ptr, device, mark_cold)
-
-        read_file_to_device_routed._hswq_owner_routed = True
-        read_file_to_device_routed._hswq_owner_original = orig_read_file_to_device
-        hb.read_file_to_device = read_file_to_device_routed
-        changed = True
+    changed |= _route_functions(
+        owner, hb, ("read_file_to_device", "cleanup_file_reader")
+    )
 
     HostBuffer = getattr(hb, "HostBuffer", None)
     if HostBuffer is not None:
-        orig_read_file_slice = getattr(HostBuffer, "read_file_slice", None)
-        if orig_read_file_slice is not None and not getattr(
-            orig_read_file_slice, "_hswq_owner_routed", False
-        ):
-            def read_file_slice_routed(self, file_obj, file_offset, size, offset=0,
-                                       stream=0, device_ptr=0, device=-1):
-                device = -1 if device is None else int(device)
-                return owner.call(orig_read_file_slice, self, file_obj, file_offset,
-                                 size, offset=offset, stream=stream,
-                                 device_ptr=device_ptr, device=device)
-
-            read_file_slice_routed._hswq_owner_routed = True
-            read_file_slice_routed._hswq_owner_original = orig_read_file_slice
-            HostBuffer.read_file_slice = read_file_slice_routed
-            changed = True
-
+        changed |= _route_methods(
+            owner, HostBuffer,
+            ("__init__", "extend", "read_file_slice", "get_raw_address",
+             "register", "unregister", "truncate"),
+            best_effort_names=("__del__",),
+        )
     return changed
 
 
-def _wrap_mem_slice(owner) -> bool:
-    """Route comfy.memory_management.read_tensor_file_slice_into onto the owner.
+def _patch_model_vbar(owner) -> bool:
+    try:
+        import comfy_aimdo.model_vbar as mvbar
+    except ImportError:
+        return False
 
-    This is the entry point ComfyUI's weight-cast path actually calls
-    (comfy.model_management.cast_to_gathered). It runs on whatever thread issues
-    the transfer - including prefetch / parallel-load workers - so it must be
-    marshalled onto the same owner thread as the other native reads, otherwise a
-    non-bound thread drives the single reader slot and trips
-    "active slot N already has a completion event".
+    changed = False
+
+    changed |= _route_functions(
+        owner, mvbar,
+        ("vbar_fault", "vbar_unpin", "vbars_reset_watermark_limits", "vbars_analyze"),
+    )
+
+    VBAR = getattr(mvbar, "ModelVBAR", None)
+    if VBAR is not None:
+        # NOTE: alloc is pure python (pointer arithmetic) - not routed.
+        # fault / unpin are called by the routed module-level vbar_fault /
+        # vbar_unpin; wrapping them too is safe because the thread-id bypass
+        # runs them inline once we are on the owner.
+        changed |= _route_methods(
+            owner, VBAR,
+            ("__init__", "prioritize", "deprioritize", "fault", "unpin",
+             "loaded_size", "set_watermark_limit", "set_watermark",
+             "free_memory", "get_nr_pages", "get_watermark", "get_residency"),
+            best_effort_names=("__del__",),
+        )
+    return changed
+
+
+def _patch_vram_buffer(owner) -> bool:
+    try:
+        import comfy_aimdo.vram_buffer as vb
+    except ImportError:
+        return False
+
+    VRAM = getattr(vb, "VRAMBuffer", None)
+    if VRAM is None:
+        return False
+
+    # VRAMBuffer.get grows the reservation (native) so it must run on the owner.
+    return _route_methods(owner, VRAM, ("__init__", "get", "size"),
+                          best_effort_names=("__del__",))
+
+
+def _wrap_mem_slice(owner) -> bool:
+    """Recoverable + owner-routed comfy.memory_management.read_tensor_file_slice_into.
+
+    This is the entry point ComfyUI's weight cast actually calls
+    (comfy.model_management.cast_to_gathered -> read_tensor_file_slice_into).
+    It can run on prefetch / parallel-load worker threads, so it must be
+    marshalled onto the owner thread like the other native reads; otherwise a
+    non-bound thread drives the single reader slot.
     """
     try:
         import comfy.memory_management as mem
@@ -300,10 +353,10 @@ def _wrap_mem_slice(owner) -> bool:
     original = getattr(mem, "read_tensor_file_slice_into", None)
     if original is None:
         return False
-    if getattr(original, "_hswq_owner_routed", False):
+    if getattr(original, "_hswq_fastdisk_recoverable", False):
         return True
 
-    def read_tensor_file_slice_into_routed(tensor, destination, stream=None, destination2=None):
+    def read_tensor_file_slice_into_recoverable(tensor, destination, stream=None, destination2=None):
         def _do():
             try:
                 return original(tensor, destination, stream=stream, destination2=destination2)
@@ -313,31 +366,32 @@ def _wrap_mem_slice(owner) -> bool:
 
         return owner.call(_do)
 
-    read_tensor_file_slice_into_routed._hswq_owner_routed = True
-    read_tensor_file_slice_into_routed._hswq_fastdisk_recoverable = True
-    read_tensor_file_slice_into_routed._hswq_fastdisk_original = original
-    mem.read_tensor_file_slice_into = read_tensor_file_slice_into_routed
+    read_tensor_file_slice_into_recoverable._hswq_fastdisk_recoverable = True
+    read_tensor_file_slice_into_recoverable._hswq_fastdisk_original = original
+    mem.read_tensor_file_slice_into = read_tensor_file_slice_into_recoverable
     return True
 
 
 def apply_comfy_aimdo_fastdisk_guard() -> bool:
-    """Install fast-disk support (single native aimdo owner thread). Idempotent."""
+    """Install fast-disk support (single owner thread for all aimdo native ops)."""
     global _APPLIED
     if _APPLIED:
         return True
 
     owner = get_owner()
-    ok_init = _wrap_control_init(owner)
-    ok_vbar = _wrap_vbar(owner)
-    ok_reads = _wrap_reads(owner)
+    ok_control = _patch_control(owner)
+    ok_hb = _patch_host_buffer(owner)
+    ok_vbar = _patch_model_vbar(owner)
+    ok_vram = _patch_vram_buffer(owner)
     ok_mem = _wrap_mem_slice(owner)
 
-    if ok_init or ok_vbar or ok_reads or ok_mem:
+    if ok_control or ok_hb or ok_vbar or ok_vram or ok_mem:
         _APPLIED = True
         logger.info(
             "[HSWQ FastDisk] v0.38 fast-disk support armed "
-            "(owner-thread init=%s vbar=%s reads=%s, safe slice=%s)",
-            ok_init, ok_vbar, ok_reads, ok_mem,
+            "(owner-thread: control=%s host_buffer=%s model_vbar=%s vram_buffer=%s "
+            "mem_slice=%s)",
+            ok_control, ok_hb, ok_vbar, ok_vram, ok_mem,
         )
         return True
     return False
