@@ -203,3 +203,27 @@ print(
     flush=True,
 )
 _try_patch()
+
+
+# --- ComfyUI v0.38 fast-disk support -----------------------------------------
+# Must run here (prestartup = before ComfyUI's init_devices and before any code
+# touches CUDA) so the dedicated aimdo reader thread owns the native reader's
+# CUDA binding. Installed last on purpose: it only wraps aimdo entry points.
+def _install_fastdisk_support() -> None:
+    try:
+        import importlib.util as _ilu2
+        import os as _os2
+
+        path = _os2.path.join(_ROOT, "patches", "comfy_aimdo_fastdisk_guard.py")
+        spec = _ilu2.spec_from_file_location("_hswq_fastdisk_guard", path)
+        mod = _ilu2.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.apply_comfy_aimdo_fastdisk_guard()
+    except Exception as e:  # noqa: BLE001
+        try:
+            print(f"[HSWQ FastDisk] support install failed: {e}", flush=True)
+        except Exception:
+            pass
+
+
+_install_fastdisk_support()
