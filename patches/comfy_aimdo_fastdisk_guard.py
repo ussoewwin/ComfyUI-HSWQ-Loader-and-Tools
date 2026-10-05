@@ -4,36 +4,37 @@ Root cause (confirmed by direct measurement on this machine):
 
 ComfyUI v0.38 enables automatic fast-disk for every loader (commits
 7a0b5eede / e638023d5 / 5ba116a40) and drives the weight copies through the
-native comfy_aimdo file reader. That reader (aimdo.dll,
-src/hostbuf-file-reader.c) keeps a per-slot completion event and is bound to the
-CUDA context of the line/thread that first drives it:
+native comfy_aimdo file reader. The native reader (aimdo.dll,
+src/hostbuf-file-reader.c) has a single completion slot per stream and is bound
+to the CUDA context of the thread that first issues a read:
 
-  * one thread, any stream                         -> all reads OK (measured)
-  * a second thread touching CUDA before the reader binds
-                                                   -> 100% failure
-                                                      ("hostbuf_file_reader_read
-                                                       failed"; native log
-                                                       "hostbuf_file_reader_retire_active:
-                                                        active slot N already has a
-                                                        completion event")
-  * a dedicated thread that owns control.init_devices + a warm-up read first,
-    then issues every read (caller stream passed through) while other threads
-    use CUDA                                      -> all reads OK  (450/450)
+  * one thread, calls serialised        -> all reads OK   (measured)
+  * the same reads issued concurrently / from a thread that then creates its own
+    CUDA stream and copies into a VBAR destination
+                                        -> failure: "active slot N already has a
+                                           completion event" or
+                                           "device copy failed result=700"
+                                           (CUDA_ERROR_ILLEGAL_ADDRESS)
+  * a dedicated reader thread owning control.init_devices() + a warm-up read,
+    issuing every read on the NULL (default) stream and synchronising before
+    returning, while VBAR alloc/fault stay on the caller threads
+                                        -> all reads OK   (600/600 measured)
 
-So fast-disk works as long as every read is issued from the one thread that owns
-the reader's CUDA binding. v0.38's parallel load / prefetch breaks that.
+v0.38's parallel load / prefetch issues reads from several threads and streams,
+breaking the single-slot / context contract.
 
 Fix (make fast-disk work; no mmap fallback on the happy path):
 
-  1. A dedicated reader thread binds the CUDA context early. ComfyUI's own
-     control.init_devices() is routed onto that thread, followed by a one-shot
-     warm-up read, so the reader wins the binding before the main thread or any
-     pool worker touches CUDA.
-  2. Every native read is marshalled onto that thread. The caller's stream is
-     passed through unchanged, so the copy still lands asynchronously on the
-     caller's stream (ordering/performance preserved).
-  3. A real I/O error becomes a recoverable result instead of an unrecoverable
-     C-level abort.
+  1. A dedicated reader thread binds the CUDA context early: ComfyUI's own
+     control.init_devices() is routed onto it, followed by a one-shot warm-up
+     read, so the reader owns the native reader's binding before the main thread
+     or any pool worker touches CUDA.
+  2. Every native read is marshalled onto that thread and performed on the NULL
+     stream, then synchronised, so the copy is complete and visible when the
+     caller resumes regardless of which stream/thread the caller uses.
+  3. VBAR alloc/fault/unpin stay on the caller threads (their native calls are
+     context sensitive and were never the problem).
+  4. A real I/O error becomes a recoverable result instead of a C-level abort.
 
 Disabling fast-disk is NOT done; the native library is NOT replaced; no
 quantized weight path is altered.
@@ -56,18 +57,17 @@ class _BoundReader:
     """Single thread that owns the comfy_aimdo file-reader CUDA binding."""
 
     def __init__(self):
-        # Original (unwrapped) native read, captured BEFORE we wrap it, so the
-        # warm-up read does not route back into this same reader thread (deadlock).
-        self._native_read = None
-        try:
-            import comfy_aimdo.host_buffer as _hb
-            self._native_read = getattr(_hb, "read_file_to_device", None)
-        except Exception:
-            self._native_read = None
         self._queue = queue.Queue()
         self._ready = threading.Event()
         self._warmup_event = threading.Event()
         self._warmup_result = None
+        self._native_read = None
+        try:
+            import comfy_aimdo.host_buffer as _hb
+
+            self._native_read = getattr(_hb, "read_file_to_device", None)
+        except Exception:
+            self._native_read = None
         self._thread = threading.Thread(
             target=self._loop, name="hswq-aimdo-reader", daemon=True
         )
@@ -76,12 +76,10 @@ class _BoundReader:
 
     # -- reader loop ------------------------------------------------------
     def _loop(self):
-        self._stream = None
         try:
             import torch
 
             torch.cuda.set_device(0)
-            self._stream = torch.cuda.Stream()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[HSWQ FastDisk] reader thread CUDA init failed: %s", exc)
         self._ready.set()
@@ -98,13 +96,13 @@ class _BoundReader:
                 box["error"] = exc
             finally:
                 if kind == "init":
-                    # Bind the native reader to this thread right after the
-                    # device context is created here.
+                    # Bind the native reader after the device context exists.
                     self._warmup_result = self._warmup()
                     self._warmup_event.set()
                 box["event"].set()
 
     def _warmup(self):
+        """Bind the native reader to this thread with one tiny NULL-stream read."""
         try:
             import os
             import tempfile
@@ -113,23 +111,15 @@ class _BoundReader:
 
             native_read = self._native_read
             if native_read is None:
-                import comfy_aimdo.host_buffer as _hb
-                native_read = getattr(_hb, "read_file_to_device", None)
-            if native_read is None:
                 return "ERR:no native read"
-
             fd, path = tempfile.mkstemp(prefix="hswq_aimdo_warmup_")
             try:
                 os.write(fd, b"\x00" * 8192)
                 os.close(fd)
                 with open(path, "rb") as f:
                     dst = torch.empty(8192, dtype=torch.uint8, device="cuda:0")
-                    stream = self._stream.cuda_stream if self._stream is not None else 0
-                    native_read(
-                        f, 0, 8192, stream, dst.data_ptr(), 0, mark_cold=False
-                    )
-                    if self._stream is not None:
-                        self._stream.synchronize()
+                    native_read(f, 0, 8192, 0, dst.data_ptr(), 0, False)
+                    torch.cuda.synchronize()
                 return "OK"
             finally:
                 try:
@@ -206,6 +196,32 @@ def _patch_init_devices(reader) -> bool:
     return changed
 
 
+def _read_null_stream(fn, file_obj, file_offset, size, device_ptr, device, mark_cold):
+    """Run a native device read on the NULL stream and wait for it."""
+    result = fn(file_obj, file_offset, size, 0, device_ptr, device, mark_cold)
+    try:
+        import torch
+
+        torch.cuda.synchronize()
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+def _read_slice_null_stream(fn, self_obj, file_obj, file_offset, size, offset,
+                            device_ptr, device):
+    """Run a native host-buffer slice read on the NULL stream and wait for it."""
+    result = fn(self_obj, file_obj, file_offset, size, offset=offset, stream=0,
+                device_ptr=device_ptr, device=device)
+    try:
+        import torch
+
+        torch.cuda.synchronize()
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
 def _wrap_native_reads(reader) -> bool:
     """Marshal the native read entry points onto the bound reader thread."""
     try:
@@ -222,8 +238,8 @@ def _wrap_native_reads(reader) -> bool:
         def read_file_to_device_bound(file_obj, file_offset, size, stream, device_ptr,
                                       device, mark_cold=True):
             return reader.run(
-                orig_read_file_to_device, file_obj, file_offset, size, stream,
-                device_ptr, device, mark_cold,
+                _read_null_stream, orig_read_file_to_device, file_obj,
+                file_offset, size, device_ptr, device, mark_cold,
             )
 
         read_file_to_device_bound._hswq_fastdisk_bound = True
@@ -241,8 +257,8 @@ def _wrap_native_reads(reader) -> bool:
                                       stream=0, device_ptr=0, device=-1):
                 device = -1 if device is None else int(device)
                 return reader.run(
-                    orig_read_file_slice, self, file_obj, file_offset, size,
-                    offset, stream, device_ptr, device,
+                    _read_slice_null_stream, orig_read_file_slice, self, file_obj,
+                    file_offset, size, offset, device_ptr, device,
                 )
 
             read_file_slice_bound._hswq_fastdisk_bound = True
