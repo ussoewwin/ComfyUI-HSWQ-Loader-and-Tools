@@ -61,6 +61,7 @@ class _Owner:
             self._native_read = getattr(_hb, "read_file_to_device", None)
         except Exception:
             self._native_read = None
+        self._tid = None
         self._thread = threading.Thread(
             target=self._loop, name="hswq-aimdo-owner", daemon=True
         )
@@ -68,6 +69,7 @@ class _Owner:
         self._ready.wait()
 
     def _loop(self):
+        self._tid = threading.get_ident()
         try:
             import torch
 
@@ -118,6 +120,15 @@ class _Owner:
                     pass
         except Exception as exc:  # noqa: BLE001
             return "ERR:%s" % exc
+
+    def on_owner(self):
+        return self._tid is not None and threading.get_ident() == self._tid
+
+    def call(self, fn, *args, **kwargs):
+        # Execute on the owner thread, unless we are already on it.
+        if self.on_owner():
+            return fn(*args, **kwargs)
+        return self.run(fn, *args, **kwargs)
 
     def run(self, fn, *args, timeout=None, **kwargs):
         box = {"event": threading.Event(), "result": None, "error": None}
@@ -242,7 +253,7 @@ def _wrap_reads(owner) -> bool:
     ):
         def read_file_to_device_routed(file_obj, file_offset, size, stream, device_ptr,
                                        device, mark_cold=True):
-            return owner.run(orig_read_file_to_device, file_obj, file_offset, size,
+            return owner.call(orig_read_file_to_device, file_obj, file_offset, size,
                              stream, device_ptr, device, mark_cold)
 
         read_file_to_device_routed._hswq_owner_routed = True
@@ -259,7 +270,7 @@ def _wrap_reads(owner) -> bool:
             def read_file_slice_routed(self, file_obj, file_offset, size, offset=0,
                                        stream=0, device_ptr=0, device=-1):
                 device = -1 if device is None else int(device)
-                return owner.run(orig_read_file_slice, self, file_obj, file_offset,
+                return owner.call(orig_read_file_slice, self, file_obj, file_offset,
                                  size, offset=offset, stream=stream,
                                  device_ptr=device_ptr, device=device)
 
@@ -271,7 +282,16 @@ def _wrap_reads(owner) -> bool:
     return changed
 
 
-def _wrap_mem_slice() -> bool:
+def _wrap_mem_slice(owner) -> bool:
+    """Route comfy.memory_management.read_tensor_file_slice_into onto the owner.
+
+    This is the entry point ComfyUI's weight-cast path actually calls
+    (comfy.model_management.cast_to_gathered). It runs on whatever thread issues
+    the transfer - including prefetch / parallel-load workers - so it must be
+    marshalled onto the same owner thread as the other native reads, otherwise a
+    non-bound thread drives the single reader slot and trips
+    "active slot N already has a completion event".
+    """
     try:
         import comfy.memory_management as mem
     except ImportError:
@@ -280,19 +300,23 @@ def _wrap_mem_slice() -> bool:
     original = getattr(mem, "read_tensor_file_slice_into", None)
     if original is None:
         return False
-    if getattr(original, "_hswq_fastdisk_recoverable", False):
+    if getattr(original, "_hswq_owner_routed", False):
         return True
 
-    def read_tensor_file_slice_into_recoverable(tensor, destination, stream=None, destination2=None):
-        try:
-            return original(tensor, destination, stream=stream, destination2=destination2)
-        except RuntimeError as exc:
-            logger.warning("[HSWQ FastDisk] native read failed: %s", exc)
-            return False
+    def read_tensor_file_slice_into_routed(tensor, destination, stream=None, destination2=None):
+        def _do():
+            try:
+                return original(tensor, destination, stream=stream, destination2=destination2)
+            except RuntimeError as exc:
+                logger.warning("[HSWQ FastDisk] native read failed: %s", exc)
+                return False
 
-    read_tensor_file_slice_into_recoverable._hswq_fastdisk_recoverable = True
-    read_tensor_file_slice_into_recoverable._hswq_fastdisk_original = original
-    mem.read_tensor_file_slice_into = read_tensor_file_slice_into_recoverable
+        return owner.call(_do)
+
+    read_tensor_file_slice_into_routed._hswq_owner_routed = True
+    read_tensor_file_slice_into_routed._hswq_fastdisk_recoverable = True
+    read_tensor_file_slice_into_routed._hswq_fastdisk_original = original
+    mem.read_tensor_file_slice_into = read_tensor_file_slice_into_routed
     return True
 
 
@@ -306,7 +330,7 @@ def apply_comfy_aimdo_fastdisk_guard() -> bool:
     ok_init = _wrap_control_init(owner)
     ok_vbar = _wrap_vbar(owner)
     ok_reads = _wrap_reads(owner)
-    ok_mem = _wrap_mem_slice()
+    ok_mem = _wrap_mem_slice(owner)
 
     if ok_init or ok_vbar or ok_reads or ok_mem:
         _APPLIED = True
