@@ -52,6 +52,55 @@ _OWNER = None
 _OWNER_LOCK = threading.Lock()
 
 
+_INFERENCE_MODE = None
+
+
+def _run_in_caller_modes(fn, args, kwargs):
+    """Execute a routed native comfy-aimdo call with comfy-caller semantics.
+
+    PyTorch inference/grad state is thread-local. ComfyUI creates weight
+    tensors under torch.inference_mode() on its worker threads; in-place
+    updates on those tensors (the copy inside read paths) are only allowed
+    while inference mode is active on the executing thread. Enter
+    inference_mode on the owner thread so those copies succeed. New tensors
+    created during the call are staging buffers only, so inference tensors
+    here are safe.
+    """
+    global _INFERENCE_MODE
+    if _INFERENCE_MODE is None:
+        try:
+            import torch
+
+            _INFERENCE_MODE = getattr(torch, "inference_mode", None)
+            if _INFERENCE_MODE is False:
+                _INFERENCE_MODE = None
+        except Exception:
+            _INFERENCE_MODE = False
+    if _INFERENCE_MODE:
+        with _INFERENCE_MODE():
+            return fn(*args, **kwargs)
+    return fn(*args, **kwargs)
+
+
+def _drain_device_copy(device_ptr):
+    """Wait for the async file->VRAM copy to finish before the next read.
+
+    The native reader keeps ONE slot whose completion event belongs to the
+    previous read; issuing a new read while the prior copy is still in flight
+    trips "active slot N already has a completion event" and then an illegal
+    device access. Blocking here makes the serialisation correct, not just
+    interleaving-safe.
+    """
+    if not device_ptr:
+        return
+    try:
+        import torch
+
+        torch.cuda.synchronize()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class _Owner:
     """Single thread that owns every native comfy_aimdo call."""
 
@@ -91,7 +140,7 @@ class _Owner:
             kind = job[0]
             fn, args, kwargs, box = job[1], job[2], job[3], job[4]
             try:
-                box["result"] = fn(*args, **kwargs)
+                box["result"] = _run_in_caller_modes(fn, args, kwargs)
             except BaseException as exc:  # noqa: BLE001
                 box["error"] = exc
             finally:
@@ -277,18 +326,56 @@ def _patch_host_buffer(owner) -> bool:
 
     changed = False
 
+    orig_read_file_to_device = getattr(hb, "read_file_to_device", None)
+    if orig_read_file_to_device is not None and not getattr(
+        orig_read_file_to_device, _MARK, False
+    ):
+        def read_file_to_device_routed(file_obj, file_offset, size, stream, device_ptr,
+                                       device, mark_cold=True):
+            def _do():
+                result = orig_read_file_to_device(file_obj, file_offset, size, stream,
+                                                  device_ptr, device, mark_cold)
+                # drain async file->VRAM copy before returning so the next read
+                # cannot hit the still-occupied reader slot
+                _drain_device_copy(device_ptr)
+                return result
+
+            return owner.call(_do)
+
+        setattr(read_file_to_device_routed, _MARK, True)
+        read_file_to_device_routed._hswq_original = orig_read_file_to_device
+        hb.read_file_to_device = read_file_to_device_routed
+        changed = True
+
     changed |= _route_functions(
-        owner, hb, ("read_file_to_device", "cleanup_file_reader")
+        owner, hb, ("cleanup_file_reader",)
     )
 
     HostBuffer = getattr(hb, "HostBuffer", None)
     if HostBuffer is not None:
         changed |= _route_methods(
             owner, HostBuffer,
-            ("__init__", "extend", "read_file_slice", "get_raw_address",
+            ("__init__", "extend", "get_raw_address",
              "register", "unregister", "truncate"),
             best_effort_names=("__del__",),
         )
+
+        orig_slice = getattr(HostBuffer, "read_file_slice", None)
+        if orig_slice is not None and not getattr(orig_slice, _MARK, False):
+            def read_file_slice_routed(self, file_obj, file_offset, size, offset=0,
+                                       stream=0, device_ptr=0, device=-1):
+                def _do():
+                    result = orig_slice(self, file_obj, file_offset, size, offset=offset,
+                                       stream=stream, device_ptr=device_ptr, device=device)
+                    _drain_device_copy(device_ptr)
+                    return result
+
+                return owner.call(_do)
+
+            setattr(read_file_slice_routed, _MARK, True)
+            read_file_slice_routed._hswq_original = orig_slice
+            HostBuffer.read_file_slice = read_file_slice_routed
+            changed = True
     return changed
 
 
@@ -307,13 +394,14 @@ def _patch_model_vbar(owner) -> bool:
 
     VBAR = getattr(mvbar, "ModelVBAR", None)
     if VBAR is not None:
-        # NOTE: alloc is pure python (pointer arithmetic) - not routed.
+        # alloc mutates self.offset, so route it too (keeps multi-model
+        # workers from handing out overlapping ranges).
         # fault / unpin are called by the routed module-level vbar_fault /
         # vbar_unpin; wrapping them too is safe because the thread-id bypass
         # runs them inline once we are on the owner.
         changed |= _route_methods(
             owner, VBAR,
-            ("__init__", "prioritize", "deprioritize", "fault", "unpin",
+            ("__init__", "prioritize", "deprioritize", "alloc", "fault", "unpin",
              "loaded_size", "set_watermark_limit", "set_watermark",
              "free_memory", "get_nr_pages", "get_watermark", "get_residency"),
             best_effort_names=("__del__",),
