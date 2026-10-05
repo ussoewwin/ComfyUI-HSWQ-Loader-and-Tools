@@ -40,6 +40,8 @@ _CTRL_PATCHED = False
 _CTRL_PATCHING = False
 _ORIG_IMPORT = builtins.__import__
 _PRODUCT_LOAD_UNET = None
+_DIT_LOCK_PATCHED = False
+_DIT_LOCK_PATCHING = False
 
 
 def _zimage_load_module():
@@ -182,8 +184,45 @@ def _patch_controlnet_int8() -> bool:
         _CTRL_PATCHING = False
 
 
+def _patch_dit_quant_lock() -> None:
+    """Install the DiT quantized-weight lock guard into comfy.ops at import time.
+
+    Replaces the old comfy/ops.py core edit (lost on every ComfyUI update).
+    Runs the moment comfy.ops finishes importing, before any model loader can
+    touch the cast paths. Anchor-checked; aborts loudly without partial apply.
+    """
+    global _DIT_LOCK_PATCHED, _DIT_LOCK_PATCHING
+    if _DIT_LOCK_PATCHED or _DIT_LOCK_PATCHING:
+        return
+    _DIT_LOCK_PATCHING = True
+    try:
+        import importlib.util as _ilu3
+        import os as _os3
+
+        path = _os3.path.join(_ROOT, "patches", "comfy_dit_quant_lock.py")
+        spec = _ilu3.spec_from_file_location("_hswq_dit_quant_lock", path)
+        mod = _ilu3.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if mod.apply_comfy_dit_quant_lock_patch():
+            _DIT_LOCK_PATCHED = True
+            print(
+                "[HSWQ DiT-lock] prestartup: comfy.ops quantized-weight lock "
+                "guard armed (no core edit needed)",
+                flush=True,
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"[HSWQ DiT-lock] comfy.ops import deferred: {e}", flush=True)
+    finally:
+        _DIT_LOCK_PATCHING = False
+
+
 def _import(name, globals=None, locals=None, fromlist=(), level=0):
     mod = _ORIG_IMPORT(name, globals, locals, fromlist, level)
+    if not _DIT_LOCK_PATCHED and not _DIT_LOCK_PATCHING and (
+        str(name) == "comfy.ops"
+        or (str(name) == "comfy" and any(str(x) == "ops" for x in (fromlist or ())))
+    ):
+        _patch_dit_quant_lock()
     if not _CTRL_PATCHED and not _CTRL_PATCHING and (
         str(name) == "comfy.controlnet"
         or (str(name) == "comfy" and any(str(x) == "controlnet" for x in (fromlist or ())))
@@ -227,3 +266,9 @@ def _install_fastdisk_support() -> None:
 
 
 _install_fastdisk_support()
+
+
+# Safety net: if comfy.ops somehow got imported before this hook could fire
+# (e.g. another prestartup script), arm the DiT-lock guard now anyway.
+if "comfy.ops" in sys.modules:
+    _patch_dit_quant_lock()
