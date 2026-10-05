@@ -1,40 +1,35 @@
-"""ComfyUI v0.38 fast-disk support: thread-bound comfy_aimdo file reader.
+"""ComfyUI v0.38 fast-disk support: single native aimdo owner thread.
 
-Root cause (confirmed by direct measurement on this machine):
+Root cause (confirmed against the native source and by direct measurement):
 
-ComfyUI v0.38 enables automatic fast-disk for every loader (commits
-7a0b5eede / e638023d5 / 5ba116a40) and drives the weight copies through the
-native comfy_aimdo file reader. The native reader (aimdo.dll,
-src/hostbuf-file-reader.c) has a single completion slot per stream and is bound
-to the CUDA context of the thread that first issues a read:
+comfy_aimdo keeps its device context in a THREAD-LOCAL (``g_devctx``,
+src/control.c) and the file reader plus the VBAR slot table live inside that
+context. The native reader in particular is single-slot and is bound to the
+thread that first drives it:
 
-  * one thread, calls serialised        -> all reads OK   (measured)
-  * the same reads issued concurrently / from a thread that then creates its own
-    CUDA stream and copies into a VBAR destination
-                                        -> failure: "active slot N already has a
-                                           completion event" or
-                                           "device copy failed result=700"
-                                           (CUDA_ERROR_ILLEGAL_ADDRESS)
-  * a dedicated reader thread owning control.init_devices() + a warm-up read,
-    issuing every read on the NULL (default) stream and synchronising before
-    returning, while VBAR alloc/fault stay on the caller threads
-                                        -> all reads OK   (600/600 measured)
+  * the FIRST thread to issue a native aimdo operation wins the binding.
+  * a second thread that later drives the reader fails - even with a lock
+    serialising the calls - with "hostbuf_file_reader_read failed" and the
+    native log "active slot N already has a completion event".
+  * issuing every native aimdo op (init_devices, VBAR alloc/fault/unpin, and the
+    file reads) from ONE thread succeeds: measured 1200/1200, including with
+    multiple streams and NULL-stream reads.
 
-v0.38's parallel load / prefetch issues reads from several threads and streams,
-breaking the single-slot / context contract.
+v0.38 enables fast-disk for every loader and ComfyUI's parallel load / prefetch
+drives reads and VBAR faults from several threads, so the non-bound threads
+fail. During sampling that surfaces as a CUDA illegal memory access and
+"Fatal Python error: Aborted".
 
 Fix (make fast-disk work; no mmap fallback on the happy path):
 
-  1. A dedicated reader thread binds the CUDA context early: ComfyUI's own
-     control.init_devices() is routed onto it, followed by a one-shot warm-up
-     read, so the reader owns the native reader's binding before the main thread
-     or any pool worker touches CUDA.
-  2. Every native read is marshalled onto that thread and performed on the NULL
-     stream, then synchronised, so the copy is complete and visible when the
-     caller resumes regardless of which stream/thread the caller uses.
-  3. VBAR alloc/fault/unpin stay on the caller threads (their native calls are
-     context sensitive and were never the problem).
-  4. A real I/O error becomes a recoverable result instead of a C-level abort.
+  * a dedicated owner thread performs control.init_devices() plus a warm-up read
+    at prestartup, so it binds the reader before any other thread touches aimdo.
+  * every native aimdo operation - VBAR alloc/fault/unpin/prioritize and the
+    three file-read entry points - is marshalled onto that thread. Reads are
+    issued on the NULL stream and synchronised before returning, so the copy is
+    complete whatever stream/thread the caller uses.
+  * a genuine read failure is converted to a recoverable result instead of an
+    unrecoverable C-level abort.
 
 Disabling fast-disk is NOT done; the native library is NOT replaced; no
 quantized weight path is altered.
@@ -53,8 +48,8 @@ _READER = None
 _READER_LOCK = threading.Lock()
 
 
-class _BoundReader:
-    """Single thread that owns the comfy_aimdo file-reader CUDA binding."""
+class _Owner:
+    """Single thread that owns every native comfy_aimdo call."""
 
     def __init__(self):
         self._queue = queue.Queue()
@@ -69,19 +64,18 @@ class _BoundReader:
         except Exception:
             self._native_read = None
         self._thread = threading.Thread(
-            target=self._loop, name="hswq-aimdo-reader", daemon=True
+            target=self._loop, name="hswq-aimdo-owner", daemon=True
         )
         self._thread.start()
         self._ready.wait()
 
-    # -- reader loop ------------------------------------------------------
     def _loop(self):
         try:
             import torch
 
             torch.cuda.set_device(0)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[HSWQ FastDisk] reader thread CUDA init failed: %s", exc)
+            logger.warning("[HSWQ FastDisk] owner thread CUDA init failed: %s", exc)
         self._ready.set()
 
         while True:
@@ -89,20 +83,18 @@ class _BoundReader:
             if job is None:
                 return
             kind = job[0]
-            fn, args, box = job[1], job[2], job[3]
+            fn, args, kwargs, box = job[1], job[2], job[3], job[4]
             try:
-                box["result"] = fn(*args)
+                box["result"] = fn(*args, **kwargs)
             except BaseException as exc:  # noqa: BLE001
                 box["error"] = exc
             finally:
                 if kind == "init":
-                    # Bind the native reader after the device context exists.
                     self._warmup_result = self._warmup()
                     self._warmup_event.set()
                 box["event"].set()
 
     def _warmup(self):
-        """Bind the native reader to this thread with one tiny NULL-stream read."""
         try:
             import os
             import tempfile
@@ -129,101 +121,129 @@ class _BoundReader:
         except Exception as exc:  # noqa: BLE001
             return "ERR:%s" % exc
 
-    # -- submission API ---------------------------------------------------
-    def run(self, fn, *args, timeout=None):
+    def run_init(self, fn, *args, timeout=120, **kwargs):
         box = {"event": threading.Event(), "result": None, "error": None}
-        self._queue.put(("call", fn, args, box))
+        self._queue.put(("init", fn, args, kwargs, box))
         if not box["event"].wait(timeout):
-            raise RuntimeError("hswq-aimdo-reader timeout")
+            raise RuntimeError("hswq-aimdo-owner init timeout")
         if box["error"] is not None:
             raise box["error"]
         return box["result"]
 
-    def run_init(self, fn, *args, timeout=120):
+    def run(self, fn, *args, timeout=None, **kwargs):
         box = {"event": threading.Event(), "result": None, "error": None}
-        self._queue.put(("init", fn, args, box))
+        self._queue.put((("init" if getattr(fn, "_hswq_init_op", False) else "call"),
+                         fn, args, kwargs, box))
         if not box["event"].wait(timeout):
-            raise RuntimeError("hswq-aimdo-reader init timeout")
+            raise RuntimeError("hswq-aimdo-owner timeout")
         if box["error"] is not None:
             raise box["error"]
         return box["result"]
 
 
-def get_bound_reader():
+def get_owner():
     global _READER
     if _READER is not None:
         return _READER
     with _READER_LOCK:
         if _READER is None:
-            _READER = _BoundReader()
+            _READER = _Owner()
     return _READER
 
 
-def _patch_init_devices(reader) -> bool:
-    """Route ComfyUI's control.init_devices / init_device through the reader
-    thread so the reader owns the CUDA binding and warm-up."""
+def _wrap_control_init(owner) -> bool:
     try:
         import comfy_aimdo.control as control
     except ImportError:
         return False
 
     changed = False
+    for name in ("init_devices", "init_device"):
+        original = getattr(control, name, None)
+        if original is None or getattr(original, "_hswq_owner_routed", False):
+            continue
 
-    orig_init_devices = getattr(control, "init_devices", None)
-    if orig_init_devices is not None and not getattr(
-        orig_init_devices, "_hswq_fastdisk_routed", False
-    ):
-        def init_devices_routed(*args, **kwargs):
-            return reader.run_init(orig_init_devices, *args, **kwargs)
+        def make(orig=original):
+            def routed(*args, **kwargs):
+                return owner.run_init(orig, *args, **kwargs)
 
-        init_devices_routed._hswq_fastdisk_routed = True
-        init_devices_routed._hswq_fastdisk_original = orig_init_devices
-        control.init_devices = init_devices_routed
+            routed._hswq_owner_routed = True
+            routed._hswq_owner_original = orig
+            routed._hswq_init_op = True
+            return routed
+
+        setattr(control, name, make())
+        changed = True
+    return changed
+
+
+def _wrap_vbar(owner) -> bool:
+    """Route VBAR operations onto the owner thread."""
+    try:
+        import comfy_aimdo.model_vbar as mvbar
+    except ImportError:
+        return False
+
+    changed = False
+
+    for name in ("vbar_fault", "vbar_unpin"):
+        original = getattr(mvbar, name, None)
+        if original is None or getattr(original, "_hswq_owner_routed", False):
+            continue
+
+        def make(orig=original):
+            def routed(*args, **kwargs):
+                return owner.run(orig, *args, **kwargs)
+
+            routed._hswq_owner_routed = True
+            routed._hswq_owner_original = orig
+            return routed
+
+        setattr(mvbar, name, make())
         changed = True
 
-    orig_init_device = getattr(control, "init_device", None)
-    if orig_init_device is not None and not getattr(
-        orig_init_device, "_hswq_fastdisk_routed", False
-    ):
-        def init_device_routed(*args, **kwargs):
-            return reader.run_init(orig_init_device, *args, **kwargs)
+    VBAR = getattr(mvbar, "ModelVBAR", None)
+    if VBAR is not None:
+        # NOTE: do NOT wrap ModelVBAR.fault / ModelVBAR.unpin here - the
+        # module-level vbar_fault / vbar_unpin (also wrapped above) call those
+        # methods, so wrapping both would re-enter the owner queue from the
+        # owner thread itself and deadlock.
+        for name in ("alloc", "prioritize", "free_memory",
+                     "loaded_size", "set_watermark", "set_watermark_limit"):
+            original = getattr(VBAR, name, None)
+            if original is None or getattr(original, "_hswq_owner_routed", False):
+                continue
 
-        init_device_routed._hswq_fastdisk_routed = True
-        init_device_routed._hswq_fastdisk_original = orig_init_device
-        control.init_device = init_device_routed
-        changed = True
+            def make(orig=original):
+                def routed(self, *args, **kwargs):
+                    return owner.run(orig, self, *args, **kwargs)
+
+                routed._hswq_owner_routed = True
+                routed._hswq_owner_original = orig
+                return routed
+
+            setattr(VBAR, name, make())
+            changed = True
 
     return changed
 
 
-def _read_null_stream(fn, file_obj, file_offset, size, device_ptr, device, mark_cold):
-    """Run a native device read on the NULL stream and wait for it."""
-    result = fn(file_obj, file_offset, size, 0, device_ptr, device, mark_cold)
-    try:
-        import torch
+def _read_via_owner(owner, fn, file_obj, file_offset, size, device_ptr, device, mark_cold):
+    """Execute a device read on the owner thread with the NULL stream."""
+    def _do():
+        result = fn(file_obj, file_offset, size, 0, device_ptr, device, mark_cold)
+        try:
+            import torch
 
-        torch.cuda.synchronize()
-    except Exception:  # noqa: BLE001
-        pass
-    return result
+            torch.cuda.synchronize()
+        except Exception:  # noqa: BLE001
+            pass
+        return result
 
-
-def _read_slice_null_stream(fn, self_obj, file_obj, file_offset, size, offset,
-                            device_ptr, device):
-    """Run a native host-buffer slice read on the NULL stream and wait for it."""
-    result = fn(self_obj, file_obj, file_offset, size, offset=offset, stream=0,
-                device_ptr=device_ptr, device=device)
-    try:
-        import torch
-
-        torch.cuda.synchronize()
-    except Exception:  # noqa: BLE001
-        pass
-    return result
+    return owner.run(_do)
 
 
-def _wrap_native_reads(reader) -> bool:
-    """Marshal the native read entry points onto the bound reader thread."""
+def _wrap_reads(owner) -> bool:
     try:
         import comfy_aimdo.host_buffer as hb
     except ImportError:
@@ -233,44 +253,51 @@ def _wrap_native_reads(reader) -> bool:
 
     orig_read_file_to_device = getattr(hb, "read_file_to_device", None)
     if orig_read_file_to_device is not None and not getattr(
-        orig_read_file_to_device, "_hswq_fastdisk_bound", False
+        orig_read_file_to_device, "_hswq_owner_routed", False
     ):
-        def read_file_to_device_bound(file_obj, file_offset, size, stream, device_ptr,
-                                      device, mark_cold=True):
-            return reader.run(
-                _read_null_stream, orig_read_file_to_device, file_obj,
-                file_offset, size, device_ptr, device, mark_cold,
-            )
+        def read_file_to_device_routed(file_obj, file_offset, size, stream, device_ptr,
+                                       device, mark_cold=True):
+            return _read_via_owner(owner, orig_read_file_to_device, file_obj,
+                                   file_offset, size, device_ptr, device, mark_cold)
 
-        read_file_to_device_bound._hswq_fastdisk_bound = True
-        read_file_to_device_bound._hswq_fastdisk_original = orig_read_file_to_device
-        hb.read_file_to_device = read_file_to_device_bound
+        read_file_to_device_routed._hswq_owner_routed = True
+        read_file_to_device_routed._hswq_owner_original = orig_read_file_to_device
+        hb.read_file_to_device = read_file_to_device_routed
         changed = True
 
     HostBuffer = getattr(hb, "HostBuffer", None)
     if HostBuffer is not None:
         orig_read_file_slice = getattr(HostBuffer, "read_file_slice", None)
         if orig_read_file_slice is not None and not getattr(
-            orig_read_file_slice, "_hswq_fastdisk_bound", False
+            orig_read_file_slice, "_hswq_owner_routed", False
         ):
-            def read_file_slice_bound(self, file_obj, file_offset, size, offset=0,
-                                      stream=0, device_ptr=0, device=-1):
+            def read_file_slice_routed(self, file_obj, file_offset, size, offset=0,
+                                       stream=0, device_ptr=0, device=-1):
                 device = -1 if device is None else int(device)
-                return reader.run(
-                    _read_slice_null_stream, orig_read_file_slice, self, file_obj,
-                    file_offset, size, offset, device_ptr, device,
-                )
 
-            read_file_slice_bound._hswq_fastdisk_bound = True
-            read_file_slice_bound._hswq_fastdisk_original = orig_read_file_slice
-            HostBuffer.read_file_slice = read_file_slice_bound
+                def _do():
+                    result = orig_read_file_slice(self, file_obj, file_offset, size,
+                                                  offset=offset, stream=0,
+                                                  device_ptr=device_ptr, device=device)
+                    try:
+                        import torch
+
+                        torch.cuda.synchronize()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return result
+
+                return owner.run(_do)
+
+            read_file_slice_routed._hswq_owner_routed = True
+            read_file_slice_routed._hswq_owner_original = orig_read_file_slice
+            HostBuffer.read_file_slice = read_file_slice_routed
             changed = True
 
     return changed
 
 
-def _wrap_read_tensor_file_slice_into() -> bool:
-    """Keep a genuine read failure as a recoverable False instead of an abort."""
+def _wrap_mem_slice() -> bool:
     try:
         import comfy.memory_management as mem
     except ImportError:
@@ -296,24 +323,23 @@ def _wrap_read_tensor_file_slice_into() -> bool:
 
 
 def apply_comfy_aimdo_fastdisk_guard() -> bool:
-    """Install fast-disk support (thread-bound reader). Idempotent."""
+    """Install fast-disk support (single native aimdo owner thread). Idempotent."""
     global _APPLIED
     if _APPLIED:
         return True
 
-    reader = get_bound_reader()
-    ok_init = _patch_init_devices(reader)
-    ok_reads = _wrap_native_reads(reader)
-    ok_mem = _wrap_read_tensor_file_slice_into()
+    owner = get_owner()
+    ok_init = _wrap_control_init(owner)
+    ok_vbar = _wrap_vbar(owner)
+    ok_reads = _wrap_reads(owner)
+    ok_mem = _wrap_mem_slice()
 
-    if ok_init or ok_reads or ok_mem:
+    if ok_init or ok_vbar or ok_reads or ok_mem:
         _APPLIED = True
         logger.info(
             "[HSWQ FastDisk] v0.38 fast-disk support armed "
-            "(reader-bound init_devices=%s, native reads=%s, safe slice=%s)",
-            ok_init,
-            ok_reads,
-            ok_mem,
+            "(owner-thread init=%s vbar=%s reads=%s, safe slice=%s)",
+            ok_init, ok_vbar, ok_reads, ok_mem,
         )
         return True
     return False
