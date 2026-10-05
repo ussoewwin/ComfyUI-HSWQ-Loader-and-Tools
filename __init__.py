@@ -683,7 +683,13 @@ except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ FP8 E4M3 UNet Loader not registered: %s", e)
 
 try:
-    from .patches.comfy_quant_int8 import install_int8_option_dispatch
+    from .patches.comfy_quant_int8 import (
+        install_int8_option_dispatch,
+        _patch_comfy_kitchen_rms_rope_fallback,
+        _patch_comfy_kitchen_int8_gemm_fallback,
+    )
+    _patch_comfy_kitchen_rms_rope_fallback()
+    _patch_comfy_kitchen_int8_gemm_fallback()
     install_int8_option_dispatch(NODE_CLASS_MAPPINGS)
 except Exception as e:
     logger.exception("[HSWQ INT8] install_int8_option_dispatch: %s", e)

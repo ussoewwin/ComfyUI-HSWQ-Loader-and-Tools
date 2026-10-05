@@ -238,6 +238,15 @@ class HSWQControlNetLoader:
             return (control,)
 
         if _has_int8_comfy_quant(sd):
+            try:
+                from ..patches.comfy_quant_int8 import (
+                    _patch_comfy_kitchen_rms_rope_fallback,
+                    _patch_comfy_kitchen_int8_gemm_fallback,
+                )
+                _patch_comfy_kitchen_rms_rope_fallback()
+                _patch_comfy_kitchen_int8_gemm_fallback()
+            except Exception:
+                pass
             model_options = {
                 # Build the module graph in float; quantized weights are
                 # attached by MixedPrecisionOps during state_dict load.

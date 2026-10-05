@@ -304,6 +304,15 @@ class HSWQModelPatchLoaderCustom:
         int8_checkpoint = _has_int8_comfy_quant(sd)
 
         if int8_checkpoint:
+            try:
+                from ..patches.comfy_quant_int8 import (
+                    _patch_comfy_kitchen_rms_rope_fallback,
+                    _patch_comfy_kitchen_int8_gemm_fallback,
+                )
+                _patch_comfy_kitchen_rms_rope_fallback()
+                _patch_comfy_kitchen_int8_gemm_fallback()
+            except Exception:
+                pass
             dtype = _get_default_compute_dtype()
             operations = _int8_mixed_precision_ops(compute_dtype=dtype)
             logger.info(

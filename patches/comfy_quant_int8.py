@@ -2176,6 +2176,7 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
     and GPU GEMM exceptions by falling back to float precision instead of crashing.
     """
     global _COMFY_KITCHEN_INT8_FALLBACK_PATCHED
+    _patch_comfy_kitchen_rms_rope_fallback()
     if _COMFY_KITCHEN_INT8_FALLBACK_PATCHED:
         return True
 
@@ -2527,6 +2528,207 @@ def _patch_comfy_kitchen_int8_gemm_fallback() -> bool:
     if applied:
         _COMFY_KITCHEN_INT8_FALLBACK_PATCHED = True
         logger.info("[HSWQ INT8] comfy_kitchen TensorWiseINT8 unaligned GEMM fallback patch armed (%s)", ", ".join(applied))
+        return True
+    return False
+
+
+_COMFY_KITCHEN_RMS_ROPE_FALLBACK_PATCHED = False
+
+
+def _patch_comfy_kitchen_rms_rope_fallback() -> bool:
+    """Patch comfy_kitchen's rms_rope, rms_rope1, and registry dispatch
+    to safely execute on Blackwell (sm_120) and any GPU where CUDA fused
+    RMS-RoPE causes std::abort() or missing kernel image, falling back seamlessly
+    to eager PyTorch implementation.
+    """
+    global _COMFY_KITCHEN_RMS_ROPE_FALLBACK_PATCHED
+    if _COMFY_KITCHEN_RMS_ROPE_FALLBACK_PATCHED:
+        return True
+
+    applied = []
+    import torch
+
+    try:
+        import comfy_kitchen as ck
+        import comfy_kitchen.backends.eager.rope as eager_rope
+        from comfy_kitchen.registry import registry
+
+        is_blackwell = False
+        if torch.cuda.is_available():
+            try:
+                cap = torch.cuda.get_device_capability(torch.cuda.current_device())
+                is_blackwell = (cap[0] >= 10)
+            except Exception:
+                is_blackwell = False
+
+        # 1. Modify registry capabilities: if Blackwell (or always as safety),
+        # remove rms_rope operations from 'cuda' backend capabilities so registry dispatch
+        # (used by torch.ops.comfy_kitchen.rms_rope) routes to 'eager' instead of 'cuda'
+        cuda_caps = registry._capabilities.get("cuda", set())
+        rms_rope_ops = (
+            "rms_rope",
+            "rms_rope1",
+            "rms_rope_",
+            "rms_rope1_",
+            "rms_rope_split_half",
+            "rms_rope_split_half1",
+            "rms_rope_split_half_",
+            "rms_rope_split_half1_",
+        )
+        if is_blackwell:
+            for op in rms_rope_ops:
+                cuda_caps.discard(op)
+            applied.append("registry cuda capabilities filtered")
+
+        # 2. Safe wrapper for rms_rope
+        orig_ck_rms_rope = getattr(ck, "rms_rope", None)
+
+        def _safe_rms_rope(q, k, freqs_cis, q_scale, k_scale=None, epsilon=1e-6):
+            if k_scale is None:
+                k_scale = q_scale
+            if q_scale is not None and (q_scale.device != q.device or q_scale.dtype != q.dtype):
+                q_scale = q_scale.to(device=q.device, dtype=q.dtype)
+            if k_scale is not None and (k_scale.device != k.device or k_scale.dtype != k.dtype):
+                k_scale = k_scale.to(device=k.device, dtype=k.dtype)
+            if freqs_cis is not None and freqs_cis.device != q.device:
+                freqs_cis = freqs_cis.to(device=q.device)
+
+            cur_blackwell = False
+            if q.is_cuda:
+                try:
+                    c = torch.cuda.get_device_capability(q.device)
+                    cur_blackwell = (c[0] >= 10)
+                except Exception:
+                    pass
+
+            if cur_blackwell or is_blackwell:
+                return eager_rope.rms_rope(q, k, freqs_cis, q_scale, k_scale, epsilon)
+
+            try:
+                if orig_ck_rms_rope is not None:
+                    return orig_ck_rms_rope(q, k, freqs_cis, q_scale, k_scale, epsilon)
+                return eager_rope.rms_rope(q, k, freqs_cis, q_scale, k_scale, epsilon)
+            except Exception:
+                return eager_rope.rms_rope(q, k, freqs_cis, q_scale, k_scale, epsilon)
+
+        _safe_rms_rope._hswq_safe_rms_rope = True
+
+        # 3. Safe wrapper for rms_rope1
+        orig_ck_rms_rope1 = getattr(ck, "rms_rope1", None)
+
+        def _safe_rms_rope1(x, freqs_cis, scale, epsilon=1e-6):
+            if scale is not None and (scale.device != x.device or scale.dtype != x.dtype):
+                scale = scale.to(device=x.device, dtype=x.dtype)
+            if freqs_cis is not None and freqs_cis.device != x.device:
+                freqs_cis = freqs_cis.to(device=x.device)
+
+            cur_blackwell = False
+            if x.is_cuda:
+                try:
+                    c = torch.cuda.get_device_capability(x.device)
+                    cur_blackwell = (c[0] >= 10)
+                except Exception:
+                    pass
+
+            if cur_blackwell or is_blackwell:
+                return eager_rope.rms_rope1(x, freqs_cis, scale, epsilon)
+
+            try:
+                if orig_ck_rms_rope1 is not None:
+                    return orig_ck_rms_rope1(x, freqs_cis, scale, epsilon)
+                return eager_rope.rms_rope1(x, freqs_cis, scale, epsilon)
+            except Exception:
+                return eager_rope.rms_rope1(x, freqs_cis, scale, epsilon)
+
+        _safe_rms_rope1._hswq_safe_rms_rope = True
+
+        # 4. Patch comfy_kitchen module root
+        ck.rms_rope = _safe_rms_rope
+        ck.rms_rope1 = _safe_rms_rope1
+        applied.append("comfy_kitchen.rms_rope")
+
+        # 5. Patch comfy.quant_ops.ck
+        try:
+            import comfy.quant_ops as comfy_qo
+            if hasattr(comfy_qo, "ck"):
+                comfy_qo.ck.rms_rope = _safe_rms_rope
+                comfy_qo.ck.rms_rope1 = _safe_rms_rope1
+                applied.append("comfy.quant_ops.ck")
+        except Exception:
+            pass
+
+        # 6. Patch comfy_kitchen.backends.cuda
+        try:
+            import comfy_kitchen.backends.cuda as ck_cuda
+            ck_cuda.rms_rope = _safe_rms_rope
+            ck_cuda.rms_rope1 = _safe_rms_rope1
+            if hasattr(ck_cuda, "_rms_rope_cuda"):
+                ck_cuda._rms_rope_cuda = _safe_rms_rope
+            if hasattr(ck_cuda, "_rms_rope1_cuda"):
+                ck_cuda._rms_rope1_cuda = _safe_rms_rope1
+            applied.append("ck.backends.cuda")
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.debug("[HSWQ INT8] comfy_kitchen rms_rope fallback patch error: %s", e)
+
+    # 7. Additional safety guard: patch JointAttention.forward in comfy.ldm.lumina.model
+    # so that if anything fails during execution, it safely falls back to standard eager forward!
+    try:
+        import comfy.ldm.lumina.model as lumina_model
+        JointAttention = getattr(lumina_model, "JointAttention", None)
+        if JointAttention is not None and not getattr(JointAttention, "_hswq_safe_ja_forward", False):
+            orig_ja_forward = JointAttention.forward
+
+            def _safe_ja_forward(self, x, x_mask, freqs_cis, transformer_options={}):
+                try:
+                    return orig_ja_forward(self, x, x_mask, freqs_cis, transformer_options=transformer_options)
+                except Exception as exc:
+                    logger.warning("[HSWQ] JointAttention forward fallback triggered (%s)", exc)
+                    bsz, seqlen, _ = x.shape
+                    xq, xk, xv = torch.split(
+                        self.qkv(x),
+                        [
+                            self.n_local_heads * self.head_dim,
+                            self.n_local_kv_heads * self.head_dim,
+                            self.n_local_kv_heads * self.head_dim,
+                        ],
+                        dim=-1,
+                    )
+                    xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+                    xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+                    xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+                    if self.qk_norm:
+                        xq = self.q_norm(xq)
+                        xk = self.k_norm(xk)
+                    from comfy.ldm.flux.math import apply_rope
+                    xq, xk = apply_rope(xq, xk, freqs_cis)
+                    n_rep = self.n_local_heads // self.n_local_kv_heads
+                    if n_rep > 1:
+                        xk = xk.unsqueeze(3).repeat(1, 1, 1, n_rep, 1).flatten(2, 3)
+                        xv = xv.unsqueeze(3).repeat(1, 1, 1, n_rep, 1).flatten(2, 3)
+                    from comfy.ldm.modules.attention import AttentionTensorContainer, optimized_attention_masked
+                    xq_c = AttentionTensorContainer(xq.movedim(1, 2))
+                    xk_c = AttentionTensorContainer(xk.movedim(1, 2))
+                    xv_c = AttentionTensorContainer(xv.movedim(1, 2))
+                    preferred_attn = getattr(self, "comfy_attention", None)
+                    output = optimized_attention_masked(
+                        xq_c, xk_c, xv_c, self.n_local_heads, x_mask,
+                        skip_reshape=True, transformer_options=transformer_options,
+                        preferred_attention=preferred_attn,
+                    )
+                    return self.out(output)
+
+            _safe_ja_forward._hswq_safe_ja_forward = True
+            JointAttention.forward = _safe_ja_forward
+            applied.append("JointAttention.forward guard")
+    except Exception as e:
+        logger.debug("[HSWQ INT8] JointAttention patch error: %s", e)
+
+    if applied:
+        _COMFY_KITCHEN_RMS_ROPE_FALLBACK_PATCHED = True
+        logger.info("[HSWQ INT8] comfy_kitchen rms_rope Blackwell/eager fallback patch armed (%s)", ", ".join(applied))
         return True
     return False
 
@@ -3119,6 +3321,8 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
 def apply_comfy_quant_int8_patches() -> bool:
     """Install INT8 comfy_quant patches once. Returns True if applied (or already applied)."""
     global _PATCHES_APPLIED
+    _patch_comfy_kitchen_rms_rope_fallback()
+    _patch_comfy_kitchen_int8_gemm_fallback()
     ok_keys = _patch_load_lora_key_counts()
     ok_name = _patch_lora_loader_name_context()
     ok_path = _patch_loras_folder_path_name()
@@ -3516,7 +3720,10 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
     if not isinstance(node_class_mappings, dict):
         return False
 
-    # Do NOT apply INT8 patches at node registration / import.
+    # Always arm kitchen safety fallbacks (GEMM + Blackwell rms_rope) to prevent C++ aborts.
+    _patch_comfy_kitchen_rms_rope_fallback()
+    _patch_comfy_kitchen_int8_gemm_fallback()
+
     # Patches install only inside load_unet_hswq_weight_dtype /
     # load_checkpoint_sdxl_hswq_weight_dtype when INT8 is actually loaded.
 
