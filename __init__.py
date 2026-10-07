@@ -185,6 +185,26 @@ except Exception:
     logger.exception("LATENT None-guard not applied")
 
 # HSWQ Ultimate SD Upscale: apply copy_ / FP8 bias / embedder / Lumina compat patches in this extension
+# Distorch purge gate reconciliation API (patches/hswq_purge_rearm.py).
+# Pure function module - installs nothing, patches nothing. DisTorchPurgeVRAMV2
+# (HSWQ toggle) calls hswq_purge_rearm_state() AFTER it peels the ZI / Krea2 /
+# SDXL-product / INT8 overlays for an SDXL handoff. The peel side knows the
+# wrappers, not the module-level apply gates (_PATCHES_APPLIED / _APPLIED /
+# _GPU_BAKE_INSTALLED / _PARITY_APPLIED). If the NEXT prompt reloads Z Image
+# ConvRot NVFP4, Qwen/ControlNet ConvRot INT8, Krea2 or SDXL in the same
+# process, a stale gate could skip re-application and sample on a half-peeled
+# stack (alternating good/bad prompts, 2026-10-07). hswq_purge_rearm_state()
+# inspects live wrapper stamps and resets ONLY the gate whose family layer is
+# actually missing (branch separation: each family has an independent
+# predicate and its own global), so the next load re-applies via the
+# legitimate install path. Safe to call repeatedly on a healthy stack.
+try:
+    from .patches import hswq_purge_rearm as _hswq_purge_rearm  # noqa: F401
+    logger.info("HSWQ purge-rearm reconciliation API registered")
+except Exception:
+    logger.exception("HSWQ purge-rearm module import failed")
+
+
 try:
     from .usdu_compat_patches import apply_usdu_compat_patches
     apply_usdu_compat_patches()
