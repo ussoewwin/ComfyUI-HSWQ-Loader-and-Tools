@@ -7,7 +7,13 @@
   </tr>
 </table>
 
-## Version 3.5.6
+## Version 3.5.7
+
+- **修复**：**ComfyUI v0.38 fast-disk 原生读取崩溃/失效** -- v0.38 将 comfy-aimdo 存储读取迁移到 fast-disk 专用路径，跨线程调用原生读取会崩溃或静默失败。新增 prestartup 守卫（patches/comfy_aimdo_fastdisk_guard.py）：把全部原生 aimdo 读写绑定到单一 owner 线程、原生调用在调用线程上直跑（不经队列跳转）、图捕获读取保持 inline、卡死的读取槽自动复位、原生路径失败回退 mmap -- 恢复 v0.36 级稳定性，fast-disk 保持启用。
+- **新增**：**Distorch HSWQ purge 的清除闸门复位 API** -- patches/hswq_purge_rearm.py 新增 hswq_purge_rearm_state()；DisTorch purge（DisTorchPurgeVRAMV2 Method 2d）为模型交接剥离 HSWQ 叠层后，各家族残留的模块级 apply 闸门被复位，下一个 prompt（Z Image ConvRot NVFP4 / Qwen + ControlNet ConvRot INT8 / Krea2 / SDXL）在同一进程内干净重载，不再继承被剥离的状态。消除连续 prompt 交替出坏图的竞态。
+- **新增**：**DiT 量化权重锁改为节点补丁** -- DiT quant-lock 守卫从 comfy/ops.py 核心改动（每次 ComfyUI 更新都会丢失）迁移到 patches/comfy_dit_quant_lock.py，经 prestartup 钩子在导入时安装并做锚点校验。ComfyUI 更新后无需再改核心文件。
+- **修复**：**Lumina2 在 Blackwell（sm_120）上崩溃** -- comfy_kitchen 的 rms_rope 无 sm_120 内核；patches/comfy_quant_int8.py 改为安装安全 fallback，不再让 C++ 后端直接 abort 进程。
+- 详细见 [发行说明 v3.5.7](v3.5.7.md)。## Version 3.5.6
 
 - **修复**：**CPU 文本编码器路径上的 INT8 Linear dtype 不一致** —— 使用 `comfy_kitchen` **0.2.36**（ComfyUI 2026-09-30）时，`TensorWiseINT8Layout.dequantize()` 现在会把反量化后的张量恢复为 **`params.orig_dtype`**（bfloat16）。而 `patches/comfy_quant_int8.py` 中 HSWQ 的 INT8 **非对齐 GEMM 回退**会把 **bfloat16 权重** 连同 **float32 激活** 传给 `torch.nn.functional.linear()`，抛出 `self and mat2 must have the same dtype, but got Float and BFloat16`。当 CLIP/文本编码器运行在 **CPU** 时触发（例如 `CLIPLoaderMultiGPU` 设 `device=cpu` —— 已在 Qwen-Image ConvRot INT8 文本编码器上复现）。现在回退在调用 `F.linear` 之前会把 weight/bias 转换为解析出的 `out_dtype`（激活 dtype）。**仅 CPU 回归**：CUDA 对齐路径走真正的 `int8_linear` 内核，从不受影响；INT8 权重仍以 INT8 常驻 VRAM，只有回退路径会反量化。
 - 详情见 [发布说明 v3.5.6](v3.5.6.md)。
