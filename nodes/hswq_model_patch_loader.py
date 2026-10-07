@@ -33,7 +33,6 @@ source's ``_model_patch_cpu_offload_apply``), which keeps the stock
 from __future__ import annotations
 
 import json
-import contextlib
 import logging
 
 import torch
@@ -275,35 +274,6 @@ def _int8_mixed_precision_ops(compute_dtype: torch.dtype | None = None):
     )
 
 
-@contextlib.contextmanager
-def _silence_lazy_op_state_dict_warnings():
-    """Suppress the benign core warning while introspecting shapes of lazy layers.
-
-    MixedPrecisionOps.Linear carries no ``weight`` attribute until
-    ``_load_from_state_dict`` runs. Calling ``model.state_dict()`` on such a
-    freshly built controlnet therefore hits the informational guard in
-    comfy/ops.py ``_quantized_weight_state_dict`` ("state dict on uninitialized
-    op ...") once per lazy layer. That storm is noise for a shape-introspection
-    pass: every reported layer is about to be initialized by the subsequent
-    load_state_dict. The filter matches exactly this one message, lives only
-    for the introspection call, and any real warning still passes through.
-    """
-    class _OnlyLazyOpNoiseFilter(logging.Filter):
-        def filter(self, record):  # noqa: D102
-            try:
-                return "state dict on uninitialized op" not in record.getMessage()
-            except Exception:  # noqa: BLE001
-                return True
-
-    root = logging.getLogger()
-    flt = _OnlyLazyOpNoiseFilter()
-    root.addFilter(flt)
-    try:
-        yield
-    finally:
-        root.removeFilter(flt)
-
-
 class HSWQModelPatchLoaderCustom:
     @classmethod
     def INPUT_TYPES(cls):
@@ -396,8 +366,7 @@ class HSWQModelPatchLoaderCustom:
             # Filter only size mismatches; keep keys that are in checkpoint but
             # not in model.state_dict() (e.g. lazy-init Linear layers that only
             # appear once load_state_dict / _load_from_state_dict runs).
-            with _silence_lazy_op_state_dict_warnings():
-                model_state_dict = model.state_dict()
+            model_state_dict = model.state_dict()
             filtered_sd = {}
             size_mismatch_keys = []
             keys_not_in_model = []
