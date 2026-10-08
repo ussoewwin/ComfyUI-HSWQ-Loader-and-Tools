@@ -42,6 +42,14 @@ HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作
 <img src="https://raw.githubusercontent.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/main/logo.png" width="400">
 </p>
 
+## 通用工作流要求：VRAM 清理（适用于所有 HSWQ 模型与节点）
+
+> [!IMPORTANT]
+> **所有 HSWQ 工作流的强制要求（ConvRot INT8 / ConvRot NVFP4）：**
+> 在使用任何 HSWQ 模型或节点（SDXL 检查点、UNet 加载器、ControlNet、Model Patch 等）的工作流中，**务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 General Purge VRAM V2，并开启其 `HSWQ` 开关**。
+>
+> 此要求**不局限于某个单一加载器或节点**，而是**贯穿所有 HSWQ 运行的通用必备要求**。HSWQ 残留的 GPU/host 内存、NVFP4 运行时执行池、Tensor Core 工作区以及 CUDA graphs 无法被 ComfyUI 的常规模型卸载机制完全释放。若工作流末尾缺少该清理节点，在第一次生成之后的后续生成中可能会直接报错失败（例如 `quantize_nvfp4` / `PyCapsule` / `pooled TC path failed`）。
+
 ## 安装
 
 ### 快速安装
@@ -93,7 +101,7 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 - **ConvRot NVFP4 模型**：已发布的包 —— [Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4](https://huggingface.co/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4)
 - **INT8 速度**：Linear 加速依赖 ComfyUI / `comfy_kitchen`；本节点不安装也不开关 Triton
 - **INT8 + LoRA**：关于 INT8 LoRA bake / Status 日志的详情，请见 `md/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md`
-- **VRAM 清理（HSWQ ConvRot INT8 / ConvRot NVFP4 必需）**：当使用 **HSWQ ConvRot INT8** 或 **HSWQ ConvRot NVFP4** 加载时，请务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并开启其 **`HSWQ`** 开关。HSWQ 残留的 GPU/host 内存（以及 NVFP4 运行时池 / CUDA graphs）不会被 ComfyUI 的通用卸载完全释放，否则第一次生成之后的第二次生成可能会失败（例如 `quantize_nvfp4` / `PyCapsule` / `pooled TC path failed`）。
+- **VRAM 清理（通用 HSWQ 必备要求）**：如上方通用工作流要求所述，在所有 HSWQ 运行中，请务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并开启其 **`HSWQ`** 开关。
 
 ### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
 
@@ -138,7 +146,7 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 
 - **Z Image / ZIT ConvRot NVFP4 兼容性**：**仅限**由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的 UNet 包
 
-**VRAM 清理**：加载 **ConvRot NVFP4**（以及 HSWQ INT8）UNet 时，请在工作流末尾放置 [https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并打开 **`HSWQ`**——原因与 SDXL Checkpoint Loader 一节相同。
+- **VRAM 清理（通用 HSWQ 必备要求）**：与上方通用工作流要求相同 —— 针对所有 HSWQ INT8 与 NVFP4 运行，请在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2** 并开启 **`HSWQ`**。
 
 ### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)
 

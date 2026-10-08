@@ -42,6 +42,14 @@ Upstream HSWQ targets (reference): ConvRot INT8 SSIM about **0.94–0.98**, Conv
 <img src="https://raw.githubusercontent.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/main/logo.png" width="400">
 </p>
 
+## Universal Workflow Requirement: VRAM Purge (All HSWQ Models & Nodes)
+
+> [!IMPORTANT]
+> **Mandatory for all HSWQ workflows (ConvRot INT8 / ConvRot NVFP4)**:
+> In any workflow using HSWQ models or nodes (SDXL checkpoints, UNet loaders, ControlNet, Model Patches, etc.), **always place General Purge VRAM V2 from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the very end of your workflow and enable its `HSWQ` toggle**.
+>
+> This is **not specific to any single loader or node**, but is a **universal requirement across all HSWQ operations**. HSWQ residual GPU/host memory, NVFP4 runtime execution pools, Tensor Core workspaces, and CUDA graphs are not fully released by ComfyUI's generic model unload routines. Without this purge node at the end of the workflow, subsequent runs (such as generating a second image) can fail with errors such as `quantize_nvfp4`, `PyCapsule`, or `pooled TC path failed`.
+
 ## Installation
 
 ### Quick Install
@@ -93,7 +101,7 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 - **ConvRot NVFP4 models**: Published packs — [Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4](https://huggingface.co/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization-SDXL-ConvRot-NVFP4)
 - **INT8 speed**: Rely on ComfyUI / `comfy_kitchen` for Linear acceleration; this node does not install or toggle Triton
 - **INT8 + LoRA**: For INT8 LoRA bake / Status logging details, see `md/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md`
-- **VRAM purge (required for HSWQ ConvRot INT8 / ConvRot NVFP4)**: When you load with **HSWQ ConvRot INT8** or **HSWQ ConvRot NVFP4**, always place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the **end** of the workflow and turn its **`HSWQ`** toggle **on**. HSWQ residual GPU/host memory (and NVFP4 runtime pools / CUDA graphs) is not fully released by ComfyUI's generic unload, so a second generation after the first can fail (e.g. `quantize_nvfp4` / `PyCapsule` / `pooled TC path failed`) without this purge.
+- **VRAM purge (Universal HSWQ requirement)**: As detailed in the universal workflow requirement above, always place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the **end** of the workflow and turn its **`HSWQ`** toggle **on** for all HSWQ runs.
 
 ### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
 
@@ -138,7 +146,7 @@ This loader does **not** ship an in-node Triton accelerate toggle. INT8 Linear s
 
 - **Z Image / ZIT ConvRot NVFP4 compatibility**: **Only** UNet packs quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization)
 
-**VRAM purge**: For **ConvRot NVFP4** (and HSWQ INT8) UNet loads, place **General Purge VRAM V2** from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the end of the workflow with **`HSWQ`** on — same reason as the SDXL Checkpoint Loader section.
+- **VRAM purge (Universal HSWQ requirement)**: Same universal requirement as above — place **General Purge VRAM V2** ([ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager)) at the end of the workflow with its **`HSWQ`** toggle turned on for all HSWQ runs.
 
 ### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)
 
