@@ -48,6 +48,8 @@ Upstream HSWQ targets (reference): ConvRot INT8 SSIM about **0.94–0.98**, Conv
 > **Mandatory for all HSWQ workflows (ConvRot INT8 / ConvRot NVFP4)**:
 > In any workflow using HSWQ models or nodes (SDXL checkpoints, UNet loaders, ControlNet, Model Patches, etc.), **always place General Purge VRAM V2 from [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) at the very end of your workflow and enable its `HSWQ` toggle**.
 >
+> If your workflow uses the **Model Patch Loader** (e.g. HSWQ Model Patch Loader for ControlNet / feature projectors), you **must also turn ON `clear_model_patches` (Model Patch purge)** on the General Purge VRAM V2 node.
+>
 > This is **not specific to any single loader or node**, but is a **universal requirement across all HSWQ operations**. HSWQ residual GPU/host memory, NVFP4 runtime execution pools, Tensor Core workspaces, and CUDA graphs are not fully released by ComfyUI's generic model unload routines. Without this purge node at the end of the workflow, subsequent runs (such as generating a second image) can fail with errors such as `quantize_nvfp4`, `PyCapsule`, or `pooled TC path failed`.
 
 ## Installation
@@ -220,6 +222,7 @@ Ported from [`ComfyUI-NunchakuFluxLoraStacker`](https://github.com/ussoewwin/Com
 - **Category**: Loaders (`loaders`)
 - **Apply with stock apply nodes**: `QwenImageDiffsynthControlnet` / `ZImageFunControlnet` / `USOStyleReference`
 - **`cpu_offload` scope**: fully honored end-to-end only for the Z-Image Fun ControlNet path (via `patches/model_patch_cpu_offload.py`); the Qwen block-wise and SigLIP projector apply nodes are not patched
+- **VRAM purge (`clear_model_patches`)**: When using this loader, always ensure **`clear_model_patches`** is turned **ON** (along with **`HSWQ`**) on **General Purge VRAM V2** at the end of the workflow to completely release resident model patch memory and avoid VRAM leaks/OOM on subsequent runs
 
 ### HSWQ Ultimate SD Upscale
 

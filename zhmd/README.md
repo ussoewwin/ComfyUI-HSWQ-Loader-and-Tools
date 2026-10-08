@@ -48,6 +48,8 @@ HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作
 > **所有 HSWQ 工作流的强制要求（ConvRot INT8 / ConvRot NVFP4）：**
 > 在使用任何 HSWQ 模型或节点（SDXL 检查点、UNet 加载器、ControlNet、Model Patch 等）的工作流中，**务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 General Purge VRAM V2，并开启其 `HSWQ` 开关**。
 >
+> 若工作流中使用了 **Model Patch Loader**（例如用于 ControlNet / 特征投影器的 HSWQ Model Patch Loader），还**必须同时将 General Purge VRAM V2 的 `clear_model_patches`（清理模型补丁）开关保持开启（ON）**。
+>
 > 此要求**不局限于某个单一加载器或节点**，而是**贯穿所有 HSWQ 运行的通用必备要求**。HSWQ 残留的 GPU/host 内存、NVFP4 运行时执行池、Tensor Core 工作区以及 CUDA graphs 无法被 ComfyUI 的常规模型卸载机制完全释放。若工作流末尾缺少该清理节点，在第一次生成之后的后续生成中可能会直接报错失败（例如 `quantize_nvfp4` / `PyCapsule` / `pooled TC path failed`）。
 
 ## 安装
@@ -192,6 +194,35 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 - **输出**：`CONTROL_NET`
 - **分类**：加载器 (`loaders`)
 - **上位替代**：可完全替代 ComfyUI 内置的 “Load ControlNet Model” 节点 —— 自动识别 ConvRot INT8、FP8、BF16 与 FP16 检查点，无需手动切换
+
+### HSWQ Model Patch Loader (ConvRot INT8 / CPU offload)
+
+<img src="../png/Model%20Patch%20Loader.png" alt="HSWQ Model Patch Loader (ConvRot INT8 / CPU offload)" width="400">
+
+ComfyUI 加载器节点，用于支持 **CPU offload** 与 **ConvRot INT8** 的**模型补丁**（ControlNet、特征投影器等）。将模型补丁以 8-bit 精度（`QuantizedTensor` / `TensorWiseINT8Layout`）直接加载进显存，并通过 `comfy_kitchen` 的高速 `int8_linear` 内核与在线激活旋转（`convrot`）执行。
+
+移植自 [`ComfyUI-NunchakuFluxLoraStacker`](https://github.com/ussoewwin/ComfyUI-NunchakuFluxLoraStacker) 的 `ModelPatchLoaderCustom`（"Model Patch Loader"）。支持的模型补丁架构（与原生 `comfy_extras.nodes_model_patch.ModelPatchLoader` 分发一致）：
+
+- **Qwen Image block-wise ControlNet** (`controlnet_blocks.0.y_rms.weight`)
+- **SigLIP multi-feature projector** (`feature_embedder.mid_layer_norm.bias`)
+- **Z-Image Fun ControlNet** (`control_all_x_embedder.2-1.weight`)
+
+#### 特性
+
+- **原生 INT8 显存保持**：权重在显存中以 `TensorWiseINT8Layout` 保持 8-bit 精度，显著降低显存占用
+- **高速执行**：前向计算调用 `comfy_kitchen` 的 `int8_linear` GEMM 内核，并对 ConvRot 层执行在线激活旋转
+- **CPU Offload**：`cpu_offload` 开关可在 CPU 系统内存中构建模型补丁而不是直接占用显存
+- **Turing 安全计算数据类型**：在 Ampere+ GPU 上自动选择 BF16，在 Turing (sm_75) 及更老 GPU 上自动选择 FP16
+- **上位兼容**：未量化检查点以标准 `manual_cast` 操作加载（与原生加载器相同）；INT8 `comfy_quant` 检查点走 `MixedPrecisionOps`
+
+#### 使用说明
+
+- **输入**：`name`（来自 `models/model_patches` 的模型补丁）、`cpu_offload`（布尔值，默认 `True`）
+- **输出**：`MODEL_PATCH`
+- **分类**：加载器 (`loaders`)
+- **配合原生应用节点**：`QwenImageDiffsynthControlnet` / `ZImageFunControlnet` / `USOStyleReference`
+- **`cpu_offload` 作用域**：仅在 Z-Image Fun ControlNet 路径中完全端到端生效（通过 `patches/model_patch_cpu_offload.py`）；Qwen block-wise 与 SigLIP 投影器应用节点不作补丁
+- **VRAM 清理（`clear_model_patches`）**：使用本加载器时，请务必确保工作流末尾的 **General Purge VRAM V2** 不仅开启 **`HSWQ`**，同时还将 **`clear_model_patches`** 设为 **ON**，以彻底释放常驻的模型补丁内存，避免后续生成中的显存泄漏与 OOM
 
 ### HSWQ Ultimate SD Upscale
 
