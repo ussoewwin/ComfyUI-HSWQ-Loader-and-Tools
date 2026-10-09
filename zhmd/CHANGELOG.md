@@ -7,7 +7,12 @@
   </tr>
 </table>
 
-## Version 3.5.8
+## Version 3.5.9
+
+- **恢复**:**恢复 v3.4.8 中删除的 SAM3 节点** -- 从 v3.4.7 的 git 历史忠实复现:`HSWQ SAM3 Loader (ConvRot INT8)`(`HSWQSAM3Loader` / `HSWQLoadConvRotINT8SAM3`)与 `HSWQ SAM3 Detect`(`HSWQSAM3Detect`,输出 `masks` / `bboxes` / `image`),并包含 `png/sam3.png` 与 `__init__.py` 节点注册。`patches/comfy_quant_int8.py` 中的 SAM3 INT8 加载补丁此前一直保持生效,因此本次仅恢复了节点文件与注册。
+- 详见 [发布说明 v3.5.9](v3.5.9.md)
+
+
 
 - **移除**：**从 UNet Loader 中移除 `attention_accel` 选项** —— 从 `HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader`（`HSWQFP8E4M3UNetLoader`）节点中移除了 `attention_accel` 下拉菜单部件（`default` / `sa2`）及内置的 SageAttention2 注入逻辑。注意力加速逻辑解耦后更适合通过专用的外部补丁节点（例如 `Patch Sage Attention`）灵活处理。同时完全保留向后兼容性：包含旧版 `attention_accel` 参数的已保存工作流通过关键字参数（`**kwargs`）自动吸收，仍可无缝直接运行。
 - 详情见 [发布说明 v3.5.8](v3.5.8.md)。
