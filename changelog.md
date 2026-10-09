@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.9
+
+- **Restored**: **SAM3 nodes restored (removed in v3.4.8)** - restored the SAM3 nodes that were removed in v3.4.8, faithfully reproduced from the v3.4.7 git history: `HSWQ SAM3 Loader (ConvRot INT8)` (`HSWQSAM3Loader` / `HSWQLoadConvRotINT8SAM3`) and `HSWQ SAM3 Detect` (`HSWQSAM3Detect`, outputs `masks` / `bboxes` / `image`), including `png/sam3.png` and the `__init__.py` node registrations. The SAM3 INT8 load patches in `patches/comfy_quant_int8.py` were already active, so only the node files and registration were restored.
+- See [Release Notes v3.5.9](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.9) for details.
+
 ## Version 3.5.8
 
 - **Removed**: **`attention_accel` option removed from UNet Loader** - Removed the `attention_accel` dropdown widget (`default` / `sa2`) and the embedded SageAttention2 patching logic from the `HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader` node (`HSWQFP8E4M3UNetLoader`). Attention acceleration is separated and cleaner to handle via dedicated external patch nodes (e.g. `Patch Sage Attention`). Backwards compatibility is preserved: existing workflow graphs containing legacy `attention_accel` parameters continue to execute seamlessly via keyword argument absorption (`**kwargs`).
