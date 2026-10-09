@@ -195,6 +195,61 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 - **分类**：加载器 (`loaders`)
 - **上位替代**：可完全替代 ComfyUI 内置的 “Load ControlNet Model” 节点 —— 自动识别 ConvRot INT8、FP8、BF16 与 FP16 检查点，无需手动切换
 
+### HSWQ SAM3 Loader´╝êConvRot INT8´╝ëõ©Ä SAM3 Detect
+
+<img src="../png/sam3.png" alt="HSWQ SAM3 Loader õ©Ä SAM3 Detect" width="500">
+
+ÚØóÕÉæ **ConvRot / TensorWise INT8 ÚçÅÕîû SAM3´╝êSegment Anything 3´╝ëµúÇµƒÑþé╣** þÜä ComfyUI ÕèáÞ¢¢õ©ÄµúÇµÁïÞèéþé╣ÒÇéµ¿íÕ×ïõ╗Ñ 8 õ¢ìþ▓¥Õ║ª´╝ê`QuantizedTensor` / `TensorWiseINT8Layout`´╝ëþø┤µÄÑÚ®╗þòÖ VRAM´╝îÕ╣ÂÚÇÜÞ┐ç `comfy_kitchen` þÜäÚ½ÿÚÇƒ `int8_linear` Õåàµá©´╝êÕ©ª `convrot` Õ£¿þ║┐µ┐Çµ┤╗µùïÞ¢¼´╝ëµëºÞíîÒÇé
+
+Õåàþ¢«ÚØ×Õ»╣Ú¢ÉÕ▒éþÜäþí¼õ╗ÂÕ«ëÕà¿Õø×ÚÇÇ´╝êõ¥ïÕªé `boxRPB_embed_x` þÜä $K=2$´╝ë´╝ÜÚØ× 4 ÕÇìµò░þ╗┤Õ║ªÞç¬Õè¿õ╗Ñ float þ▓¥Õ║ªÞ«íþ«ù´╝îÞÇîµëÇµ£ëÚçìÕ×ï backbone õ©Ä transformer ÕØùõ╗ìõ╗ÑÕèáÚÇƒþÜä INT8 Tensor Core þ▓¥Õ║ªÞ┐ÉÞíîÒÇé
+
+#### þë╣µÇº
+
+- **ÕÄƒþöƒ INT8 VRAM Ú®╗þòÖ**´╝ÜµØâÚçìõ╗Ñ 8 õ¢ìþ▓¥Õ║ª´╝ê`TensorWiseINT8Layout`´╝ëÚ®╗þòÖ VRAM´╝îµÿ¥ÞæùÚÖìõ¢Äµÿ¥Õ¡ÿÕìáþö¿
+- **Ú½ÿÚÇƒµëºÞíî**´╝Üõ¢┐þö¿ `comfy_kitchen` þÜä `int8_linear` GEMM Õåàµá©´╝îConvRot Õ▒éÕ©ªÕ£¿þ║┐µ┐Çµ┤╗µùïÞ¢¼
+- **Þç¬Õè¿Õø×ÚÇÇõ┐Øµèñ**´╝ÜÚØ×Õ»╣Ú¢Éþ╗┤Õ║ª´╝ê$K \% 4 \neq 0$´╝ëõ╗Ñ float þ▓¥Õ║ªÕ«ëÕà¿Þ«íþ«ù´╝îÚü┐Õàì cuBLAS INT8 GEMM Õ┤®µ║â
+- **µùáþ╝ØÕà╝Õ«╣**´╝ÜÞ¥ôÕç║µáçÕçå `MODEL`´╝îÕà╝Õ«╣ **HSWQ SAM3 Detect** õ©Ä ComfyUI ÕÄƒþöƒ SAM3 µúÇµÁï / ÞÀƒÞ©¬Þèéþé╣
+
+#### Þèéþé╣
+
+**HSWQ SAM3 Loader´╝êConvRot INT8´╝ë** ÔÇö Õêåþ▒╗ `loaders`
+
+- **Þ¥ôÕàÑ** `sam3_name`´╝ÜConvRot INT8 / µáçÕçå SAM3 µúÇµƒÑþé╣´╝ê`.safetensors`´╝ë´╝îÕ£¿ `diffusion_models` / `sams` / `detection` / `checkpoints` õ©¡µÉ£þ┤ó
+- **Þ¥ôÕç║** `model`´╝ê`MODEL`´╝ë´╝ÜµáçÕçå ComfyUI µ¿íÕ×ï´╝îÕà╝Õ«╣ HSWQ SAM3 Detect õ©ÄÕÄƒþöƒ SAM3 Þèéþé╣
+- µúÇµÁï `int8_tensorwise` comfy_quant Õàâµò░µì«Õ╣ÂÞç¬Õè¿ÚÖäÕèá `MixedPrecisionOps`´╝îõ¢┐ Linear Õ▒é**õ╗Ñþ£ƒ INT8 Ú®╗þòÖ VRAM**
+- ÚØ× INT8 µúÇµƒÑþé╣µ¡úÕ©©ÕèáÞ¢¢´╝êõ©ìÚÖäÕèá MixedPrecisionOps´╝ë
+
+**HSWQ SAM3 Detect** ÔÇö Õêåþ▒╗ `HSWQ/Detection`
+
+- **Þ¥ôÕàÑ**
+  - `model`´╝ê`MODEL`´╝ë´╝ÜSAM3 µ¿íÕ×ï´╝êµØÑÞç¬ HSWQ SAM3 Loader µêû CheckpointLoaderSimple´╝ë
+  - `image`´╝ê`IMAGE`´╝ë´╝ÜÞ¥ôÕàÑÕø¥ÕâÅ´╝êµö»µîüµë╣ÕñäþÉå´╝ë
+  - `conditioning`´╝ê`CONDITIONING`´╝îÕÅ»ÚÇë´╝ë´╝Üµûçµ£¼µÅÉþñ║´╝îõ¥ïÕªé CLIPTextEncode `"person"`
+  - `bboxes`´╝ê`BBOXES`´╝îÕÅ»ÚÇë´╝ë´╝ÜÞªüÕêåÕë▓þÜäÞ¥╣þòîµíå
+  - `positive_coords` / `negative_coords`´╝ê`STRING`´╝îÕÅ»ÚÇë´╝ë´╝Üþé╣µÅÉþñ║´╝îJSON µá╝Õ╝Å `[{"x": int, "y": int}, ...]`´╝êÕâÅþ┤áÕØÉµáç´╝ë
+  - `threshold`´╝êÚ╗ÿÞ«ñ `0.50`´╝ë´╝ÜµúÇµÁïÕêåµò░ÚÿêÕÇ╝
+  - `refine_iterations`´╝êÚ╗ÿÞ«ñ `2`´╝ë´╝ÜSAM decoder þ╗åÕîûÞ¢«µò░´╝ê`0` = õ¢┐þö¿ÕÄƒÕºïµúÇµÁïµÄ®þáü´╝ë
+  - `individual_masks`´╝êÚ╗ÿÞ«ñ `false`´╝ë´╝ÜÞ¥ôÕç║Õìòõ©¬Õ»╣Þ▒íµÄ®þáüÞÇîÚØ×Õ╣ÂÚøå
+- **Þ¥ôÕç║**
+  - `masks`´╝ê`MASK`´╝ë´╝Üõ║îÕÇ╝ÕêåÕë▓µÄ®þáü
+  - `bboxes`´╝ê`BBOXES`´╝ë´╝ÜµúÇµÁïÕê░þÜäµíåõ©ÄÕêåµò░
+  - `image`´╝ê`IMAGE`´╝ë´╝ÜÚÇÅõ╝áÞ¥ôÕàÑÕø¥ÕâÅ
+
+#### þñ║õ¥ïÕÀÑõ¢£µÁü
+
+1. **HSWQ SAM3 Loader** ÔåÆ ÚÇëµï® `sam3.1_multiplex_convrot_int8.safetensors`
+2. **CheckpointLoaderSimple**´╝êÕÉîõ©ÇµúÇµƒÑþé╣´╝ëÔåÆ **CLIPTextEncode**´╝ê`"person"`´╝ëþö¿õ║Äµûçµ£¼µØíõ╗ÂµúÇµÁï
+3. **HSWQ SAM3 Detect** ÔåÆ Þ┐×µÄÑ `model`ÒÇü`image` õ©Ä `conditioning`
+4. **MaskPreview+** ÔåÆ ÕÅ»ÞºåÕîû `masks` Þ¥ôÕç║
+
+#### FP16 Õà╝Õ«╣µÇº
+
+õ©ñõ©¬Þèéþé╣Õ«îÕà¿µö»µîü**µáçÕçå FP16 SAM3 µúÇµƒÑþé╣**´╝êõ¥ïÕªé `sam3.1_multiplex_fp16.safetensors`´╝ë´╝Ü
+
+- **HSWQ SAM3 Loader** µúÇµÁïÕê░õ©ìÕ¡ÿÕ£¿ `int8_tensorwise` comfy_quant Õàâµò░µì«µùÂ´╝îõ╗Ñ ComfyUI ÕÄƒþöƒÞ«¥þ¢«ÕèáÞ¢¢´╝êõ©ìÚÖäÕèá MixedPrecisionOps´╝îÞíîõ©║õ©ìÕÅÿ´╝ë
+- **HSWQ SAM3 Detect** Õ£¿ FP16 õ©Ä INT8 µ¿íÕ×ïõ©èÞ┐ÉÞíîÕ«îÕà¿õ©ÇÞç┤ ÔÇöÔÇö Þ┐ÉÞíîµùÂµØâÚçìõ┐ØµèñÕ£¿ÕåàÚâ¿Õ░å INT8 Õ▒éÕÅìÚçÅÕîûõ©║ FP16´╝îÕøáµ¡ñõ©ñµØíÞÀ»Õ¥äõ║ºþöƒþ¡ëµòêµÄ®þáü
+- Õ¥ùþøèõ║Ä HSWQ CLIP ÚçìµÿáÕ░äÞíÑõ©ü´╝îFP16 µúÇµƒÑþé╣õ╣ƒÕÅ»ÚÇÜÞ┐çÕÄƒþöƒ **CheckpointLoaderSimple** õ¢┐þö¿´╝êµùá "clip missing" Þ¡ªÕæè´╝ë
+
 ### HSWQ Model Patch Loader (ConvRot INT8 / CPU offload)
 
 <img src="../png/Model%20Patch%20Loader.png" alt="HSWQ Model Patch Loader (ConvRot INT8 / CPU offload)" width="400">
