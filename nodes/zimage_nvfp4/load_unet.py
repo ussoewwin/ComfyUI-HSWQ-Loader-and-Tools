@@ -243,7 +243,7 @@ def _install_permanent_dynamic_load_guard() -> None:
     Dynamic.load = _guarded_load
 
 
-def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="default"):
+def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, **kwargs):
     """Load Z Image / ZIT UNet with ConvRot NVFP4 (TC if calibrated, else parity)."""
     _patch_load_model_weights_warnings()
     import folder_paths
@@ -313,26 +313,6 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="defau
     with _int8_quant_conv_scope():
         model = comfy.sd.load_diffusion_model(unet_path, model_options={})
     summarize_int8_lora_capability(model)
-
-    if attention_accel == "sa2":
-        # SageAttention2 on the Z Image ConvRot NVFP4 model (pattern
-        # zimage_nvfp4 - checkpoint-verified).
-        try:
-            from ...hswq.hswq_sa2_accel import sa2_arm_for_model
-
-            if sa2_arm_for_model(model, unet_path, weight_dtype):
-                print(
-                    f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
-                    flush=True,
-                )
-            else:
-                logging.warning(
-                    "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
-                    unet_name, weight_dtype,
-                )
-        except Exception as e:
-            logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
-
     return (model,)
 
 
@@ -390,7 +370,6 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
         if weight_dtype == ZI_NVFP4_WEIGHT_DTYPE:
             return load_unet_nvfp4_weight_dtype(
                 unet_name, weight_dtype,
-                attention_accel=kwargs.get("attention_accel", "default"),
             )
         import folder_paths
 
@@ -401,7 +380,6 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
             if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
                 return load_unet_nvfp4_weight_dtype(
                     unet_name, weight_dtype,
-                    attention_accel=kwargs.get("attention_accel", "default"),
                 )
         # Never treat SDXL's "ConvRot NVFP4" string as ZI — different being.
         # int8_tensorwise / other: leave to INT8 dispatch / original (core ConvRot).

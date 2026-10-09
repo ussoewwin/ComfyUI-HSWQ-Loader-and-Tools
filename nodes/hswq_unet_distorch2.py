@@ -121,8 +121,7 @@ def build_distorch2_unet_loader(base_cls):
         def INPUT_TYPES(s):
             inputs = super().INPUT_TYPES()
             _req = inputs.setdefault("required", {})
-            # The DisTorch2 node does not expose the SA2 option (attention_accel)
-            _req.pop("attention_accel", None)
+
             _req["hswq_bake"] = (
                 "BOOLEAN",
                 {

@@ -23,7 +23,7 @@ _INSTALL_HOOKED = False
 logger = logging.getLogger(__name__)
 
 
-def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="default"):
+def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, **kwargs):
     """Load Krea2 DiT UNet with ConvRot NVFP4 (TC) + INT8 ConvRot (core)."""
     import folder_paths
     import comfy.sd
@@ -82,26 +82,6 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, attention_accel="defau
     if inner_model is not None:
         inner_model._hswq_krea2_nvfp4_pack = True
     summarize_int8_lora_capability(model)
-
-    if attention_accel == "sa2":
-        # SageAttention2 on the Krea2 ConvRot NVFP4 model (pattern
-        # krea2_nvfp4 - checkpoint-verified).
-        try:
-            from ...hswq.hswq_sa2_accel import sa2_arm_for_model
-
-            if sa2_arm_for_model(model, unet_path, weight_dtype):
-                print(
-                    f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
-                    flush=True,
-                )
-            else:
-                logging.warning(
-                    "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
-                    unet_name, weight_dtype,
-                )
-        except Exception as e:
-            logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
-
     return (model,)
 
 
@@ -143,7 +123,6 @@ def install_krea2_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
         if weight_dtype == KREA2_NVFP4_WEIGHT_DTYPE:
             return load_unet_nvfp4_weight_dtype(
                 unet_name, weight_dtype,
-                attention_accel=kwargs.get("attention_accel", "default"),
             )
         import folder_paths
 
@@ -154,7 +133,6 @@ def install_krea2_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
             if checkpoint_looks_like_comfy_quant_nvfp4(unet_path):
                 return load_unet_nvfp4_weight_dtype(
                     unet_name, weight_dtype,
-                    attention_accel=kwargs.get("attention_accel", "default"),
                 )
         # Never treat SDXL "ConvRot NVFP4" / Z Image "Z Image ConvRot NVFP4" as
         # Krea2 - each is a different being. int8_tensorwise / other fall through

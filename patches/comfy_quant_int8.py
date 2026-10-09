@@ -3444,7 +3444,7 @@ def tag_krea2_model(model) -> bool:
     return True
 
 
-def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="default", hswq_bake=True):
+def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwargs):
     import logging
     import torch
     import folder_paths
@@ -3557,25 +3557,6 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="defaul
             if inner_model is not None:
                 inner_model._hswq_krea2_nvfp4_pack = True
 
-        if attention_accel == "sa2":
-            # SageAttention2 on the stock-equivalent ConvRot INT8 load
-            # (pattern zimage_int8 or krea2_int8 - checkpoint-verified).
-            try:
-                from ..hswq.hswq_sa2_accel import sa2_arm_for_model
-
-                if sa2_arm_for_model(model, unet_path, weight_dtype):
-                    print(
-                        f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
-                        flush=True,
-                    )
-                else:
-                    logging.warning(
-                        "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
-                        unet_name, weight_dtype,
-                    )
-            except Exception as e:
-                logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
-
     elif is_int8:
         apply_comfy_quant_int8_patches()
         model_options = {}
@@ -3603,25 +3584,6 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, attention_accel="defaul
         # check runs BEFORE the import: non-SDXL never imports the module.
         if is_convrot and needs_conv2d and _model_is_sdxl_unet(model):
             _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(model)
-
-        if attention_accel == "sa2":
-            # SageAttention2 on the loaded INT8 model (pattern zimage_int8 or
-            # krea2_int8 - decided by the checkpoint-verified arm functions).
-            try:
-                from ..hswq.hswq_sa2_accel import sa2_arm_for_model
-
-                if sa2_arm_for_model(model, unet_path, weight_dtype):
-                    print(
-                        f"[HSWQ SA2] SageAttention2 acceleration installed ({weight_dtype}): {unet_name}",
-                        flush=True,
-                    )
-                else:
-                    logging.warning(
-                        "[HSWQ SA2] pattern not supported or checkpoint mismatch, running without SA2: %s (%s)",
-                        unet_name, weight_dtype,
-                    )
-            except Exception as e:
-                logging.exception("[HSWQ SA2] install failed (%s); running without SA2", e)
     else:
         model_options = {}
         if weight_dtype == "fp8_e4m3fn":
@@ -3745,7 +3707,6 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
             if weight_dtype == "int8_tensorwise":
                 return load_unet_hswq_weight_dtype(
                     unet_name, weight_dtype,
-                    attention_accel=kwargs.get("attention_accel", "default"),
                     hswq_bake=kwargs.get("hswq_bake", True),
                 )
             # default: auto-detect INT8 checkpoints only; otherwise original FP path.
@@ -3755,7 +3716,6 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
             if checkpoint_looks_like_comfy_quant_int8(unet_path):
                 return load_unet_hswq_weight_dtype(
                     unet_name, weight_dtype,
-                    attention_accel=kwargs.get("attention_accel", "default"),
                     hswq_bake=kwargs.get("hswq_bake", True),
                 )
             return _orig_load_unet(self, unet_name, weight_dtype, **kwargs)
