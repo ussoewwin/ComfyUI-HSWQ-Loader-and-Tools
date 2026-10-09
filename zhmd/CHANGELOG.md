@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.8
+
+- **移除**：**从 UNet Loader 中移除 `attention_accel` 选项** —— 从 `HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader`（`HSWQFP8E4M3UNetLoader`）节点中移除了 `attention_accel` 下拉菜单部件（`default` / `sa2`）及内置的 SageAttention2 注入逻辑。注意力加速逻辑解耦后更适合通过专用的外部补丁节点（例如 `Patch Sage Attention`）灵活处理。同时完全保留向后兼容性：包含旧版 `attention_accel` 参数的已保存工作流通过关键字参数（`**kwargs`）自动吸收，仍可无缝直接运行。
+- 详情见 [发布说明 v3.5.8](v3.5.8.md)。
+
 ## Version 3.5.7
 
 - **修复**：**ComfyUI v0.38 fast-disk 原生读取崩溃/失效** -- v0.38 将 comfy-aimdo 存储读取迁移到 fast-disk 专用路径，跨线程调用原生读取会崩溃或静默失败。新增 prestartup 守卫（patches/comfy_aimdo_fastdisk_guard.py）：把全部原生 aimdo 读写绑定到单一 owner 线程、原生调用在调用线程上直跑（不经队列跳转）、图捕获读取保持 inline、卡死的读取槽自动复位、原生路径失败回退 mmap -- 恢复 v0.36 级稳定性，fast-disk 保持启用。

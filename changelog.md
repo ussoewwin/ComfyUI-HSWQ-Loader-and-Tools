@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.5.8
+
+- **Removed**: **`attention_accel` option removed from UNet Loader** - Removed the `attention_accel` dropdown widget (`default` / `sa2`) and the embedded SageAttention2 patching logic from the `HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader` node (`HSWQFP8E4M3UNetLoader`). Attention acceleration is separated and cleaner to handle via dedicated external patch nodes (e.g. `Patch Sage Attention`). Backwards compatibility is preserved: existing workflow graphs containing legacy `attention_accel` parameters continue to execute seamlessly via keyword argument absorption (`**kwargs`).
+- See [Release Notes v3.5.8](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.5.8) for details.
+
 ## Version 3.5.7
 
 - **Fixed**: **ComfyUI v0.38 fast-disk native reads broken / aborting** - v0.38 moved comfy-aimdo storage reads onto a dedicated fast-disk path, and the native read calls crashed or silently failed when invoked from different threads. A new prestartup guard (patches/comfy_aimdo_fastdisk_guard.py) binds every native aimdo read/write to one owner thread, runs each native call on the calling thread without a queue hop, keeps graph-captured reads inline, resets stuck reader slots, and falls back to mmap when the native path fails - restoring v0.36-class stability while keeping fast-disk enabled.
