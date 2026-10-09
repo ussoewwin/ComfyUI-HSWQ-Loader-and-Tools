@@ -13,7 +13,6 @@
 - 详见 [发布说明 v3.5.9](v3.5.9.md)
 
 
-
 - **移除**：**从 UNet Loader 中移除 `attention_accel` 选项** —— 从 `HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader`（`HSWQFP8E4M3UNetLoader`）节点中移除了 `attention_accel` 下拉菜单部件（`default` / `sa2`）及内置的 SageAttention2 注入逻辑。注意力加速逻辑解耦后更适合通过专用的外部补丁节点（例如 `Patch Sage Attention`）灵活处理。同时完全保留向后兼容性：包含旧版 `attention_accel` 参数的已保存工作流通过关键字参数（`**kwargs`）自动吸收，仍可无缝直接运行。
 - 详情见 [发布说明 v3.5.8](v3.5.8.md)。
 
