@@ -784,6 +784,25 @@ try:
     logger.info("Registered HSWQ ControlNet Loader (ConvRot INT8)")
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ ControlNet Loader not registered: %s", e)
+
+try:
+    from .nodes.hswq_load_convrot_int8_sam3 import (
+        HSWQSAM3Loader,
+        HSWQLoadConvRotINT8SAM3,
+    )
+    NODE_CLASS_MAPPINGS["HSWQSAM3Loader"] = HSWQSAM3Loader
+    NODE_CLASS_MAPPINGS["HSWQLoadConvRotINT8SAM3"] = HSWQLoadConvRotINT8SAM3
+    logger.info("Registered HSWQ SAM3 Loader (ConvRot INT8)")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ SAM3 Loader not registered: %s", e)
+
+try:
+    from .nodes.hswq_sam3_detect import HSWQSAM3DetectV1
+    NODE_CLASS_MAPPINGS["HSWQSAM3Detect"] = HSWQSAM3DetectV1
+    logger.info("Registered HSWQ SAM3 Detect")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ SAM3 Detect not registered: %s", e)
+
 try:
     from .nodes.hswq_model_patch_loader import HSWQModelPatchLoaderCustom
     NODE_CLASS_MAPPINGS["HSWQModelPatchLoaderCustom"] = HSWQModelPatchLoaderCustom
@@ -795,6 +814,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_M
 NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader (SDXL)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQControlNetLoader"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = "HSWQ ControlNet Loader (ConvRot INT8)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Loader"] = "HSWQ SAM3 Loader (ConvRot INT8)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8SAM3"] = "HSWQ SAM3 Loader (ConvRot INT8)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Detect"] = "HSWQ SAM3 Detect"
 WEB_DIRECTORY = "js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 logger.info("=" * (80 + len(" ComfyUI-nunchaku Initialization ")))
