@@ -117,33 +117,6 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 - **ConvRot NVFP4（Z Image / ZIT）**：将 `weight_dtype` 设为 **`Z Image ConvRot NVFP4`**（Krea2 检查点用 **`Krea2 ConvRot NVFP4`**），或在 UNet safetensors 带有 comfy_quant / HSWQ `nvfp4` 标记时保持 **`default`**。走本扩展 `nodes/nvfp4/` 下的 UNet NVFP4 栈，并使用与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock MixedPrecision GEMM + online act rotate；保留 ConvRot Linear LoRA bake）。**不要**在此期望 SDXL Checkpoint Loader 的 Tensor Core 产品路径——SDXL NVFP4 仍用 Checkpoint Loader；Z Image NVFP4 用本 UNet 加载器。**仅支持由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
 - **INT8 / NVFP4 自动检测**：看起来像 INT8 的包走 INT8 路径；看起来像 NVFP4 的包在 `weight_dtype` 为 `default` 时走 ConvRot NVFP4（NVFP4 分发安装在 INT8 之后，避免混合包被 INT8-only 检测抢走）。
 
-**输入**：`unet_name`、`weight_dtype`（`default` / FP8 选项 / `int8_tensorwise` / `Z Image ConvRot NVFP4` / `Krea2 ConvRot NVFP4`）、`attention_accel`（`default` / `sa2`）。
-
-#### SageAttention2 加速（`attention_accel`）
-
-`attention_accel` 选择加载模型使用的 attention 内核：
-
-| 取值 | 行为 |
-| :--- | :--- |
-| **`default`** | ComfyUI 原生 attention。不安装任何补丁——与既往版本完全一致。 |
-| **`sa2`** | **SageAttention2**（`sageattn`，INT8 QK `per_warp` + FP8 PV，sm120 自动路径）。attention 内核约快 **2.3x**；实测端到端收益为 **-11.4%**（Z Image ConvRot INT8，20 种子基准）与 **-15.4%**（Z Image ConvRot NVFP4，同进程 A/B）。 |
-
-**支持模型（4 种模式，分别独立分发）：**
-
-| `weight_dtype` + 检查点 | 架构 | 被补丁的 attention 模块 |
-| :--- | :--- | :--- |
-| **Z Image ConvRot INT8** | NextDiT（`comfy.ldm.lumina`） | `comfy.ldm.lumina.model` |
-| **Z Image ConvRot NVFP4** | NextDiT（`comfy.ldm.lumina`） | `comfy.ldm.lumina.model` |
-| **Krea2 ConvRot INT8** | SingleStreamDiT（`comfy.ldm.krea2`） | `comfy.ldm.krea2.model` |
-| **Krea2 ConvRot NVFP4** | SingleStreamDiT（`comfy.ldm.krea2`） | `comfy.ldm.krea2.model` |
-
-- **检查点验证**：模式由检查点本身判定（comfy_quant `int8_tensorwise` / `nvfp4` 扫描 + Krea2 `txtfusion.projector` 标记），再与你选择的 `weight_dtype` 交叉校验。不一致时**拒绝安装 SA2** 并记录警告，绝不混用模式。安装前还会再次校验已加载模型的类。
-- **按模型启用**：SA2 仅在该 MODEL 的 forward 执行期间启用。同一图中的其他模型（例如 FP16 基准）保持原生 attention。
-- **回退**：mask 与 `head_dim > 256`（Krea2 `txtfusion`、Qwen3-VL）自动回退到 SDPA；内核失败按每次调用回退。覆盖率在控制台以 `[HSWQ SA2] attention calls: total=... sa2=... errors=...` 输出。
-- **不支持**：**SDXL**（`HSWQ Checkpoint Loader (SDXL)`）没有 `attention_accel` 选项，也没有 SA2 代码路径。仅限 Z Image / Krea2。
-- **不要叠加** `Patch Sage Attention DM`（ComfyUI-DistorchMemoryManager）：两者都会补丁 attention。使用本加载器的 `attention_accel=sa2` 时请旁路该节点。
-- **依赖**：`sageattention` 包（仅在选择 `sa2` 时导入，因此 `default` 不依赖它）。
-
 本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。本扩展保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff）以及 `nodes/nvfp4/` 下的 **NVFP4** UNet 补丁。
 
 - **Z Image / ZIT ConvRot NVFP4 兼容性**：**仅限**由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的 UNet 包
@@ -170,8 +143,6 @@ ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选�
 | :--- | :--- |
 | **`OFF`** | 走 stock ComfyUI 路径（DynamicVRAM）。跳过 HSWQ 补丁（LoRA bake / parity / mp stack），offload 的权重进入 DynamicVRAM host buffer（**共享显存**）。**对 Krea2 ConvRot INT8 而言这是更快的一侧。** |
 | **`ON`** | 走 HSWQ 路径（HSWQ LoRA bake + legacy patcher，使 DisTorch 放置生效）。该模式是为**将来开发的 Hybrid ConvRot NVFP4** 准备的（需要 HSWQ 自身的 LoRA 处理）。在 Krea2 ConvRot INT8 上比 `OFF` 慢。 |
-
-
 
 ### HSWQ ControlNet Loader (ConvRot INT8)
 
