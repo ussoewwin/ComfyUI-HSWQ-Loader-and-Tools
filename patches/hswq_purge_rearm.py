@@ -172,21 +172,11 @@ def hswq_purge_rearm_state() -> dict:
         lambda f: bool(getattr(f, "_hswq_nvfp4_product_tc", False)),
     )
 
-    # Krea2 ConvRot NVFP4: krea2-specific stamps only.
-    krea2_ok = (
-        _chain_has(
-            load_fn, "_hswq_nvfp4_orig_load", _LOAD_PREV_NAMES,
-            lambda f: bool(getattr(f, "_hswq_krea2_full_load", False)),
-        )
-        or _chain_has(
-            mp_fn, "_hswq_nvfp4_orig_mp", _MP_PREV_NAMES,
-            lambda f: bool(getattr(f, "_hswq_krea2_stack", False)),
-        )
-        or _chain_has(
-            convert_old_quants, "_hswq_krea2_prev_oldquants", ("_prev", "prev", "original"),
-            lambda f: bool(getattr(f, "_hswq_krea2_oldquants", False)),
-        )
-        or bool(getattr(detect, "_hswq_krea2_txtlayers_fix", False))
+    # Krea2 ConvRot INT8: the krea2 mp-stack stamp only (installed by
+    # nodes/krea2_convrot_int8/comfy_quant_int8_krea2.apply_comfy_quant_int8_patches).
+    krea2_ok = _chain_has(
+        mp_fn, "_hswq_nvfp4_orig_mp", _MP_PREV_NAMES,
+        lambda f: bool(getattr(f, "_hswq_krea2_stack", False)),
     )
 
     # INT8 comfy_quant decode overlay (patches/comfy_quant_int8).
@@ -230,7 +220,7 @@ def hswq_purge_rearm_state() -> dict:
     _reset_gate(
         _mod_by_dotted_end("nodes.krea2_convrot_int8.comfy_quant_int8_krea2"),
         "_PATCHES_APPLIED",
-        "krea2_nvfp4",
+        "krea2_int8",
         not krea2_ok,
     )
     _reset_gate(
@@ -282,7 +272,7 @@ def hswq_purge_rearm_state() -> dict:
 
     for dotted, stamp, family in (
         ("nodes.zimage_nvfp4.nvfp4_lora_bake", "_hswq_zi_nvfp4_lora_bake", "zimage_bake_flag"),
-        ("nodes.krea2_convrot_int8.int8_lora_bake", "_hswq_krea2_nvfp4_lora_bake", "krea2_bake_flag"),
+        ("nodes.krea2_convrot_int8.int8_lora_bake", "_hswq_krea2_int8_lora_bake", "krea2_bake_flag"),
     ):
         mod = _mod_by_dotted_end(dotted)
         if mod is None:
@@ -302,7 +292,7 @@ def hswq_purge_rearm_state() -> dict:
         "sdxl_product": sdxl_ok, "krea2": krea2_ok, "int8": int8_ok,
         "zi_bake": _dyn_has("_hswq_zi_nvfp4_lora_bake"),
         "zi_guard": _dyn_has("_hswq_zi_rearm_guard"),
-        "krea2_bake": _dyn_has("_hswq_krea2_nvfp4_lora_bake"),
+        "krea2_bake": _dyn_has("_hswq_krea2_int8_lora_bake"),
     }
     report["layers"] = layer_state
     _console("reconciled " + ", ".join(f"{k}={v}" for k, v in sorted(report.items()) if k != "layers"))

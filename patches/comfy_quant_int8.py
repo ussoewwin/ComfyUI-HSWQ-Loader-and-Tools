@@ -3497,22 +3497,20 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
         if is_krea2 and not _aimdo_dynamic:
             try:
                 from ..nodes.krea2_convrot_int8.comfy_quant_int8_krea2 import (
-                    apply_comfy_quant_nvfp4_patches,
+                    apply_comfy_quant_int8_patches,
                 )
                 from ..nodes.krea2_convrot_int8.int8_lora_bake import (
-                    install_krea2_nvfp4_lora_bake,
-                    reset_krea2_nvfp4_lora_bake_log_counters,
+                    install_krea2_int8_lora_bake,
+                    reset_krea2_int8_lora_bake_log_counters,
                 )
                 from ..nodes.krea2_convrot_int8.int8_forward import (
-                    reset_nvfp4_forward_stats,
-                    reset_nvfp4_lora_log_counters,
+                    reset_int8_forward_stats,
                 )
 
-                if apply_comfy_quant_nvfp4_patches():
-                    krea2_bake_ok = install_krea2_nvfp4_lora_bake(force=True)
-                reset_nvfp4_forward_stats()
-                reset_nvfp4_lora_log_counters()
-                reset_krea2_nvfp4_lora_bake_log_counters()
+                if apply_comfy_quant_int8_patches():
+                    krea2_bake_ok = install_krea2_int8_lora_bake(force=True)
+                reset_int8_forward_stats()
+                reset_krea2_int8_lora_bake_log_counters()
                 if krea2_bake_ok:
                     logging.info(
                         "[HSWQ INT8] Krea2 ConvRot INT8 residual LoRA bake+forward "
@@ -3552,10 +3550,10 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
         if krea2_bake_ok:
             # Stamp for the Krea2 bake hook (mirrors the NVFP4 loader stamp; the
             # inner-model stamp survives ModelPatcher clones made by LoRA nodes).
-            model._hswq_krea2_nvfp4_pack = True
+            model._hswq_krea2_int8_pack = True
             inner_model = getattr(model, "model", None)
             if inner_model is not None:
-                inner_model._hswq_krea2_nvfp4_pack = True
+                inner_model._hswq_krea2_int8_pack = True
 
     elif is_int8:
         apply_comfy_quant_int8_patches()
