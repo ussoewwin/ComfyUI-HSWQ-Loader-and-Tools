@@ -1,18 +1,15 @@
-# Krea2 NVFP4 / comfy_quant - HSWQ-owned load + bake->float + ConvRot TC forward.
+# Krea2 ConvRot NVFP4 runtime pieces still shared by the Krea2 ConvRot INT8
+# load path (patches/comfy_quant_int8.py imports apply_comfy_quant_nvfp4_patches
+# + nvfp4_lora_bake + nvfp4_forward from here). The NVFP4-only loader
+# (load_unet.py / nvfp4_comfy_parity.py) has been removed.
 # Never edit ComfyUI-master; all logic lives under this package.
 
-from .load_unet import (
-    install_krea2_nvfp4_unet_dispatch,
-    load_unet_nvfp4_weight_dtype,
-)
 from .nvfp4_lora_bake import (
     install_krea2_nvfp4_lora_bake,
     uninstall_krea2_nvfp4_lora_bake,
 )
 
 __all__ = [
-    "install_krea2_nvfp4_unet_dispatch",
-    "load_unet_nvfp4_weight_dtype",
     "install_krea2_nvfp4_lora_bake",
     "uninstall_krea2_nvfp4_lora_bake",
 ]

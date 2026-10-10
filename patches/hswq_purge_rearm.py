@@ -121,7 +121,7 @@ def hswq_purge_rearm_state() -> dict:
     """Peel-aware gate reconciliation. Returns {family: action} for logging.
 
     families: zimage_nvfp4 / sdxl_nvfp4_product / krea2_nvfp4 / int8_comfy_quant
-    / zimage_parity / krea2_parity / zimage_bake_flag / krea2_bake_flag
+    / zimage_parity / zimage_bake_flag / krea2_bake_flag
     """
     report: dict = {}
     try:
@@ -254,15 +254,6 @@ def hswq_purge_rearm_state() -> dict:
     else:
         report["zimage_parity"] = "gate-already-open"
 
-    k2_par = _mod_by_dotted_end("nodes.krea2_convrot_nvfp4.nvfp4_comfy_parity")
-    if k2_par is not None and getattr(k2_par, "_APPLIED", False):
-        try:
-            k2_par._APPLIED = False  # type: ignore[attr-defined]
-            report["krea2_parity"] = "RESET(self-heal refresh)"
-        except Exception as e:
-            report["krea2_parity"] = f"reset-failed:{e}"
-    else:
-        report["krea2_parity"] = "gate-already-open"
 
     # Bake installed flags: bookkeeping only (install is stamp-gated per
     # Dynamic.load). Reset when the corresponding bake stamp is absent from
