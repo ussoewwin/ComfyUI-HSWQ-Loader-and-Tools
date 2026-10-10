@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.6.0
+
+- **Removed**: **Krea2 ConvRot NVFP4 support ended / code deleted** - removed the `Krea2 ConvRot NVFP4` `weight_dtype` option from the UNet loaders (plain + DisTorch2 variant share the option list), deleted `nodes/krea2_convrot_nvfp4/load_unet.py` (182 lines) and `nodes/krea2_convrot_nvfp4/nvfp4_comfy_parity.py` (178 lines), renamed the package `nodes/krea2_convrot_nvfp4/` -> `nodes/krea2_convrot_int8/`, deleted the 8 NVFP4-only modules of that package (`int8_load` 236 / `int8_conf` 264 / `int8_gemm` 316 / `int8_runtime` 616 / `int8_tc_gate` 129 / `int8_addmm_patch` 111 / `int8_hadamard` 194 / `kitchen_quant_ops_repair` 435 lines), and stripped the NVFP4-only code paths from the 3 retained modules (`comfy_quant_int8_krea2.py`, `int8_forward.py`, `int8_lora_bake.py`; `apply_comfy_quant_nvfp4_patches` renamed to `apply_comfy_quant_int8_patches`) - 3,896 deleted lines total across the two removal commits. The retained modules now serve **Krea2 ConvRot INT8** only (stock INT8 forward + low-rank LoRA residual; the shared peel stamps `_hswq_nvfp4_stack_ver=2` / `_hswq_nvfp4_orig_mp` / `_hswq_nvfp4_full_forward` are kept for SDXL / Z Image peel walkers). SDXL ConvRot INT8, SDXL ConvRot NVFP4, Z Image INT8 and Z Image ConvRot NVFP4: **0-byte changes** (git blob hash comparison v3.5.9 vs HEAD, 27 files under `nodes/nvfp4/`, `nodes/zimage_nvfp4/`, `nodes/sdxl_int8/` + INT8 loader nodes).
+- See [Release Notes v3.6.0](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.0) for details.
+
 ## Version 3.5.9
 
 - **Restored**: **SAM3 nodes restored (removed in v3.4.8)** - restored the SAM3 nodes that were removed in v3.4.8, faithfully reproduced from the v3.4.7 git history: `HSWQ SAM3 Loader (ConvRot INT8)` (`HSWQSAM3Loader` / `HSWQLoadConvRotINT8SAM3`) and `HSWQ SAM3 Detect` (`HSWQSAM3Detect`, outputs `masks` / `bboxes` / `image`), including `png/sam3.png` and the `__init__.py` node registrations. The SAM3 INT8 load patches in `patches/comfy_quant_int8.py` were already active, so only the node files and registration were restored.

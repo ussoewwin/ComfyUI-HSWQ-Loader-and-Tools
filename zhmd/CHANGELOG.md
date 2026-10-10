@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.6.0
+
+- **移除**：**Krea2 ConvRot NVFP4 支持终止 / 代码删除** -- 从 UNet 加载器（普通版 + DisTorch2 版共用选项表）移除 `Krea2 ConvRot NVFP4` `weight_dtype` 选项；删除 `nodes/krea2_convrot_nvfp4/load_unet.py`（182 行）与 `nodes/krea2_convrot_nvfp4/nvfp4_comfy_parity.py`（178 行）；包重命名 `nodes/krea2_convrot_nvfp4/` -> `nodes/krea2_convrot_int8/`；删除该包中 8 个 NVFP4 专用模块（`int8_load` 236 / `int8_conf` 264 / `int8_gemm` 316 / `int8_runtime` 616 / `int8_tc_gate` 129 / `int8_addmm_patch` 111 / `int8_hadamard` 194 / `kitchen_quant_ops_repair` 435 行）；并从保留的 3 个模块（`comfy_quant_int8_krea2.py`、`int8_forward.py`、`int8_lora_bake.py`）中剥离 NVFP4 专用代码路径（`apply_comfy_quant_nvfp4_patches` 更名 `apply_comfy_quant_int8_patches`）—— 两次删除提交合计删除 3,896 行。保留模块现仅服务 **Krea2 ConvRot INT8**（stock INT8 forward + 低秩 LoRA 残差；共享 peel 标记 `_hswq_nvfp4_stack_ver=2` / `_hswq_nvfp4_orig_mp` / `_hswq_nvfp4_full_forward` 为 SDXL / Z Image peel walker 保留）。SDXL ConvRot INT8、SDXL ConvRot NVFP4、Z Image INT8、Z Image ConvRot NVFP4：**0 字节变更**（以 git blob 哈希对比 v3.5.9 与 HEAD 实测，`nodes/nvfp4/`、`nodes/zimage_nvfp4/`、`nodes/sdxl_int8/` + INT8 loader 节点共 27 个文件）。
+- 详见 [发布说明 v3.6.0](v3.6.0.md)
+
 ## Version 3.5.9
 
 - **恢复**:**恢复 v3.4.8 中删除的 SAM3 节点** -- 从 v3.4.7 的 git 历史忠实复现:`HSWQ SAM3 Loader (ConvRot INT8)`(`HSWQSAM3Loader` / `HSWQLoadConvRotINT8SAM3`)与 `HSWQ SAM3 Detect`(`HSWQSAM3Detect`,输出 `masks` / `bboxes` / `image`),并包含 `png/sam3.png` 与 `__init__.py` 节点注册。`patches/comfy_quant_int8.py` 中的 SAM3 INT8 加载补丁此前一直保持生效,因此本次仅恢复了节点文件与注册。
