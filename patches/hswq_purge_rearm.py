@@ -228,7 +228,7 @@ def hswq_purge_rearm_state() -> dict:
         not sdxl_ok,
     )
     _reset_gate(
-        _mod_by_dotted_end("nodes.krea2_convrot_nvfp4.comfy_quant_nvfp4"),
+        _mod_by_dotted_end("nodes.krea2_convrot_int8.comfy_quant_int8_krea2"),
         "_PATCHES_APPLIED",
         "krea2_nvfp4",
         not krea2_ok,
@@ -282,7 +282,7 @@ def hswq_purge_rearm_state() -> dict:
 
     for dotted, stamp, family in (
         ("nodes.zimage_nvfp4.nvfp4_lora_bake", "_hswq_zi_nvfp4_lora_bake", "zimage_bake_flag"),
-        ("nodes.krea2_convrot_nvfp4.nvfp4_lora_bake", "_hswq_krea2_nvfp4_lora_bake", "krea2_bake_flag"),
+        ("nodes.krea2_convrot_int8.int8_lora_bake", "_hswq_krea2_nvfp4_lora_bake", "krea2_bake_flag"),
     ):
         mod = _mod_by_dotted_end(dotted)
         if mod is None:

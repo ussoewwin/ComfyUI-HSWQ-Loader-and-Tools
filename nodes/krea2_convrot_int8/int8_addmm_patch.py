@@ -39,7 +39,7 @@ def register_nvfp4_addmm_handler() -> bool:
             TensorCoreNVFP4Layout,
             _slice_to_original_shape,
         )
-        from .nvfp4_tc_gate import (
+        from .int8_tc_gate import (
             announce_tc_status_at_register,
             note_scaled_mm_failure,
             nvfp4_tc_enabled,

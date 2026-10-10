@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 
-from .nvfp4_conf import (
+from .int8_conf import (
     checkpoint_looks_like_comfy_quant_nvfp4,
     decode_comfy_quant_conf,
     fix_krea2_txtlayers,
@@ -34,13 +34,13 @@ from .nvfp4_conf import (
     is_nvfp4_conf,
     logical_linear_in_features,
 )
-from .nvfp4_forward import (
+from .int8_forward import (
     attach_nvfp4_linear_lora_bake,
     make_nvfp4_linear_forward,
     nvfp4_forward_stats,
     reset_nvfp4_forward_stats,
 )
-from .nvfp4_load import load_nvfp4_linear_module, peek_nvfp4_conf
+from .int8_load import load_nvfp4_linear_module, peek_nvfp4_conf
 
 logger = logging.getLogger(__name__)
 _PATCHES_APPLIED = False
@@ -245,7 +245,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
     """
     global _PATCHES_APPLIED
     # Gap fill: always (re)ensure addmm -> HSWQ hswq_scaled_mm_nvfp4 (idempotent).
-    from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
+    from .int8_addmm_patch import register_nvfp4_addmm_handler
 
     register_nvfp4_addmm_handler()
 

@@ -1,4 +1,4 @@
-"""Krea2 mixed-pack LoRA bake - Dynamic VRAM only (branch under krea2_convrot_nvfp4).
+"""Krea2 mixed-pack LoRA bake - Dynamic VRAM only (branch under krea2_convrot_int8).
 
 Krea2 hybrid packs (ConvRot NVFP4 Linear + INT8 protect Conv2d/Linear) need
 LoRA baked on BOTH quant sides, exactly like Z Image (owner requirement):
@@ -782,7 +782,7 @@ def install_krea2_nvfp4_lora_bake(force: bool = False) -> bool:
     # ``_hswq_nvfp4_convrot`` flags and would also fire (and stamp) Krea2
     # packs. Import-and-call only; never edits nodes/zimage_nvfp4.
     try:
-        from ..zimage_nvfp4.nvfp4_lora_bake import uninstall_zimage_nvfp4_lora_bake
+        from ..zimage_nvfp4.int8_lora_bake import uninstall_zimage_nvfp4_lora_bake
 
         uninstall_zimage_nvfp4_lora_bake()
         # Re-read: uninstall replaced Dynamic.load; chaining to the stale ZI

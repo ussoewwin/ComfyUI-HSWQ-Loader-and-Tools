@@ -18,14 +18,14 @@ from __future__ import annotations
 
 import logging
 
-from .nvfp4_gemm import bake_nvfp4_weight_inplace
-from .nvfp4_hadamard import (
+from .int8_gemm import bake_nvfp4_weight_inplace
+from .int8_hadamard import (
     build_hadamard,
     rotate_weight_linear,
     unrotate_weight_linear,
 )
-from .nvfp4_runtime import rotate_last_dim_pooled
-from .nvfp4_tc_gate import note_scaled_mm_failure, nvfp4_tc_enabled
+from .int8_runtime import rotate_last_dim_pooled
+from .int8_tc_gate import note_scaled_mm_failure, nvfp4_tc_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +209,7 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
     if isinstance(bias, QuantizedTensor):
         bias = bias.dequantize()
 
-    from .nvfp4_runtime import (
+    from .int8_runtime import (
         ensure_act_scale_cached,
         quantize_nvfp4_act_pooled,
         scaled_mm_nvfp4_pooled,

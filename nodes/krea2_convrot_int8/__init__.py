@@ -4,7 +4,7 @@
 # (load_unet.py / nvfp4_comfy_parity.py) has been removed.
 # Never edit ComfyUI-master; all logic lives under this package.
 
-from .nvfp4_lora_bake import (
+from .int8_lora_bake import (
     install_krea2_nvfp4_lora_bake,
     uninstall_krea2_nvfp4_lora_bake,
 )

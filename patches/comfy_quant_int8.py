@@ -3496,14 +3496,14 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
         krea2_bake_ok = False
         if is_krea2 and not _aimdo_dynamic:
             try:
-                from ..nodes.krea2_convrot_nvfp4.comfy_quant_nvfp4 import (
+                from ..nodes.krea2_convrot_int8.comfy_quant_int8_krea2 import (
                     apply_comfy_quant_nvfp4_patches,
                 )
-                from ..nodes.krea2_convrot_nvfp4.nvfp4_lora_bake import (
+                from ..nodes.krea2_convrot_int8.int8_lora_bake import (
                     install_krea2_nvfp4_lora_bake,
                     reset_krea2_nvfp4_lora_bake_log_counters,
                 )
-                from ..nodes.krea2_convrot_nvfp4.nvfp4_forward import (
+                from ..nodes.krea2_convrot_int8.int8_forward import (
                     reset_nvfp4_forward_stats,
                     reset_nvfp4_lora_log_counters,
                 )

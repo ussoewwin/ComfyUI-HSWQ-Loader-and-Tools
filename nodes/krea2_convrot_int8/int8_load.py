@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from .nvfp4_conf import convrot_flags_from_conf, decode_comfy_quant_conf, is_nvfp4_conf
+from .int8_conf import convrot_flags_from_conf, decode_comfy_quant_conf, is_nvfp4_conf
 
 logger = logging.getLogger(__name__)
 
