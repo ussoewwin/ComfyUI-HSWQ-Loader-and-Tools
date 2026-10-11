@@ -69,7 +69,7 @@ def _clear_zimage_parity_contamination_for_sdxl() -> None:
     stock) and uninstall ZI bake hooks.
     """
     try:
-        from ..zimage_nvfp4.nvfp4_comfy_parity import (
+        from ..zimage_convrot_nvfp4.nvfp4_comfy_parity import (
             peel_non_product_nvfp4_ops,
             restore_nvfp4_tc_product_stack,
         )
@@ -84,7 +84,7 @@ def _clear_zimage_parity_contamination_for_sdxl() -> None:
     except Exception as e:
         logger.warning("[HSWQ NVFP4] restore TC stack for SDXL failed: %s", e)
     try:
-        from ..zimage_nvfp4.nvfp4_lora_bake import uninstall_zimage_nvfp4_lora_bake
+        from ..zimage_convrot_nvfp4.nvfp4_lora_bake import uninstall_zimage_nvfp4_lora_bake
 
         uninstall_zimage_nvfp4_lora_bake()
     except Exception as e:
@@ -144,7 +144,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         and getattr(load_fn, "_hswq_nvfp4_product_tc", False)
     ):
         try:
-            from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+            from ..zimage_convrot_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
 
             remember_nvfp4_tc_product_stack(load_fn, mp_fn)
         except Exception:
@@ -184,7 +184,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
         ops.mixed_precision_ops = mixed_precision_ops_upgraded
         _PATCHES_APPLIED = True
         try:
-            from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+            from ..zimage_convrot_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
 
             remember_nvfp4_tc_product_stack(
                 ops._load_quantized_module, mixed_precision_ops_upgraded
@@ -225,7 +225,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
             and getattr(load_fn, "_hswq_nvfp4_product_tc", False)
         ):
             try:
-                from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+                from ..zimage_convrot_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
 
                 remember_nvfp4_tc_product_stack(load_fn, mp_fn)
             except Exception:
@@ -361,7 +361,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
 
     _PATCHES_APPLIED = True
     try:
-        from ..zimage_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
+        from ..zimage_convrot_nvfp4.nvfp4_comfy_parity import remember_nvfp4_tc_product_stack
 
         remember_nvfp4_tc_product_stack(
             _load_quantized_module_patched, mixed_precision_ops_patched

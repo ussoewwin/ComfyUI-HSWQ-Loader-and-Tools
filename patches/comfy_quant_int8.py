@@ -3376,7 +3376,7 @@ def _load_sdxl_convrot_fast():
         import os as _os
 
         repo = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-        path = _os.path.join(repo, "nodes", "sdxl_int8", "sdxl_convrot_fast.py")
+        path = _os.path.join(repo, "nodes", "sdxl_convrot_int8", "sdxl_convrot_fast.py")
         spec = importlib.util.spec_from_file_location(
             "_hswq_sdxl_convrot_fast_private", path)
         mod = importlib.util.module_from_spec(spec)

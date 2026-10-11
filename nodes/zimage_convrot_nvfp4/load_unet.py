@@ -10,7 +10,7 @@ act rotate (``_hswq_nvfp4_convrot_parity``) via ``apply_nvfp4_comfy_parity``.
   - INT8 ConvRot: ComfyUI core / kitchen as-is. ``apply_comfy_quant_int8_patches``
     only for int8_tensorwise load.
 
-All logic under ``nodes/zimage_nvfp4``. Does not edit ``nodes/nvfp4`` (SDXL TC).
+All logic under ``nodes/zimage_convrot_nvfp4``. Does not edit ``nodes/nvfp4`` (SDXL TC).
 """
 from __future__ import annotations
 
@@ -390,7 +390,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
     _DISPATCH_INSTALLED = True
     print(
         f"[HSWQ NVFP4] Z Image UNet dispatch: {ZI_NVFP4_WEIGHT_DTYPE!r} "
-        "-> nodes.zimage_nvfp4 (comfy_parity; not SDXL ConvRot NVFP4)",
+        "-> nodes.zimage_convrot_nvfp4 (comfy_parity; not SDXL ConvRot NVFP4)",
         flush=True,
     )
     return True

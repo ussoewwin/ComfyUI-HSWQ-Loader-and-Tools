@@ -1,4 +1,4 @@
-"""Z Image mixed-pack LoRA bake — Dynamic VRAM only (branch under zimage_nvfp4).
+"""Z Image mixed-pack LoRA bake — Dynamic VRAM only (branch under zimage_convrot_nvfp4).
 
 Problem (owner A/B + logs):
   Without LoRA, comfy_parity + act_rotate is fine.

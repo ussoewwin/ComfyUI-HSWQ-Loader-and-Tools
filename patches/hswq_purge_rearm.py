@@ -41,8 +41,8 @@ def _console(msg: str) -> None:
 
 def _mod_by_dotted_end(dotted: str):
     """Find an imported module by its dotted tail (independent of the
-    custom_nodes package spelling): ``nodes.zimage_nvfp4.zi_comfy_quant_nvfp4``
-    matches ``custom_nodes.ComfyUI-HSWQ-Loader-and-Tools.nodes.zimage_nvfp4.zi_comfy_quant_nvfp4``."""
+    custom_nodes package spelling): ``nodes.zimage_convrot_nvfp4.zi_comfy_quant_nvfp4``
+    matches ``custom_nodes.ComfyUI-HSWQ-Loader-and-Tools.nodes.zimage_convrot_nvfp4.zi_comfy_quant_nvfp4``."""
     tail = "." + dotted.lstrip(".")
     for name, mod in list(sys.modules.items()):
         if mod is not None and name.endswith(tail):
@@ -206,7 +206,7 @@ def hswq_purge_rearm_state() -> dict:
             report[family] = f"reset-failed:{e}"
 
     _reset_gate(
-        _mod_by_dotted_end("nodes.zimage_nvfp4.zi_comfy_quant_nvfp4"),
+        _mod_by_dotted_end("nodes.zimage_convrot_nvfp4.zi_comfy_quant_nvfp4"),
         "_PATCHES_APPLIED",
         "zimage_nvfp4",
         not (zi_load_ok and zi_mp_ok and zi_detect_ok),
@@ -234,7 +234,7 @@ def hswq_purge_rearm_state() -> dict:
     # (no stale-gate early return), so force them open after a peel to make
     # the next apply_nvfp4_comfy_parity()/krea2 equivalent re-arm the parity
     # chain cleanly instead of trusting a stale bool. Independent globals.
-    zi_par = _mod_by_dotted_end("nodes.zimage_nvfp4.nvfp4_comfy_parity")
+    zi_par = _mod_by_dotted_end("nodes.zimage_convrot_nvfp4.nvfp4_comfy_parity")
     if zi_par is not None and getattr(zi_par, "_PARITY_APPLIED", False):
         try:
             zi_par._PARITY_APPLIED = False  # type: ignore[attr-defined]
@@ -271,7 +271,7 @@ def hswq_purge_rearm_state() -> dict:
         return any(bool(getattr(f, stamp, False)) for f in dyn_chain)
 
     for dotted, stamp, family in (
-        ("nodes.zimage_nvfp4.nvfp4_lora_bake", "_hswq_zi_nvfp4_lora_bake", "zimage_bake_flag"),
+        ("nodes.zimage_convrot_nvfp4.nvfp4_lora_bake", "_hswq_zi_nvfp4_lora_bake", "zimage_bake_flag"),
         ("nodes.krea2_convrot_int8.int8_lora_bake", "_hswq_krea2_int8_lora_bake", "krea2_bake_flag"),
     ):
         mod = _mod_by_dotted_end(dotted)
