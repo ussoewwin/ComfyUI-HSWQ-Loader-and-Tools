@@ -3,7 +3,7 @@
 ComfyUI runs this before the custom-node ``__init__.py``. We keep a reference to
 the *original* ``comfy_quant_nvfp4.load_unet_nvfp4_weight_dtype`` (INT8 protect +
 disable_dynamic + LoRA bake + stock GEMM + act rotate), then optionally rebind
-the module attribute to ``nodes.zimage_nvfp4.load_unet`` which *delegates* to that
+the module attribute to ``nodes.zimage_convrot_nvfp4.load_unet`` which *delegates* to that
 saved original ? never to the rebound name (that would recurse).
 
 SDXL ``load_checkpoint_sdxl_nvfp4_weight_dtype`` is left unchanged.
@@ -52,10 +52,10 @@ def _zimage_load_module():
         pkg = name[: -len(".nodes.nvfp4.comfy_quant_nvfp4")]
         if not pkg:
             continue
-        return importlib.import_module(f"{pkg}.nodes.zimage_nvfp4.load_unet")
+        return importlib.import_module(f"{pkg}.nodes.zimage_convrot_nvfp4.load_unet")
     raise ImportError(
         "comfy_quant_nvfp4 not in sys.modules yet "
-        "(cannot import nodes.zimage_nvfp4 without shadowing ComfyUI nodes)"
+        "(cannot import nodes.zimage_convrot_nvfp4 without shadowing ComfyUI nodes)"
     )
 
 
@@ -84,7 +84,7 @@ def _try_patch() -> bool:
             mod.load_unet_nvfp4_weight_dtype = zl.load_unet_nvfp4_weight_dtype
             _PATCHED = True
             print(
-                "[HSWQ NVFP4] UNet ConvRot NVFP4 -> nodes.zimage_nvfp4 "
+                "[HSWQ NVFP4] UNet ConvRot NVFP4 -> nodes.zimage_convrot_nvfp4 "
                 "(delegates to saved product: GEMM + act rotate + int8 + LoRA bake + "
                 "disable_dynamic)",
                 flush=True,

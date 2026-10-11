@@ -134,7 +134,7 @@ def apply_nvfp4_patches(unet_path=None) -> None:
     if not apply_comfy_quant_nvfp4_patches():
         raise RuntimeError(
             "[HSWQ NVFP4] Z Image: apply_comfy_quant_nvfp4_patches failed "
-            "(detect/load/LoRA bake required; see nodes/zimage_nvfp4/zi_comfy_quant_nvfp4)"
+            "(detect/load/LoRA bake required; see nodes/zimage_convrot_nvfp4/zi_comfy_quant_nvfp4)"
         )
     if zi_use_tensorcore(unet_path):
         # Keep HSWQ TC (W4A4) Linear.forward: checkpoint has calibrated input_scale.
