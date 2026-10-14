@@ -24,6 +24,12 @@ def _create_distorch_safetensor_v2_override(cls, device_param_name, device_sette
         @classmethod
         def INPUT_TYPES(s):
             inputs = copy.deepcopy(cls.INPUT_TYPES())
+            _req = inputs.get("required", {})
+            if "weight_dtype" in _req:
+                _opts = _req["weight_dtype"][0]
+                if isinstance(_opts, (list, tuple)):
+                    _filtered = [x for x in _opts if not (isinstance(x, str) and x.startswith("fp8"))]
+                    _req["weight_dtype"] = (_filtered,)
             devices = get_device_list()
             default_device = devices[1] if len(devices) > 1 else devices[0]
 

@@ -122,6 +122,12 @@ def build_distorch2_unet_loader(base_cls):
             inputs = super().INPUT_TYPES()
             _req = inputs.setdefault("required", {})
 
+            if "weight_dtype" in _req:
+                _opts = _req["weight_dtype"][0]
+                if isinstance(_opts, (list, tuple)):
+                    _filtered = [x for x in _opts if not (isinstance(x, str) and x.startswith("fp8"))]
+                    _req["weight_dtype"] = (_filtered,)
+
             _req["hswq_bake"] = (
                 "BOOLEAN",
                 {

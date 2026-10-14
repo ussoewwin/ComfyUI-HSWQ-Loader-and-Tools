@@ -813,6 +813,7 @@ NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Loader"] = "HSWQ SAM3 Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8SAM3"] = "HSWQ SAM3 Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Detect"] = "HSWQ SAM3 Detect"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQFP8E4M3UNetLoader"] = "HSWQ UNet Loader (Z Image / Krea2)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQUNetLoaderDisTorch2"] = "HSWQ UNet Loader (Z Image / Krea2) (DisTorch2)"
 WEB_DIRECTORY = "js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 logger.info("=" * (80 + len(" ComfyUI-nunchaku Initialization ")))
