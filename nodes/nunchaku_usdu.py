@@ -210,7 +210,6 @@ class HSWQUltimateSDUpscale:
                 ("force_uniform_tiles", ("BOOLEAN", {"default": True, "tooltip": "Force all tiles to be the same as the set tile size, even when tiles could be smaller. This can help prevent the model from working with irregular tile sizes."})),
                 ("tiled_decode", ("BOOLEAN", {"default": False, "tooltip": "Whether to use tiled decoding when decoding tiles."})),
                 ("batch_size", ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1, "tooltip": "The number of tiles to process in a batch. Higher values can reduce processing time but use more VRAM. If you get tensor size mismatch with FP8/FP4 (quantized) models, set this to 1."})),
-                ("tensor_boost", ("BOOLEAN", {"default": False, "tooltip": "Enable Blackwell Per-Weight CUDA Graph Tensor Boost during USDU tile upscaling. ON raises VRAM by several GB; RTX 5090 32GB+ recommended. Keep OFF for tiled upscale."})),
             ]
             optional = []
             return prepare_inputs(required, optional)
@@ -254,28 +253,9 @@ class HSWQUltimateSDUpscale:
         batch_size=1,
         custom_sampler=None,
         custom_sigmas=None,
-        tensor_boost=False,
         **kwargs,
     ):
         _ensure_imports()
-
-        # Configure Tensor Boost toggle for USDU tile upscaling
-        import os
-        if isinstance(tensor_boost, bool):
-            tb_enabled = tensor_boost
-        else:
-            tb_str = str(tensor_boost).strip().lower() if tensor_boost is not None else ""
-            tb_enabled = tb_str in ("1", "true", "on", "enable", "enabled")
-
-        if tb_enabled:
-            os.environ["HSWQ_NVFP4_TENSORBOOST"] = "1"
-        else:
-            os.environ["HSWQ_NVFP4_TENSORBOOST"] = "0"
-            try:
-                from .sdxl_convrot_nvfp4.nvfp4_runtime import clear_nvfp4_cudagraphs
-                clear_nvfp4_cudagraphs()
-            except Exception:
-                pass
 
         # Normalize color range first to get correct input dimensions
         image = _to_fp32_image(image)
