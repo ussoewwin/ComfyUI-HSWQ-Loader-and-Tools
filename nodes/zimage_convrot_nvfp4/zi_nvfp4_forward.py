@@ -6,7 +6,9 @@ Owns the ZI delta that must not live in ``nodes/nvfp4`` (SDXL TC product):
   - ``_hswq_int8_convrot`` bake arm / Params.convrot clear
   - ``attach_nvfp4_linear_lora_bake`` ver >= 8 (hybrid)
 
-Hadamard lives in ``zi_nvfp4_hadamard`` (Distorch-safe cache). Runtime stays under ``nodes/nvfp4``.
+Hadamard lives in ``zi_nvfp4_hadamard`` (Distorch-safe cache). Conf / load / runtime
+engines are consolidated in this package (``nvfp4_conf`` / ``nvfp4_load`` /
+``nvfp4_runtime``) — no import from ``nodes/nvfp4``.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from .zi_nvfp4_hadamard import (
     rotate_weight_linear,
     unrotate_weight_linear,
 )
-from ..nvfp4.nvfp4_runtime import (
+from .nvfp4_runtime import (
     ensure_act_scale,
     clear_nvfp4_cudagraphs,
     nvfp4_quant_mm_cudagraph,
@@ -682,6 +684,29 @@ def _peel_lora_bake_wrap(fn):
             return cur
         cur = nxt
     return cur
+
+
+def peel_all_nvfp4_linear_lora_bake(Lin) -> bool:
+    """Strip every HSWQ Linear bake wrap down to stock convert/set.
+
+    Peels any HSWQ bake wrap (ZI VER=8 ``int8_protect`` parity wraps or a foreign
+    SDXL VER=1) from the live ``mixed_precision_ops().Linear`` so a later SDXL
+    INT8 / stock load never bakes through ZI wraps (LoRA fell off on the 3rd
+    prompt). ZI-local copy of the peel walker; SDXL keeps its own under
+    ``nodes/nvfp4`` (separate beings).
+    """
+    changed = False
+    for attr in ("convert_weight", "set_weight"):
+        fn = getattr(Lin, attr, None)
+        if not callable(fn):
+            continue
+        if int(getattr(fn, "_hswq_nvfp4_lora_bake_ver", 0) or 0) <= 0:
+            continue
+        stock = _peel_lora_bake_wrap(fn)
+        if stock is not fn:
+            setattr(Lin, attr, stock)
+            changed = True
+    return changed
 
 
 def attach_nvfp4_linear_lora_bake(Lin) -> bool:

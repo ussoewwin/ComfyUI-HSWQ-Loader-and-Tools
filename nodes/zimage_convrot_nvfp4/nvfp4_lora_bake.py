@@ -618,7 +618,7 @@ def uninstall_zimage_nvfp4_lora_bake() -> bool:
     # Also strip VER=8 convert/set left on mp0.Linear by comfy_parity install.
     try:
         import comfy.ops as ops
-        from ..nvfp4.nvfp4_forward import peel_all_nvfp4_linear_lora_bake
+        from .zi_nvfp4_forward import peel_all_nvfp4_linear_lora_bake
 
         if peel_all_nvfp4_linear_lora_bake(ops.mixed_precision_ops().Linear):
             removed = True

@@ -450,7 +450,7 @@ def _ensure_int8_protect_arm_overlay() -> None:
     cur = ops._load_quantized_module
     if _chain_has_int8_protect_in_load(cur):
         return
-    from ..nvfp4.nvfp4_conf import decode_comfy_quant_conf
+    from .nvfp4_conf import decode_comfy_quant_conf
 
     def _load_int8_protect_arm_overlay(
         module,
@@ -588,7 +588,7 @@ def _make_convrot_parity_forward(stock_forward):
 
 def _arm_convrot_after_stock_load(module, conf) -> None:
     global _LOAD_NVFP4_SEEN, _LOAD_CONVROT_ARMED, _LOAD_NVFP4_NO_CONVROT
-    from ..nvfp4.nvfp4_conf import convrot_flags_from_conf, is_nvfp4_conf
+    from .nvfp4_conf import convrot_flags_from_conf, is_nvfp4_conf
 
     if not is_nvfp4_conf(conf):
         return
@@ -784,7 +784,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         return False
 
     from .nvfp4_addmm_patch import register_nvfp4_addmm_handler
-    from ..nvfp4.nvfp4_conf import decode_comfy_quant_conf, is_nvfp4_conf
+    from .nvfp4_conf import decode_comfy_quant_conf, is_nvfp4_conf
     from .zi_nvfp4_forward import attach_nvfp4_linear_lora_bake
     # Product Z Image: keep ConvRot Linear LoRA bake (same as SDXL). Do not peel.
 

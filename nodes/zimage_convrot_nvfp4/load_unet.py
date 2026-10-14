@@ -349,7 +349,7 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
     if not isinstance(node_class_mappings, dict):
         return False
 
-    from ..nvfp4.nvfp4_conf import checkpoint_looks_like_comfy_quant_nvfp4
+    from .nvfp4_conf import checkpoint_looks_like_comfy_quant_nvfp4
 
     unet_cls = node_class_mappings.get("HSWQFP8E4M3UNetLoader")
     if unet_cls is None:

@@ -6,19 +6,20 @@ Owns the ZI delta that must not live in ``nodes/nvfp4`` (SDXL TC product):
   - stamp stack_ver instead of false TC "upgrade" over ConvRot parity
   - never wrap TC Linear.forward over ``_hswq_nvfp4_convrot_parity``
 
-Detect/load helpers stay under ``nodes/nvfp4``. Forward/bake come from
-``zi_nvfp4_forward`` (hybrid). Call ``apply_nvfp4_comfy_parity`` after this.
+Detect/load helpers are consolidated in this package (``nvfp4_conf`` /
+``nvfp4_load``). Forward/bake come from ``zi_nvfp4_forward`` (hybrid). Call
+``apply_nvfp4_comfy_parity`` after this.
 """
 from __future__ import annotations
 
 import logging
 
-from ..nvfp4.nvfp4_conf import (
+from .nvfp4_conf import (
     fix_unet_config_packed_dims,
     is_nvfp4_conf,
     logical_linear_in_features,
 )
-from ..nvfp4.nvfp4_load import load_nvfp4_linear_module, peek_nvfp4_conf
+from .nvfp4_load import load_nvfp4_linear_module, peek_nvfp4_conf
 from .zi_nvfp4_forward import (
     attach_nvfp4_linear_lora_bake,
     make_nvfp4_linear_forward,
