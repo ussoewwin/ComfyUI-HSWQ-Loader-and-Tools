@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.6.1
+
+- **移除**：**SDXL ConvRot NVFP4 开发终止 / 移除 UI 选项与评测脚本** —— 从 `HSWQ Checkpoint Loader (SDXL)`（`HSWQCheckpointLoaderSDXL`）节点的 `weight_dtype` 下拉菜单中移除了 `ConvRot NVFP4` 选项，并删除了 SDXL NVFP4 专用评测脚本 `nodes/nvfp4bench_sdxl.py`（594 行）。上游确定性潜空间轨迹测试表明，4-bit 精度（NVFP4）在 SDXL 上无法保证潜空间轨迹一致性（最终轨迹余弦均值未达 0.90，旧版 SSIM ~0.95 实受 VAE 解码掩盖）；SDXL 正式转为全面专注于 **ConvRot INT8（reverse hybrid）**。为保持对已发布历史模型的向后兼容性，`weight_dtype="default"` 时的 `checkpoint_looks_like_comfy_quant_nvfp4` 自动检测机制依然保留。同时，原共享包 `nodes/nvfp4/` 重命名为 SDXL 专用包 `nodes/sdxl_convrot_nvfp4/`，Z Image NVFP4 相关代码亦统一归拢至自闭环包 `nodes/zimage_convrot_nvfp4/`。
+- 详见 [发布说明 v3.6.1](v3.6.1.md)
+
 ## Version 3.6.0
 
 - **移除**：**Krea2 ConvRot NVFP4 支持终止 / 代码删除** -- 从 UNet 加载器（普通版 + DisTorch2 版共用选项表）移除 `Krea2 ConvRot NVFP4` `weight_dtype` 选项；删除 `nodes/krea2_convrot_nvfp4/load_unet.py`（182 行）与 `nodes/krea2_convrot_nvfp4/nvfp4_comfy_parity.py`（178 行）；包重命名 `nodes/krea2_convrot_nvfp4/` -> `nodes/krea2_convrot_int8/`；删除该包中 8 个 NVFP4 专用模块（`int8_load` 236 / `int8_conf` 264 / `int8_gemm` 316 / `int8_runtime` 616 / `int8_tc_gate` 129 / `int8_addmm_patch` 111 / `int8_hadamard` 194 / `kitchen_quant_ops_repair` 435 行）；并从保留的 3 个模块（`comfy_quant_int8_krea2.py`、`int8_forward.py`、`int8_lora_bake.py`）中剥离 NVFP4 专用代码路径（`apply_comfy_quant_nvfp4_patches` 更名 `apply_comfy_quant_int8_patches`）—— 两次删除提交合计删除 3,896 行。保留模块现仅服务 **Krea2 ConvRot INT8**（stock INT8 forward + 低秩 LoRA 残差；共享 peel 标记 `_hswq_nvfp4_stack_ver=2` / `_hswq_nvfp4_orig_mp` / `_hswq_nvfp4_full_forward` 为 SDXL / Z Image peel walker 保留）。SDXL ConvRot INT8、SDXL ConvRot NVFP4、Z Image INT8、Z Image ConvRot NVFP4：**0 字节变更**（以 git blob 哈希对比 v3.5.9 与 HEAD 实测，`nodes/nvfp4/`、`nodes/zimage_nvfp4/`、`nodes/sdxl_int8/` + INT8 loader 节点共 27 个文件）。
