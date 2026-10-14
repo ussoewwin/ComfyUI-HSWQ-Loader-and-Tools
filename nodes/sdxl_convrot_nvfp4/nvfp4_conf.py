@@ -209,21 +209,4 @@ def is_blackwell_consumer() -> bool:
     return major == 12
 
 
-def is_nvfp4_cudagraph_enabled() -> bool:
-    """Return whether CUDA Graph / Tensor Boost execution is active.
-
-    Evaluates HSWQ_NVFP4_TENSORBOOST and HSWQ_NVFP4_CUDAGRAPH environment variables.
-    Returns True if set to '1' / 'true' / 'on' / 'enable'.
-    Returns False otherwise.
-    """
-    import os
-
-    for env_key in ("HSWQ_NVFP4_CUDAGRAPH", "HSWQ_NVFP4_TENSORBOOST"):
-        val = os.environ.get(env_key, "").strip().lower()
-        if val in ("1", "true", "on", "enable", "enabled"):
-            return True
-        if val in ("0", "false", "off", "disable", "disabled"):
-            return False
-
-    return False
 
