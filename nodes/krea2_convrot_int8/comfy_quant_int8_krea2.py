@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _PATCHES_APPLIED = False
 
 # External peel contract: SDXL/ZI walkers accept the live chain only
-# when _hswq_nvfp4_stack_ver >= 2 (nodes/nvfp4 + nodes/zimage_convrot_nvfp4 read it).
+# when _hswq_nvfp4_stack_ver >= 2 (nodes/sdxl_convrot_nvfp4 + nodes/zimage_convrot_nvfp4 read it).
 # This value is part of their protocol - never change it here.
 _KREA2_INT8_STACK_VER = 2
 

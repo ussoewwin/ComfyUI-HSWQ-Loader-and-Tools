@@ -212,7 +212,7 @@ def hswq_purge_rearm_state() -> dict:
         not (zi_load_ok and zi_mp_ok and zi_detect_ok),
     )
     _reset_gate(
-        _mod_by_dotted_end("nodes.nvfp4.comfy_quant_nvfp4"),
+        _mod_by_dotted_end("nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4"),
         "_PATCHES_APPLIED",
         "sdxl_nvfp4_product",
         not sdxl_ok,

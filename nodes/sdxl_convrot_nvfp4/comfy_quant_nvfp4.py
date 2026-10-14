@@ -3,7 +3,7 @@ ComfyUI runtime monkey-patches for HSWQ comfy_quant NVFP4 (FULL ConvRot).
 
 Runtime only — never permanently edit ComfyUI-master.
 
-Owns (via sibling modules under nodes/nvfp4/):
+Owns (via sibling modules under nodes/sdxl_convrot_nvfp4/):
   - packed-K UNet detection (logical in_features)
   - full NVFP4 Linear load (scales, QT, ConvRot flags, storage validation)
   - full Tensor Core forward (act ConvRot → NVFP4 quant → scaled_mm_nvfp4)
@@ -454,7 +454,7 @@ def load_checkpoint_sdxl_nvfp4_weight_dtype(
 
 
 def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
-    """Wrap SDXL loader so ConvRot NVFP4 uses nodes/nvfp4 (bench) stack.
+    """Wrap SDXL loader so ConvRot NVFP4 uses nodes/sdxl_convrot_nvfp4 (bench) stack.
 
     Must run *after* ``install_int8_option_dispatch``: NVFP4 checkpoints also
     contain ``int8_tensorwise`` Conv layers, so INT8-only auto-detect would

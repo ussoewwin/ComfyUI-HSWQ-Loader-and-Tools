@@ -3,7 +3,7 @@ HSWQ-owned NVFP4 Linear load path (Z Image consolidated copy).
 
 Consolidated under ``nodes/zimage_convrot_nvfp4`` (owner order, 2026-10-14):
 self-contained Z Image NVFP4 package; the SDXL legacy stack keeps its own
-``nodes/nvfp4`` copy — separate beings, never shared.
+``nodes/sdxl_convrot_nvfp4`` copy — separate beings, never shared.
 
 Stock Comfy ``_load_quantized_module`` loads NVFP4 weights/scales into a
 QuantizedTensor, but does **not**:

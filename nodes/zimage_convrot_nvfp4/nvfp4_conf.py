@@ -2,7 +2,7 @@
 
 Consolidated under ``nodes/zimage_convrot_nvfp4`` (owner order, 2026-10-14): the
 Z Image NVFP4 package is self-contained here. The SDXL legacy stack keeps its own
-``nodes/nvfp4`` copy — separate beings, never shared. The SDXL-only Blackwell GPU
+``nodes/sdxl_convrot_nvfp4`` copy — separate beings, never shared. The SDXL-only Blackwell GPU
 detection section is intentionally not copied (Z Image never reaches it).
 """
 from __future__ import annotations

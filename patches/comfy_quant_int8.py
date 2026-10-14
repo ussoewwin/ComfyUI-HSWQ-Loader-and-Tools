@@ -819,7 +819,7 @@ def _model_has_int8_quantized_weights(model) -> bool:
 
     SDXL ConvRot NVFP4 (Checkpoint Loader dropdown ``ConvRot NVFP4``):
       bake must see NVFP4 Linear QT so ``patch_weight_to_device`` runs
-      nodes/nvfp4 ConvRot convert/set_weight (3.3.0 SDXL path).
+      nodes/sdxl_convrot_nvfp4 ConvRot convert/set_weight (3.3.0 SDXL path).
 
     Z Image ConvRot NVFP4 (UNet dropdown ``Z Image ConvRot NVFP4``):
       do not treat as the SDXL bake path — see ``_model_is_zimage_nvfp4_parity``.
@@ -1444,7 +1444,7 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
     if _model_is_nunchaku_svdq(getattr(patcher, "model", None)):
         return 0
     # Absolute branch: Z Image / Krea parity packs use zimage_nvfp4 bake only.
-    # Never apply the SDXL (3.3.0 nodes/nvfp4) Dynamic bake to them.
+    # Never apply the SDXL (3.3.0 nodes/sdxl_convrot_nvfp4) Dynamic bake to them.
     if _model_is_zimage_nvfp4_parity(getattr(patcher, "model", None)):
         return 0
     if not getattr(patcher, "patches", None):
@@ -1480,7 +1480,7 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
             # 0.30.2: weight may be Parameter(QuantizedTensor) - unwrap for isinstance check
             weight_inner = weight.data if hasattr(weight, "data") else weight
             # SDXL path (3.3.0): bake all comfy_quant QuantizedTensor — never bare int8.
-            # NVFP4 Linear uses nodes/nvfp4 ConvRot convert/set_weight.
+            # NVFP4 Linear uses nodes/sdxl_convrot_nvfp4 ConvRot convert/set_weight.
             # Z Image path never reaches here (parity early-return above).
             if not isinstance(weight_inner, QuantizedTensor):
                 continue
@@ -3478,7 +3478,7 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
             )
         else:
             try:
-                from ..nodes.nvfp4.comfy_quant_nvfp4 import (
+                from ..nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4 import (
                     _clear_zimage_parity_contamination_for_sdxl,
                 )
 
@@ -3623,7 +3623,7 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
         if is_int8:
             # Z Image comfy_parity + ZI Dynamic bake must not wrap SDXL INT8.
             try:
-                from ..nodes.nvfp4.comfy_quant_nvfp4 import (
+                from ..nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4 import (
                     _clear_zimage_parity_contamination_for_sdxl,
                 )
 

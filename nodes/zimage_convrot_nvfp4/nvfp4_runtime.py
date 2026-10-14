@@ -2,7 +2,7 @@
 
 Consolidated under ``nodes/zimage_convrot_nvfp4`` (owner order, 2026-10-14):
 self-contained Z Image NVFP4 package; the SDXL legacy stack keeps its own
-``nodes/nvfp4`` copy — separate beings, never shared.
+``nodes/sdxl_convrot_nvfp4`` copy — separate beings, never shared.
 
 Stock ``ck.quantize_nvfp4`` / ``ck.scaled_mm_nvfp4`` allocate fresh tensors on
 every Linear call. With ~18k TC hits per SDXL sample that allocation overhead

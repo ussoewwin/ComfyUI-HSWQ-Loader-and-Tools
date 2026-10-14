@@ -455,7 +455,7 @@ class HSWQSampler:
         else:
             os.environ["HSWQ_NVFP4_TENSORBOOST"] = "0"
             try:
-                from .nvfp4.nvfp4_runtime import clear_nvfp4_cudagraphs
+                from .sdxl_convrot_nvfp4.nvfp4_runtime import clear_nvfp4_cudagraphs
                 clear_nvfp4_cudagraphs()
             except Exception:
                 pass

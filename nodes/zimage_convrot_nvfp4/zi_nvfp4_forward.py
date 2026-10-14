@@ -1,14 +1,14 @@
 """
 Z Image hybrid ConvRot LoRA bake + NVFP4 Linear forward helpers (branch-only).
 
-Owns the ZI delta that must not live in ``nodes/nvfp4`` (SDXL TC product):
+Owns the ZI delta that must not live in ``nodes/sdxl_convrot_nvfp4`` (SDXL legacy TC product):
   - per-kind LoRA bake counters / EVIDENCE (NVFP4 + INT8 protect)
   - ``_hswq_int8_convrot`` bake arm / Params.convrot clear
   - ``attach_nvfp4_linear_lora_bake`` ver >= 8 (hybrid)
 
 Hadamard lives in ``zi_nvfp4_hadamard`` (Distorch-safe cache). Conf / load / runtime
 engines are consolidated in this package (``nvfp4_conf`` / ``nvfp4_load`` /
-``nvfp4_runtime``) — no import from ``nodes/nvfp4``.
+``nvfp4_runtime``) — no import from ``nodes/sdxl_convrot_nvfp4``.
 """
 from __future__ import annotations
 
@@ -656,7 +656,7 @@ def make_nvfp4_linear_set_weight(stock_set_weight):
 def _peel_lora_bake_wrap(fn):
     """Unwrap nested HSWQ convert/set wraps to true stock.
 
-    After #2 split, ``nodes/nvfp4`` (3.3.0) may attach VER=1 first; ZI must not
+    After #2 split, the SDXL package (3.3.0) may attach VER=1 first; ZI must not
     wrap that as stock (double unrotate / re-rotate → dead LoRA). Same as
     3.3.4 single-module attach: one hybrid wrap over stock only.
     """
@@ -693,7 +693,7 @@ def peel_all_nvfp4_linear_lora_bake(Lin) -> bool:
     SDXL VER=1) from the live ``mixed_precision_ops().Linear`` so a later SDXL
     INT8 / stock load never bakes through ZI wraps (LoRA fell off on the 3rd
     prompt). ZI-local copy of the peel walker; SDXL keeps its own under
-    ``nodes/nvfp4`` (separate beings).
+    ``nodes/sdxl_convrot_nvfp4`` (separate beings).
     """
     changed = False
     for attr in ("convert_weight", "set_weight"):
@@ -712,7 +712,7 @@ def peel_all_nvfp4_linear_lora_bake(Lin) -> bool:
 def attach_nvfp4_linear_lora_bake(Lin) -> bool:
     """Ensure MixedPrecision Linear has hybrid ConvRot LoRA wraps (one layer).
 
-    Peels any prior HSWQ bake wrap (e.g. SDXL ``nodes/nvfp4`` VER=1) so ZI
+    Peels any prior HSWQ bake wrap (e.g. SDXL VER=1 from ``nodes/sdxl_convrot_nvfp4``) so ZI
     hybrid VER never nests — nesting double-unrotates NVFP4 and kills LoRA.
     """
     applied = False

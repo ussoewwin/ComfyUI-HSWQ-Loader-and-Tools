@@ -190,7 +190,7 @@ def _get_gpu_cc() -> tuple:
 def is_blackwell_gpu() -> bool:
     """True if GPU is Blackwell class (SM >= 100): B200, RTX 5090, etc.
 
-    Called only from nodes/nvfp4 product-TC path guards.  Z Image and INT8
+    Called only from nodes/sdxl_convrot_nvfp4 product-TC path guards.  Z Image and INT8
     never reach this code.
     """
     major, _ = _get_gpu_cc()

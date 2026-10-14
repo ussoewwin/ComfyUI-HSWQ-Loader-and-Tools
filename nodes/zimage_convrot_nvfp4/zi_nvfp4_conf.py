@@ -1,4 +1,4 @@
-"""Z Image INT8 protect ConvRot conf helpers (branch-only; not in nodes/nvfp4)."""
+"""Z Image INT8 protect ConvRot conf helpers (branch-only; not in nodes/sdxl_convrot_nvfp4)."""
 from __future__ import annotations
 
 from typing import Optional

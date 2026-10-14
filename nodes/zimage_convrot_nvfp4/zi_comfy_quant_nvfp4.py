@@ -1,7 +1,7 @@
 """
 Z Image arm for NVFP4 detect/load/LoRA bake — branch-only.
 
-Owns the ZI delta that must not live in ``nodes/nvfp4`` (SDXL TC product):
+Owns the ZI delta that must not live in ``nodes/sdxl_convrot_nvfp4`` (SDXL legacy TC product):
   - walk stack_ver through INT8 / comfy_parity wraps
   - stamp stack_ver instead of false TC "upgrade" over ConvRot parity
   - never wrap TC Linear.forward over ``_hswq_nvfp4_convrot_parity``

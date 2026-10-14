@@ -222,7 +222,7 @@ def remember_nvfp4_tc_product_stack(load_fn, mp_fn) -> None:
     ``_hswq_nvfp4_full_forward`` without ``_hswq_nvfp4_comfy_only``. Treating that
     as PRODUCT poisoned SDXL INT8 after Z Image (ZI VER=8 ``int8_protect`` bake
     on ConvRot INT8 → LoRA falls off on the 3rd prompt). Require
-    ``_hswq_nvfp4_product_tc`` stamped only by ``nodes/nvfp4`` SDXL product.
+    ``_hswq_nvfp4_product_tc`` stamped only by ``nodes/sdxl_convrot_nvfp4`` SDXL product.
     """
     global _PRODUCT_LOAD, _PRODUCT_MP
     if load_fn is not None and getattr(load_fn, "_hswq_nvfp4_product_tc", False):

@@ -47,9 +47,9 @@ _DIT_LOCK_PATCHING = False
 def _zimage_load_module():
     """Resolve zimage load only via the already-imported HSWQ package prefix."""
     for name in list(sys.modules):
-        if not name.endswith("nodes.nvfp4.comfy_quant_nvfp4"):
+        if not name.endswith("nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4"):
             continue
-        pkg = name[: -len(".nodes.nvfp4.comfy_quant_nvfp4")]
+        pkg = name[: -len(".nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4")]
         if not pkg:
             continue
         return importlib.import_module(f"{pkg}.nodes.zimage_convrot_nvfp4.load_unet")
@@ -71,7 +71,7 @@ def _try_patch() -> bool:
             return False
         for name, mod in list(sys.modules.items()):
             if not (
-                name.endswith("nodes.nvfp4.comfy_quant_nvfp4")
+                name.endswith("nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4")
                 or name.endswith(".comfy_quant_nvfp4")
                 or name == "comfy_quant_nvfp4"
             ):

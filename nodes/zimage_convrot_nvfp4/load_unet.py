@@ -10,7 +10,8 @@ act rotate (``_hswq_nvfp4_convrot_parity``) via ``apply_nvfp4_comfy_parity``.
   - INT8 ConvRot: ComfyUI core / kitchen as-is. ``apply_comfy_quant_int8_patches``
     only for int8_tensorwise load.
 
-All logic under ``nodes/zimage_convrot_nvfp4``. Does not edit ``nodes/nvfp4`` (SDXL TC).
+All logic under ``nodes/zimage_convrot_nvfp4``. Does not edit the SDXL legacy
+package ``nodes/sdxl_convrot_nvfp4``.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import os
 import sys
 
 # ZI/Krea UNet dropdown ONLY — never share the SDXL Checkpoint Loader string.
-# SDXL uses nodes/nvfp4 NVFP4_WEIGHT_DTYPE == "ConvRot NVFP4" (separate being).
+# SDXL legacy package (nodes/sdxl_convrot_nvfp4) NVFP4_WEIGHT_DTYPE == "ConvRot NVFP4" (separate being).
 ZI_NVFP4_WEIGHT_DTYPE = "Z Image ConvRot NVFP4"
 
 _DISPATCH_INSTALLED = False
@@ -320,7 +321,7 @@ def _attach_to_comfy_quant_module() -> None:
     """Expose this loader on comfy_quant_nvfp4 so prestartup can bind it."""
     for name, mod in list(sys.modules.items()):
         if not (
-            name.endswith("nodes.nvfp4.comfy_quant_nvfp4")
+            name.endswith("nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4")
             or name.endswith(".comfy_quant_nvfp4")
             or name == "comfy_quant_nvfp4"
         ):
@@ -403,7 +404,7 @@ def _hook_nvfp4_install_for_unet_dispatch() -> None:
         return
     for name, mod in list(sys.modules.items()):
         if not (
-            name.endswith("nodes.nvfp4.comfy_quant_nvfp4")
+            name.endswith("nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4")
             or name.endswith(".comfy_quant_nvfp4")
             or name == "comfy_quant_nvfp4"
         ):

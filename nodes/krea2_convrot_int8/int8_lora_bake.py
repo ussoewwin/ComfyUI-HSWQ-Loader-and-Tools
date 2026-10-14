@@ -14,7 +14,7 @@ and LoRA strength breaks. Structure mirrors nodes/zimage_nvfp4/nvfp4_lora_bake.p
   - load_models_gpu wrap stamp: ``_hswq_krea2_int8_gpu_bake(_ver)``
   - baked-key registry: ``_hswq_krea2_int8_baked_keys`` / ``_hswq_krea2_int8_baked_uuid``
 
-Does **not** edit ``nodes/nvfp4`` (SDXL), ``nodes/zimage_nvfp4`` (Z Image) or
+Does **not** edit ``nodes/sdxl_convrot_nvfp4`` (SDXL), ``nodes/zimage_convrot_nvfp4`` (Z Image) or
 ``patches/comfy_quant_int8``. Runtime only.
 """
 from __future__ import annotations
@@ -625,9 +625,9 @@ def install_krea2_int8_lora_bake(force: bool = False) -> bool:
     # Cross-branch contract (SDXL does the same): drop the ZI Dynamic bake
     # hook before we take over - ZI's gate keys on the SHARED
     # shared ConvRot flags and would also fire (and stamp) Krea2 packs.
-    # Import-and-call only; never edits nodes/zimage_nvfp4.
+    # Import-and-call only; never edits nodes/zimage_convrot_nvfp4.
     try:
-        from ..zimage_nvfp4.nvfp4_lora_bake import uninstall_zimage_nvfp4_lora_bake
+        from ..zimage_convrot_nvfp4.nvfp4_lora_bake import uninstall_zimage_nvfp4_lora_bake
 
         uninstall_zimage_nvfp4_lora_bake()
         # Re-read: uninstall replaced Dynamic.load; chaining to the stale ZI

@@ -19,7 +19,7 @@ v4 (owner: still no good — ENTER patches=180 nvfp4_convrot=False):
   Fix: prefer ``_layout_cls`` / ``layout_cls``; gate on ConvRot **flag**
   (do not require QT on ``module.weight`` under Dynamic VRAM).
 
-Does **not** edit ``nodes/nvfp4`` (SDXL).
+Does **not** edit ``nodes/sdxl_convrot_nvfp4`` (SDXL legacy).
 """
 from __future__ import annotations
 

@@ -711,7 +711,7 @@ except Exception as e:
 
 # After INT8 dispatch: NVFP4 ckpts also have int8 Conv markers; NVFP4 must win first.
 try:
-    from .nodes.nvfp4.comfy_quant_nvfp4 import install_nvfp4_option_dispatch
+    from .nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4 import install_nvfp4_option_dispatch
     install_nvfp4_option_dispatch(NODE_CLASS_MAPPINGS)
 except Exception as e:
     logger.exception("[HSWQ NVFP4] install_nvfp4_option_dispatch: %s", e)
