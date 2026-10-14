@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.6.2
+
+- **移除**：**彻底移除 Tensor Boost（Blackwell CUDA Graph）功能与运行时代码** —— 继 v3.6.1 终止 SDXL NVFP4 开发后，此前专为 SDXL NVFP4 设计的 CUDA Graph 加速机制 Tensor Boost 已无存在必要，本次更新进行了全方位的彻底清理：
+  - **节点 UI**：从 `HSWQ Sampler`（`HSWQSampler`）与 `HSWQ Ultimate SD Upscale`（`HSWQUltimateSDUpscale`）节点中彻底移除了 `tensor_boost` 开关部件。
+  - **文档说明**：从 `README.md` 与 `zhmd/README.md` 中全面清理了所有关于 Tensor Boost 的说明段落、性能表格及 RTX 5090 开启建议。
+  - **运行时与底层代码**：彻底删除了 `nodes/sdxl_convrot_nvfp4/` 下的 CUDA Graph 捕获与重放基础设施（共删除 523 行代码，涉及 `nvfp4_runtime.py`、`nvfp4_forward.py`、`nvfp4_conf.py`、`comfy_quant_nvfp4.py`），包括形状共享图缓存、逐权重图缓存、静态缓冲区拷贝逻辑以及 `is_nvfp4_cudagraph_enabled()`。历史 SDXL NVFP4 模型的推理执行直接运行在稳定轻量的 Eager Pooled GEMM 路径上，彻底消除了显存图静态膨胀与 CUDA 图异常风险。
+- 详见 [发布说明 v3.6.2](v3.6.2.md)
+
 ## Version 3.6.1
 
 - **移除**：**SDXL ConvRot NVFP4 开发终止 / 移除 UI 选项与评测脚本** —— 从 `HSWQ Checkpoint Loader (SDXL)`（`HSWQCheckpointLoaderSDXL`）节点的 `weight_dtype` 下拉菜单中移除了 `ConvRot NVFP4` 选项，并删除了 SDXL NVFP4 专用评测脚本 `nodes/nvfp4bench_sdxl.py`（594 行）。上游确定性潜空间轨迹测试表明，4-bit 精度（NVFP4）在 SDXL 上无法保证潜空间轨迹一致性（最终轨迹余弦均值未达 0.90，旧版 SSIM ~0.95 实受 VAE 解码掩盖）；SDXL 正式转为全面专注于 **ConvRot INT8（reverse hybrid）**。为保持对已发布历史模型的向后兼容性，`weight_dtype="default"` 时的 `checkpoint_looks_like_comfy_quant_nvfp4` 自动检测机制依然保留。同时，原共享包 `nodes/nvfp4/` 重命名为 SDXL 专用包 `nodes/sdxl_convrot_nvfp4/`，Z Image NVFP4 相关代码亦统一归拢至自闭环包 `nodes/zimage_convrot_nvfp4/`。

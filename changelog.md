@@ -7,6 +7,14 @@
   </tr>
 </table>
 
+## Version 3.6.2
+
+- **Removed**: **Tensor Boost (Blackwell CUDA Graph) feature and runtime completely removed** - following the cancellation of SDXL NVFP4 in v3.6.1, the Tensor Boost feature (CUDA Graph acceleration designed exclusively for SDXL NVFP4) was completely removed:
+  - **Node UI**: Removed the `tensor_boost` toggle widget from both the `HSWQ Sampler` (`HSWQSampler`) and `HSWQ Ultimate SD Upscale` (`HSWQUltimateSDUpscale`) nodes.
+  - **Documentation**: Stripped all Tensor Boost sections, mentions, and RTX 5090 Tensor Boost recommendation notes from `README.md` and `zhmd/README.md`.
+  - **Runtime & Engine**: Completely removed 523 lines of CUDA Graph capture and replay infrastructure across `nodes/sdxl_convrot_nvfp4/` (`nvfp4_runtime.py`, `nvfp4_forward.py`, `nvfp4_conf.py`, and `comfy_quant_nvfp4.py`), including shape-shared and per-weight graph caches, static buffer copies, and `is_nvfp4_cudagraph_enabled()`. Inference execution for any legacy SDXL NVFP4 runs directly on the stable eager pooled GEMM path without VRAM graph arena overhead or CUDA graph hazards.
+- See [Release Notes v3.6.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.2) for details.
+
 ## Version 3.6.1
 
 - **Removed**: **SDXL ConvRot NVFP4 development cancelled / UI option and benchmark harness removed** - removed the `ConvRot NVFP4` `weight_dtype` option from the `HSWQ Checkpoint Loader (SDXL)` node (`HSWQCheckpointLoaderSDXL`), and deleted the SDXL NVFP4 benchmark script `nodes/nvfp4bench_sdxl.py` (594 lines). Upstream deterministic latent trajectory measurements showed that 4-bit precision (NVFP4) fails to maintain latent trajectory fidelity on SDXL (final trajectory cosine mean fails to reach 0.90, where legacy decoded SSIM ~0.95 was masked by VAE decoding); SDXL is now supported strictly in **ConvRot INT8 (reverse hybrid)**. To preserve backward compatibility for previously published checkpoints, `weight_dtype="default"` auto-detection via `checkpoint_looks_like_comfy_quant_nvfp4` remains functional. In addition, the shared `nodes/nvfp4/` package was renamed to the dedicated `nodes/sdxl_convrot_nvfp4/`, and Z Image NVFP4 code was consolidated into the self-contained package `nodes/zimage_convrot_nvfp4/`.
