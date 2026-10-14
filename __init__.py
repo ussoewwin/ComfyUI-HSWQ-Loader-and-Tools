@@ -632,8 +632,6 @@ try:
                     "weight_dtype": ([
                         "default",
                         "int8_tensorwise",
-                        # SDXL only — never reuse Z Image / Krea "Z Image ConvRot NVFP4".
-                        "ConvRot NVFP4",
                     ],),
                 }
                 opt = {"device": (devices, {"default": default_dev})}
