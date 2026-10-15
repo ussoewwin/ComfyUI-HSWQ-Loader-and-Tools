@@ -110,6 +110,42 @@ def _collect_sdxl_clip_layers(state_dict, metadata):
     return layers
 
 
+def _complete_sdxl_clip_optional_params(out):
+    """SDXL CLIP-L stores no ``text_projection`` in the checkpoint
+    (SDXL.process_clip_state_dict_for_saving pops
+    ``clip_l.transformer.text_projection.weight``). The FP16 path builds it as an
+    unused all-zeros Linear; under mixed_precision_ops the same Linear is a
+    quantized ops.Linear whose weight stays None (the pack has no
+    ``comfy_quant`` for it), so the INT8 forward crashes on the None weight
+    (``'NoneType' object has no attribute 'device'``). Complete it with a plain
+    fp16 zeros weight, exactly like the FP16 path.
+    """
+    try:
+        clip = out[1] if isinstance(out, (tuple, list)) and len(out) > 1 else None
+        if clip is None:
+            return
+        csm = getattr(clip, "cond_stage_model", None)
+        inner = getattr(csm, "clip_l", None)
+        if inner is None:
+            return
+        import torch as _t
+        tr = getattr(inner, "transformer", None)
+        tp = getattr(tr, "text_projection", None) if tr is not None else None
+        if tp is not None and getattr(tp, "weight", None) is None:
+            hidden = 768
+            try:
+                emb = tr.text_model.embeddings.token_embedding.weight
+                hidden = int(emb.shape[1])
+                dtype = emb.dtype
+            except Exception:
+                dtype = _t.float16
+            tp.weight = _t.nn.Parameter(
+                _t.zeros((hidden, hidden), dtype=dtype), requires_grad=False
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[HSWQ INT8][SDXL CLIP] optional-param completion skipped: %s", exc)
+
+
 def arm_sdxl_clip_quant_metadata() -> bool:
     """Install the SDXL CLIP quantization-metadata wrapper. Idempotent."""
     try:
@@ -148,7 +184,9 @@ def arm_sdxl_clip_quant_metadata() -> bool:
             f"[HSWQ INT8][SDXL CLIP] injecting ConvRot INT8 metadata for "
             f"{len(clip_layers)} text-encoder layers"
         )
-        return original(sd, *args, **kwargs)
+        out = original(sd, *args, **kwargs)
+        _complete_sdxl_clip_optional_params(out)
+        return out
 
     load_state_dict_guess_config_sdxl_clip.__dict__[_MARKER] = True
     load_state_dict_guess_config_sdxl_clip.__wrapped__ = original
