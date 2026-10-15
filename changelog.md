@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.3
+
+- **Added**: **SDXL ConvRot INT8 CLIP support** - the checkpoint-embedded SDXL text encoders (CLIP-L `conditioner.embedders.0` and CLIP-G `conditioner.embedders.1`) can now be packed as **ConvRot INT8** and load correctly in ComfyUI:
+  - **Loader**: `nodes/sdxl_convrot_int8/sdxl_clip_quant.py` (SDXL-only) makes the text-encoder load path consume the CLIP quantization metadata (`te_model_options["quantization_metadata"]`), remaps the CLIP-G companion keys (`.comfy_quant` / `.weight_scale`) to the HuggingFace layout that `transformers_convert` gives the weights, and completes the checkpoint-absent `clip_l.text_projection` (all-zeros) exactly like the FP16 path. Armed only from the `SDXL ConvRot INT8` load branch; loaded by path, never imported by other families.
+  - **Converter**: `hswq/sdxl/quantize_sdxl_clip_int8.py` - rule-based **FP16 protection** set (kept FP16) plus FULL ConvRot INT8 on the rest. The protected set is model-independent and measured across four SDXL checkpoints: CLIP-L `embeddings.token_embedding` / `embeddings.position_embedding` / `encoder.layers.0.mlp.fc1` / `encoder.layers.0.mlp.fc2`; CLIP-G `token_embedding` / `transformer.resblocks.*.mlp.c_proj` (all) / `transformer.resblocks.{2,29}.attn.out_proj`.
+  - **Measured**: with the protection set, SDXL CLIP INT8 is statistically indistinguishable from FP16 CLIP - 25-seed latent-trajectory vs the FP16 baseline: **mean final-cos 0.96223 (CLIP INT8) vs 0.96230 (CLIP FP16), 0/25 bifurcated**, INT8 +17.2% faster (9.37s -> 7.75s per seed, 1024x1024).
+  - **Why SDXL (and SD1.5) need this but Krea2 / Z Image do not**: the Llama-family text encoders used by Krea2 / Z Image detect quantization inside `llama_detect`; the SDXL / SD1.5 CLIP classes have no self-detect, so the metadata must be injected on the loader side.
+- See [Release Notes v3.6.3](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.3) for details.
+
 ## Version 3.6.2
 
 - **Removed**: **Tensor Boost (Blackwell CUDA Graph) feature and runtime completely removed** - following the cancellation of SDXL NVFP4 in v3.6.1, the Tensor Boost feature (CUDA Graph acceleration designed exclusively for SDXL NVFP4) was completely removed:

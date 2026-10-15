@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.3
+
+- **新增**：**SDXL ConvRot INT8 CLIP 支持** —— 现在可将检查点内嵌的 SDXL 文本编码器（CLIP-L `conditioner.embedders.0` 与 CLIP-G `conditioner.embedders.1`）量化为 **ConvRot INT8** 并在 ComfyUI 中正确加载：
+  - **加载器**：`nodes/sdxl_convrot_int8/sdxl_clip_quant.py`（SDXL 专用）使文本编码器加载路径消费 CLIP 量化元数据（`te_model_options["quantization_metadata"]`），将 CLIP-G 的伴随键（`.comfy_quant` / `.weight_scale`）重映射为 `transformers_convert` 赋予权重的 HuggingFace 布局，并按 FP16 路径补全检查点中缺失的 `clip_l.text_projection`（全零）。仅由 `SDXL ConvRot INT8` 加载分支启用；按路径加载，绝不被其他系列 import。
+  - **转换脚本**：`hswq/sdxl/quantize_sdxl_clip_int8.py` —— 基于规则的 **FP16 保护**集（保持 FP16），其余为完整 ConvRot INT8。保护集与模型无关，经四个 SDXL 检查点实测一致：CLIP-L `embeddings.token_embedding` / `embeddings.position_embedding` / `encoder.layers.0.mlp.fc1` / `encoder.layers.0.mlp.fc2`；CLIP-G `token_embedding` / `transformer.resblocks.*.mlp.c_proj`（全部）/ `transformer.resblocks.{2,29}.attn.out_proj`。
+  - **实测**：在保护集下，SDXL CLIP INT8 与 FP16 CLIP 在统计上不可区分 —— 25 seed 潜空间轨迹对比 FP16 基线：**mean final-cos 0.96223（CLIP INT8）vs 0.96230（CLIP FP16），0/25 分叉**，INT8 快 +17.2%（9.37s -> 7.75s/seed，1024x1024）。
+  - **为何 SDXL（与 SD1.5）需要此支持而 Krea2 / Z Image 不需要**：Krea2 / Z Image 使用的 Llama 系文本编码器在 `llama_detect` 内部检测量化；而 SDXL / SD1.5 的 CLIP 类没有自检测，必须在加载器侧注入元数据。
+- 详见 [发布说明 v3.6.3](v3.6.3.md)
+
 ## Version 3.6.2
 
 - **移除**：**彻底移除 Tensor Boost（Blackwell CUDA Graph）功能与运行时代码** —— 继 v3.6.1 终止 SDXL NVFP4 开发后，此前专为 SDXL NVFP4 设计的 CUDA Graph 加速机制 Tensor Boost 已无存在必要，本次更新进行了全方位的彻底清理：
