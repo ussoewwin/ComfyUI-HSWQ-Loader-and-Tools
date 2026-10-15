@@ -815,18 +815,14 @@ def _int8_conv_rot_imma(module, x):
         module._hswq_imma_wcache = (key, wmat, wscale_1d, bias_f)
 
     tk = _get_triton_convrot_kernels()
-    # Measured (cudaMallocAsync production env, repro_async.log): the fused
-    # triton quant/dequant launches work in the eager warmups but are REJECTED
-    # during an active CUDA-graph capture ('Pointer argument cannot be accessed
-    # from Triton (cpu tensor?)' with every arg on cuda:0 - the graph-private
-    # async-pool memory is not serviceable by the triton launcher). Route
-    # capturable launches to the torch-IMMA path (cublasLt _int_mm, capture-safe,
-    # production-proven) and keep the fused triton path for eager launches only.
-    try:
-        _capturing = torch.cuda.is_current_stream_capturing()
-    except Exception:
-        _capturing = False
-    if tk is not None and x.dtype == torch.float16 and not _capturing:
+    # Measured: triton launches INSIDE a CUDA-graph capture work under the
+    # default caching allocator (17.4x it/s replay) but are rejected under the
+    # cudaMallocAsync graph pool ('Pointer argument cannot be accessed from
+    # Triton (cpu tensor?)', args all on cuda:0). The try/except below splits
+    # the two failure regimes: a capture-phase failure only skips triton for
+    # that capture (no process-wide disarm), an eager failure keeps the old
+    # once-latched warn. The capture gate is decided at launch, not globally.
+    if tk is not None and x.dtype == torch.float16:
         try:
             quant_k, dequant_k, triton = tk
             akey = (t, k_dim, str(x.device))
