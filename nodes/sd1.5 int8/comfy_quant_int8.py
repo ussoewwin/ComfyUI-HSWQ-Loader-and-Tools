@@ -849,6 +849,19 @@ def _int8_conv_rot_imma(module, x):
         except Exception as e:
             if _INT8_CONV_STATS.get("triton_warn") is None:
                 _INT8_CONV_STATS["triton_warn"] = 1
+                try:
+                    _wd = lambda t: (f"{type(t).__name__}:{t.device}:ptr{t.data_ptr()}"
+                                     if torch.is_tensor(t) else str(t))
+                    _console(
+                        "[HSWQ INT8][diag] triton-fail args: "
+                        f"x={_wd(x)} x_rot={_wd(x_rot)} aq={_wd(aq)} ascale={_wd(ascale)} "
+                        f"qdata={_wd(qdata)} wmat={_wd(wmat)} wscale_1d={_wd(wscale_1d)} "
+                        f"bias_f={_wd(bias_f)} acc={_wd(acc)} out={_wd(out)} "
+                        f"capture={torch.cuda.is_current_stream_capturing()} "
+                        f"err={type(e).__name__}: {str(e)[:160]}"
+                    )
+                except Exception:
+                    pass
                 _console(f"[HSWQ INT8] triton fused conv failed once ({type(e).__name__}: "
                          f"{str(e)[:120]}); staying on torch-IMMA")
 
