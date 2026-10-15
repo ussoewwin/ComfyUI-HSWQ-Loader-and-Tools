@@ -631,7 +631,10 @@ try:
                     "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"tooltip": "SDXL checkpoint to load MODEL and CLIP from (same as standard Load Checkpoint)."}),
                     "weight_dtype": ([
                         "default",
-                        "int8_tensorwise",
+                        # SDXL-only marker. Distinct from the SD1.5 ConvRot INT8
+                        # path so the loader can branch per architecture; never
+                        # reuse the raw "int8_tensorwise" name across families.
+                        "SDXL ConvRot INT8",
                     ],),
                 }
                 opt = {"device": (devices, {"default": default_dev})}
@@ -656,7 +659,7 @@ try:
                     # ControlLora borrowed weights (control output explodes ->
                     # lineart lock / no coloring / strength dead). Auto-detect
                     # native comfy_quant INT8 files too.
-                    if weight_dtype == "int8_tensorwise" or _checkpoint_looks_int8(ckpt_path):
+                    if weight_dtype in ("SDXL ConvRot INT8", "int8_tensorwise") or _checkpoint_looks_int8(ckpt_path):
                         from .patches.comfy_quant_int8 import load_checkpoint_sdxl_hswq_weight_dtype
                         return load_checkpoint_sdxl_hswq_weight_dtype(
                             ckpt_name, weight_dtype, device=None,

@@ -3617,7 +3617,12 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
         # INT8 Conv2d + comfy_quant decode only when checkpoint is INT8.
         ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
         # Auto-detect native comfy_quant INT8; do not force float8 dtype over int8 weights.
-        is_int8 = weight_dtype == "int8_tensorwise" or checkpoint_looks_like_comfy_quant_int8(ckpt_path)
+        # SDXL loader passes its own marker ("SDXL ConvRot INT8"); also accept the
+        # raw "int8_tensorwise" for backward compatibility with saved workflows.
+        is_int8 = (
+            weight_dtype in ("SDXL ConvRot INT8", "int8_tensorwise")
+            or checkpoint_looks_like_comfy_quant_int8(ckpt_path)
+        )
 
         model_options = {}
         if is_int8:
@@ -3727,7 +3732,7 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
         def load_checkpoint(self, ckpt_name, weight_dtype, device=None, **kwargs):
             if weight_dtype in _FP8_WEIGHT_DTYPES:
                 return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
-            if weight_dtype == "int8_tensorwise":
+            if weight_dtype == "SDXL ConvRot INT8":
                 return load_checkpoint_sdxl_hswq_weight_dtype(
                     ckpt_name, weight_dtype, device=device
                 )
