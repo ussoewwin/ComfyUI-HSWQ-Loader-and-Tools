@@ -644,7 +644,7 @@ try:
             OUTPUT_TOOLTIPS = ("The UNet diffusion model from checkpoint.", "The CLIP model from the SDXL checkpoint.")
             FUNCTION = "load_checkpoint"
             CATEGORY = "loaders"
-            TITLE = "HSWQ Checkpoint Loader (SDXL)"
+            TITLE = "HSWQ Checkpoint Loader"
 
             def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
                 original_device = get_current_device()
@@ -809,7 +809,7 @@ except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Model Patch Loader not registered: %s", e)
 NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_MAPPINGS.items()}
 # Explicit overrides — TITLE alone is not enough for some ComfyUI graph headers / search menus.
-NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader (SDXL)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQControlNetLoader"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Loader"] = "HSWQ SAM3 Loader (ConvRot INT8)"
