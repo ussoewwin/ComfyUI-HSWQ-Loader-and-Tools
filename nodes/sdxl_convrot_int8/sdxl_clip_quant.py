@@ -57,15 +57,72 @@ def _console(msg: str) -> None:
 def _remap_sdxl_clip_layer(key: str):
     """Map a pack CLIP layer key to its internal SDXL CLIP module name.
 
+    CLIP-L: ``conditioner.embedders.0.transformer.*`` -> ``clip_l.transformer.*``
+    (a plain prefix swap, matching SDXL.process_clip_state_dict).
+
+    CLIP-G: ``conditioner.embedders.1.model.*`` is first ``model.`` -> ``clip_g.``
+    then run through ``comfy.utils.transformers_convert`` which restructures the
+    OpenAI CLIP text-transformer layout into the HuggingFace one. The internal
+    module names are therefore NOT a plain prefix swap:
+        transformer.resblocks.N.ln_1            -> transformer.text_model.encoder.layers.N.layer_norm1
+        transformer.resblocks.N.ln_2            -> transformer.text_model.encoder.layers.N.layer_norm2
+        transformer.resblocks.N.mlp.c_fc        -> transformer.text_model.encoder.layers.N.mlp.fc1
+        transformer.resblocks.N.mlp.c_proj      -> transformer.text_model.encoder.layers.N.mlp.fc2
+        transformer.resblocks.N.attn.out_proj   -> transformer.text_model.encoder.layers.N.self_attn.out_proj
+        transformer.resblocks.N.attn.in_proj_*  -> transformer.text_model.encoder.layers.N.self_attn.{q,k,v}_proj (split)
+        positional_embedding                    -> transformer.text_model.embeddings.position_embedding.weight
+        token_embedding.weight                  -> transformer.text_model.embeddings.token_embedding.weight
+        ln_final                                -> transformer.text_model.final_layer_norm
+        text_projection                         -> transformer.text_projection
+
     Returns None when the key is not an SDXL CLIP layer.
     """
     if key.startswith("conditioner.embedders.0.transformer."):
         return "clip_l." + key[len("conditioner.embedders.0."):]
     if key.startswith("conditioner.embedders.1.model."):
-        # conditioner.embedders.1.model.* -> clip_g.transformer.*
-        # (SDXL.process_clip_state_dict: model. -> clip_g., then
-        #  clip_text_transformers_convert clip_g. -> clip_g.transformer.)
-        return "clip_g.transformer." + key[len("conditioner.embedders.1.model."):]
+        rest = key[len("conditioner.embedders.1.model."):]
+        return _clip_g_internal_name(rest)
+    return None
+
+
+def _clip_g_internal_name(rest: str):
+    """Translate a CLIP-G (OpenAI CLIP) key tail to its internal HF-style name.
+
+    ``rest`` is the part after ``conditioner.embedders.1.model.`` (e.g.
+    ``transformer.resblocks.5.mlp.c_proj`` or ``token_embedding.weight``).
+    Returns ``clip_g.<internal>`` or None if it cannot be mapped.
+    """
+    # whole-model renames (transformers_convert keys_to_replace)
+    whole = {
+        "positional_embedding": "transformer.text_model.embeddings.position_embedding.weight",
+        "token_embedding.weight": "transformer.text_model.embeddings.token_embedding.weight",
+        "ln_final.weight": "transformer.text_model.final_layer_norm.weight",
+        "ln_final.bias": "transformer.text_model.final_layer_norm.bias",
+        "text_projection": "transformer.text_projection.weight",
+    }
+    if rest in whole:
+        return "clip_g." + whole[rest]
+
+    # per-resblock renames (module base form, no trailing .weight/.bias)
+    import re as _re
+
+    m = _re.match(
+        r"transformer\.resblocks\.(\d+)\.(ln_1|ln_2|mlp\.c_fc|mlp\.c_proj|attn\.out_proj)$",
+        rest,
+    )
+    if m:
+        idx, sub = m.group(1), m.group(2)
+        sub_map = {
+            "ln_1": "layer_norm1",
+            "ln_2": "layer_norm2",
+            "mlp.c_fc": "mlp.fc1",
+            "mlp.c_proj": "mlp.fc2",
+            "attn.out_proj": "self_attn.out_proj",
+        }
+        return (
+            f"clip_g.transformer.text_model.encoder.layers.{idx}.{sub_map[sub]}"
+        )
+
     return None
 
 
@@ -146,6 +203,63 @@ def _complete_sdxl_clip_optional_params(out):
         logger.warning("[HSWQ INT8][SDXL CLIP] optional-param completion skipped: %s", exc)
 
 
+def _remap_clipg_companion_keys(sd) -> int:
+    """Move CLIP-G companion tensors (.comfy_quant / .weight_scale) to the same
+    HuggingFace layout that ``comfy.utils.transformers_convert`` gives the .weight
+    keys.
+
+    transformers_convert only rewrites ``transformer.resblocks.N.*.weight/bias``
+    (and a few whole-model keys); it leaves ``.comfy_quant`` / ``.weight_scale``
+    at the OpenAI-CLIP path. The quantized ops module then looks for
+    ``clip_g.transformer.text_model.encoder.layers.N.mlp.fc1.comfy_quant`` and
+    finds nothing, so the int8 weight loads as raw fp16 and the conditioning
+    collapses. Remap the companions here (in place) to match.
+
+    Returns the number of keys moved.
+    """
+    import re as _re
+
+    sub_map = {
+        "ln_1": "layer_norm1",
+        "ln_2": "layer_norm2",
+        "mlp.c_fc": "mlp.fc1",
+        "mlp.c_proj": "mlp.fc2",
+        "attn.out_proj": "self_attn.out_proj",
+    }
+    whole = {
+        "token_embedding": "transformer.text_model.embeddings.token_embedding",
+        "positional_embedding": "transformer.text_model.embeddings.position_embedding",
+        "ln_final": "transformer.text_model.final_layer_norm",
+    }
+    prefix = "conditioner.embedders.1.model."
+    moved = 0
+    for k in list(sd.keys()):
+        if not k.startswith(prefix):
+            continue
+        if not (k.endswith(".comfy_quant") or k.endswith(".weight_scale")):
+            continue
+        tail = k[len(prefix):]
+        suffix = ".comfy_quant" if tail.endswith(".comfy_quant") else ".weight_scale"
+        base = tail[: -len(suffix)]
+
+        m = _re.match(
+            r"transformer\.resblocks\.(\d+)\.(ln_1|ln_2|mlp\.c_fc|mlp\.c_proj|attn\.out_proj)$",
+            base,
+        )
+        if m:
+            idx, sub = m.group(1), m.group(2)
+            new_base = (
+                f"transformer.text_model.encoder.layers.{idx}.{sub_map[sub]}"
+            )
+        elif base in whole:
+            new_base = whole[base]
+        else:
+            continue
+        sd[prefix + new_base + suffix] = sd.pop(k)
+        moved += 1
+    return moved
+
+
 def arm_sdxl_clip_quant_metadata() -> bool:
     """Install the SDXL CLIP quantization-metadata wrapper. Idempotent."""
     try:
@@ -173,6 +287,15 @@ def arm_sdxl_clip_quant_metadata() -> bool:
         clip_layers = _collect_sdxl_clip_layers(sd, kwargs.get("metadata"))
         if not clip_layers:
             return original(sd, *args, **kwargs)
+
+        # CLIP-G companions must be moved to the HF layout before the weight-only
+        # transformers_convert runs (see _remap_clipg_companion_keys).
+        moved = _remap_clipg_companion_keys(sd)
+        if moved:
+            _console(
+                f"[HSWQ INT8][SDXL CLIP] remapped {moved} CLIP-G companion tensors "
+                f"to the HF layout"
+            )
 
         te_model_options = dict(kwargs.get("te_model_options") or {})
         te_model_options["quantization_metadata"] = {
