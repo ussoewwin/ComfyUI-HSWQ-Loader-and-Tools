@@ -3364,6 +3364,7 @@ KREA2_MODEL_FLAG = "_hswq_is_krea2"
 
 
 _SDXL_FAST_MOD = None
+_SDXL_CLIP_QUANT_MOD = None
 
 
 def _load_sdxl_convrot_fast():
@@ -3384,6 +3385,25 @@ def _load_sdxl_convrot_fast():
         mod.set_helpers_loader(_load_native_convert_int8_helpers)
         _SDXL_FAST_MOD = mod
     return _SDXL_FAST_MOD
+
+
+def _load_sdxl_clip_quant():
+    """Load the SDXL-only CLIP INT8 metadata module by path WITHOUT registering it
+    in sys.modules, so no other model family ever sees it as an import.
+    Called only from the SDXL-guarded branch below."""
+    global _SDXL_CLIP_QUANT_MOD
+    if _SDXL_CLIP_QUANT_MOD is None:
+        import importlib.util
+        import os as _os
+
+        repo = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        path = _os.path.join(repo, "nodes", "sdxl_convrot_int8", "sdxl_clip_quant.py")
+        spec = importlib.util.spec_from_file_location(
+            "_hswq_sdxl_clip_quant_private", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SDXL_CLIP_QUANT_MOD = mod
+    return _SDXL_CLIP_QUANT_MOD
 
 
 def _model_is_sdxl_unet(model) -> bool:
@@ -3639,6 +3659,16 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
                 )
             apply_comfy_quant_int8_patches()
             reset_int8_lora_log_counters()
+            # SDXL-only: make the embedded CLIP consume its ConvRot INT8 metadata
+            # (clip_l + clip_g). Without this the CLIP int8 weights load as fp16
+            # and conditioning collapses. Loaded by path; never imported by other
+            # families.
+            try:
+                _load_sdxl_clip_quant().arm_sdxl_clip_quant_metadata()
+            except Exception as e:
+                sdxl_logger.warning(
+                    "[SDXL INT8] CLIP quant metadata arm failed: %s", e
+                )
             sdxl_logger.info(
                 "[SDXL INT8] Loading checkpoint via MixedPrecisionOps "
                 "(int8_tensorwise / comfy_quant): %s",
