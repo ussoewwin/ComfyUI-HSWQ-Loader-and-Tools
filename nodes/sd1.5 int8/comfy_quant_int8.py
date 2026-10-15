@@ -788,13 +788,25 @@ def _int8_conv_rot_imma(module, x):
     key = (qdata.data_ptr(), o, ic, kh, kw, str(qdata.device), qdata._version)
     if cache is not None and cache[0] == key:
         wmat, wscale_1d, bias_f = cache[1], cache[2], cache[3]
+        if wscale_1d.device != x.device:
+            # Staged-CPU scale (same mechanism as the build-time pin): pin once
+            # and refresh the cache so every later call sees a CUDA scale.
+            wscale_1d = wscale_1d.to(x.device).contiguous()
+            bias_f = bias_f.to(x.device)
+            module._hswq_imma_wcache = (key, wmat, wscale_1d, bias_f)
     else:
         params = weight._params if isinstance(weight, QuantizedTensor) else weight.data._params
         wscale = params.scale
         if wscale is None or int(wscale.numel()) != o:
             return None
         wmat = qdata.permute(2, 3, 1, 0).reshape(k_dim, o).contiguous()
-        wscale_1d = wscale.reshape(o).float().contiguous()
+        # Pin the small scale to the activation device. ComfyUI may stage the
+        # QuantizedTensor params (scale) on CPU while the int8 payload (qdata)
+        # is on GPU; a CPU scale makes BOTH the triton dequant kernel
+        # ("Pointer argument cannot be accessed from Triton (cpu tensor?)" —
+        # measured) and the torch-IMMA fallback (out.mul_) fail with a device
+        # error. bias_f below is already pinned to wmat.device.
+        wscale_1d = wscale.reshape(o).float().to(x.device).contiguous()
         bias_f = (
             module.bias.detach().float().to(wmat.device).contiguous()
             if module.bias is not None
