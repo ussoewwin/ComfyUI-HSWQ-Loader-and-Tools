@@ -815,7 +815,18 @@ def _int8_conv_rot_imma(module, x):
         module._hswq_imma_wcache = (key, wmat, wscale_1d, bias_f)
 
     tk = _get_triton_convrot_kernels()
-    if tk is not None and x.dtype == torch.float16:
+    # Measured (cudaMallocAsync production env, repro_async.log): the fused
+    # triton quant/dequant launches work in the eager warmups but are REJECTED
+    # during an active CUDA-graph capture ('Pointer argument cannot be accessed
+    # from Triton (cpu tensor?)' with every arg on cuda:0 - the graph-private
+    # async-pool memory is not serviceable by the triton launcher). Route
+    # capturable launches to the torch-IMMA path (cublasLt _int_mm, capture-safe,
+    # production-proven) and keep the fused triton path for eager launches only.
+    try:
+        _capturing = torch.cuda.is_current_stream_capturing()
+    except Exception:
+        _capturing = False
+    if tk is not None and x.dtype == torch.float16 and not _capturing:
         try:
             quant_k, dequant_k, triton = tk
             akey = (t, k_dim, str(x.device))
@@ -847,7 +858,20 @@ def _int8_conv_rot_imma(module, x):
                          "dequant-NCHW store active")
             return out
         except Exception as e:
-            if _INT8_CONV_STATS.get("triton_warn") is None:
+            # Capture-phase triton failures must NOT poison the process: eager
+            # launches keep the fused path. Latch the once-warn only when the
+            # failure happened outside an active capture.
+            try:
+                _capturing_now = torch.cuda.is_current_stream_capturing()
+            except Exception:
+                _capturing_now = False
+            if _capturing_now:
+                if _INT8_CONV_STATS.get("triton_capture_warn") is None:
+                    _INT8_CONV_STATS["triton_capture_warn"] = 1
+                    _console("[HSWQ INT8] triton fused conv unsupported during CUDA-graph "
+                             "capture (cudaMallocAsync pool); torch-IMMA used for capture/"
+                             "replay, fused path stays armed for eager launches")
+            elif _INT8_CONV_STATS.get("triton_warn") is None:
                 _INT8_CONV_STATS["triton_warn"] = 1
                 try:
                     _wd = lambda t: (f"{type(t).__name__}:{t.device}:ptr{t.data_ptr()}"
@@ -857,7 +881,7 @@ def _int8_conv_rot_imma(module, x):
                         f"x={_wd(x)} x_rot={_wd(x_rot)} aq={_wd(aq)} ascale={_wd(ascale)} "
                         f"qdata={_wd(qdata)} wmat={_wd(wmat)} wscale_1d={_wd(wscale_1d)} "
                         f"bias_f={_wd(bias_f)} acc={_wd(acc)} out={_wd(out)} "
-                        f"capture={torch.cuda.is_current_stream_capturing()} "
+                        f"capture={_capturing_now} "
                         f"err={type(e).__name__}: {str(e)[:160]}"
                     )
                 except Exception:
