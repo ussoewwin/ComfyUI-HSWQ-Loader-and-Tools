@@ -578,6 +578,9 @@ def _model_has_int8_quantized_weights(model) -> bool:
     return False
 
 
+_SD15_IN_GRAPH_CAPTURE = False
+
+
 def _rotate_activation_nhwc(x_nhwc, h_matrix, group_size: int):
     """Pooled bf16/fp16 rotate of an NHWC tensor's channel axis (no permute-back).
 
@@ -592,12 +595,15 @@ def _rotate_activation_nhwc(x_nhwc, h_matrix, group_size: int):
     h = h_matrix
     if h.dtype != in_dtype or h.device != x_nhwc.device:
         h = h.to(dtype=in_dtype, device=x_nhwc.device)
+    xg = x_nhwc.reshape(B, Hh * Ww, group_count, group_size)
+    if _SD15_IN_GRAPH_CAPTURE or torch.cuda.is_current_stream_capturing():
+        return (xg @ h).reshape(B, Hh, Ww, C)
     key = (B, Hh, Ww, C, in_dtype, str(x_nhwc.device))
     out = _ROT_POOL_NCHW.get(key)
-    if out is None:
-        out = torch.empty(B, Hh, Ww, C, dtype=in_dtype, device=x_nhwc.device)
+    if out is None or out.is_inference():
+        with torch.inference_mode(False):
+            out = torch.empty(B, Hh, Ww, C, dtype=in_dtype, device=x_nhwc.device)
         _ROT_POOL_NCHW[key] = out
-    xg = x_nhwc.reshape(B, Hh * Ww, group_count, group_size)
     torch.matmul(xg, h, out=out.view(B, Hh * Ww, group_count, group_size))
     return out
 
@@ -785,50 +791,53 @@ def _int8_conv_rot_imma(module, x):
     x_rot = _rotate_activation_nhwc(x_nhwc, h, gs)
 
     cache = getattr(module, "_hswq_imma_wcache", None)
-    key = (qdata.data_ptr(), o, ic, kh, kw, str(qdata.device), qdata._version)
+    q_ver = 0 if qdata.is_inference() else qdata._version
+    bake_ver = getattr(module, "_hswq_bake_ver", 0)
+    key = (qdata.data_ptr(), o, ic, kh, kw, str(qdata.device), q_ver, bake_ver)
     if cache is not None and cache[0] == key:
         wmat, wscale_1d, bias_f = cache[1], cache[2], cache[3]
-        if wscale_1d.device != x.device:
-            # Staged-CPU scale (same mechanism as the build-time pin): pin once
-            # and refresh the cache so every later call sees a CUDA scale.
+        if wmat.device != x.device or wscale_1d.device != x.device or bias_f.device != x.device:
+            # Staged-CPU weight/scale under DynamicVRAM: pin once on x.device
+            # and refresh the cache so every later call sees CUDA tensors.
+            wmat = wmat.to(x.device).contiguous()
             wscale_1d = wscale_1d.to(x.device).contiguous()
-            bias_f = bias_f.to(x.device)
+            bias_f = bias_f.to(x.device).contiguous()
             module._hswq_imma_wcache = (key, wmat, wscale_1d, bias_f)
     else:
         params = weight._params if isinstance(weight, QuantizedTensor) else weight.data._params
         wscale = params.scale
         if wscale is None or int(wscale.numel()) != o:
             return None
-        wmat = qdata.permute(2, 3, 1, 0).reshape(k_dim, o).contiguous()
+        wmat = qdata.to(x.device).permute(2, 3, 1, 0).reshape(k_dim, o).contiguous()
         # Pin the small scale to the activation device. ComfyUI may stage the
         # QuantizedTensor params (scale) on CPU while the int8 payload (qdata)
         # is on GPU; a CPU scale makes BOTH the triton dequant kernel
         # ("Pointer argument cannot be accessed from Triton (cpu tensor?)" —
         # measured) and the torch-IMMA fallback (out.mul_) fail with a device
-        # error. bias_f below is already pinned to wmat.device.
+        # error. bias_f below is also pinned to x.device.
         wscale_1d = wscale.reshape(o).float().to(x.device).contiguous()
         bias_f = (
-            module.bias.detach().float().to(wmat.device).contiguous()
+            module.bias.detach().float().to(x.device).contiguous()
             if module.bias is not None
-            else torch.zeros(o, dtype=torch.float32, device=wmat.device)
+            else torch.zeros(o, dtype=torch.float32, device=x.device)
         )
         module._hswq_imma_wcache = (key, wmat, wscale_1d, bias_f)
 
     tk = _get_triton_convrot_kernels()
+    _in_capture = _SD15_IN_GRAPH_CAPTURE or torch.cuda.is_current_stream_capturing()
     # Measured: triton launches INSIDE a CUDA-graph capture work under the
     # default caching allocator (17.4x it/s replay) but are rejected under the
     # cudaMallocAsync graph pool ('Pointer argument cannot be accessed from
-    # Triton (cpu tensor?)', args all on cuda:0). The try/except below splits
-    # the two failure regimes: a capture-phase failure only skips triton for
-    # that capture (no process-wide disarm), an eager failure keeps the old
-    # once-latched warn. The capture gate is decided at launch, not globally.
-    if tk is not None and x.dtype == torch.float16:
+    # Triton (cpu tensor?)', args all on cuda:0). Skip triton while warming/
+    # capturing the graph so torch-IMMA is recorded cleanly without stream taint.
+    if tk is not None and x.dtype == torch.float16 and not _in_capture:
         try:
             quant_k, dequant_k, triton = tk
             akey = (t, k_dim, str(x.device))
             aq = _AQ_POOL.get(akey)
-            if aq is None:
-                aq = torch.empty((t, k_dim), dtype=torch.int8, device=x.device)
+            if aq is None or aq.is_inference():
+                with torch.inference_mode(False):
+                    aq = torch.empty((t, k_dim), dtype=torch.int8, device=x.device)
                 _AQ_POOL[akey] = aq
             ascale = torch.empty(t, dtype=torch.float32, device=x.device)
             quant_k[(t,)](
@@ -854,34 +863,8 @@ def _int8_conv_rot_imma(module, x):
                          "dequant-NCHW store active")
             return out
         except Exception as e:
-            # Capture-phase triton failures must NOT poison the process: eager
-            # launches keep the fused path. Latch the once-warn only when the
-            # failure happened outside an active capture.
-            try:
-                _capturing_now = torch.cuda.is_current_stream_capturing()
-            except Exception:
-                _capturing_now = False
-            if _capturing_now:
-                if _INT8_CONV_STATS.get("triton_capture_warn") is None:
-                    _INT8_CONV_STATS["triton_capture_warn"] = 1
-                    _console("[HSWQ INT8] triton fused conv unsupported during CUDA-graph "
-                             "capture (cudaMallocAsync pool); torch-IMMA used for capture/"
-                             "replay, fused path stays armed for eager launches")
-            elif _INT8_CONV_STATS.get("triton_warn") is None:
+            if _INT8_CONV_STATS.get("triton_warn") is None:
                 _INT8_CONV_STATS["triton_warn"] = 1
-                try:
-                    _wd = lambda t: (f"{type(t).__name__}:{t.device}:ptr{t.data_ptr()}"
-                                     if torch.is_tensor(t) else str(t))
-                    _console(
-                        "[HSWQ INT8][diag] triton-fail args: "
-                        f"x={_wd(x)} x_rot={_wd(x_rot)} aq={_wd(aq)} ascale={_wd(ascale)} "
-                        f"qdata={_wd(qdata)} wmat={_wd(wmat)} wscale_1d={_wd(wscale_1d)} "
-                        f"bias_f={_wd(bias_f)} acc={_wd(acc)} out={_wd(out)} "
-                        f"capture={_capturing_now} "
-                        f"err={type(e).__name__}: {str(e)[:160]}"
-                    )
-                except Exception:
-                    pass
                 _console(f"[HSWQ INT8] triton fused conv failed once ({type(e).__name__}: "
                          f"{str(e)[:120]}); staying on torch-IMMA")
 
@@ -901,7 +884,7 @@ def _int8_conv_rot_imma(module, x):
     out = out.mul_(ascale.float())
     out = out.mul_(wscale_1d.view(1, -1))
     if module.bias is not None:
-        out = out.add_(module.bias.detach().float().to(out.device).view(1, -1))
+        out = out.add_(bias_f.view(1, -1))
     if x.dtype == torch.float16:
         out = out.clamp(-65504.0, 65504.0)
     out = out.to(x.dtype)
@@ -1316,6 +1299,8 @@ def _make_quantized_conv2d(ops_module, MixedPrecisionOps, disabled):
                 ).to(self.weight.dtype)
             else:
                 weight = weight.to(self.weight.dtype)
+            self._hswq_bake_ver = getattr(self, "_hswq_bake_ver", 0) + 1
+            self._hswq_imma_wcache = None
             if return_weight:
                 return weight
 
@@ -1560,15 +1545,17 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
             weight, set_func, convert_func = mp.get_key_weight(patcher.model, key)
             if weight is None:
                 continue
-            is_qt = isinstance(weight, QuantizedTensor)
+            weight_inner = weight.data if hasattr(weight, "data") else weight
+            is_qt = isinstance(weight_inner, QuantizedTensor)
+            if not is_qt:
+                continue
             # Bake when requant hooks exist (Linear/Conv INT8), or QT without
             # set_func would still be broken — skip those and log below.
             if set_func is None:
-                if is_qt:
-                    _console(
-                        f"[HSWQ INT8 LoRA] WARN cannot bake {key}: "
-                        "QuantizedTensor but no set_weight (int8_round risk)"
-                    )
+                _console(
+                    f"[HSWQ INT8 LoRA] WARN cannot bake {key}: "
+                    "QuantizedTensor but no set_weight (int8_round risk)"
+                )
                 continue
             keys_to_bake.append((param_key, key))
 
@@ -1580,6 +1567,8 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
         for param_key, _key in keys_to_bake:
             if hasattr(module, param_key + "_lowvram_function"):
                 setattr(module, param_key + "_lowvram_function", None)
+        if hasattr(module, "_v_signature"):
+            module._v_signature = None
 
         for _param_key, key in keys_to_bake:
             patcher.patch_weight_to_device(key, device_to=device_to)
@@ -1602,6 +1591,9 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
     return baked
 
 
+_LORA_HOOK_OWNER = "sd15_int8"
+
+
 def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     """After ModelPatcherDynamic.load, bake INT8 LoRA via set_weight."""
     try:
@@ -1615,8 +1607,11 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     original = getattr(Dynamic, "load", None)
     if original is None:
         return False
-    _DYN_VER = 4
-    if getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER:
+    _DYN_VER = 8
+    if (
+        getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER
+        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
+    ):
         return True
     true_orig = getattr(original, "_hswq_orig_dynamic_load", original)
 
@@ -1647,6 +1642,7 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
 
     load._hswq_int8_lora_bake = True
     load._hswq_int8_lora_bake_ver = _DYN_VER
+    load._hswq_owner = _LORA_HOOK_OWNER
     load._hswq_orig_dynamic_load = true_orig
     Dynamic.load = load
     return True
@@ -1660,8 +1656,14 @@ def _patch_model_patcher_lora_logs() -> bool:
         return False
 
     original = getattr(mp.ModelPatcher, "patch_weight_to_device", None)
-    if original is None or getattr(original, "_hswq_int8_lora_log", False):
-        return getattr(original, "_hswq_int8_lora_log", False)
+    if original is None:
+        return False
+    if (
+        getattr(original, "_hswq_int8_lora_log", False)
+        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
+    ):
+        return True
+    true_orig = getattr(original, "_hswq_orig_patch_weight_to_device", original)
 
     def patch_weight_to_device_logged(self, key, device_to=None, inplace_update=False, return_weight=False, force_cast=False):
         global _lora_patcher_logs
@@ -1718,7 +1720,7 @@ def _patch_model_patcher_lora_logs() -> bool:
                 dump_int8_lora_bake_stats(force=False)
 
 
-        return original(
+        return true_orig(
             self,
             key,
             device_to=device_to,
@@ -1728,6 +1730,8 @@ def _patch_model_patcher_lora_logs() -> bool:
         )
 
     patch_weight_to_device_logged._hswq_int8_lora_log = True
+    patch_weight_to_device_logged._hswq_owner = _LORA_HOOK_OWNER
+    patch_weight_to_device_logged._hswq_orig_patch_weight_to_device = true_orig
     mp.ModelPatcher.patch_weight_to_device = patch_weight_to_device_logged
     return True
 
@@ -1824,7 +1828,10 @@ def _patch_lora_loader_name_context() -> bool:
     if original is None:
         return False
     _NAME_VER = 6
-    if getattr(original, "_hswq_lora_name_ctx_ver", 0) >= _NAME_VER:
+    if (
+        getattr(original, "_hswq_lora_name_ctx_ver", 0) >= _NAME_VER
+        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
+    ):
         return True
     true_orig = getattr(original, "_hswq_orig_load_lora", original)
 
@@ -1847,6 +1854,7 @@ def _patch_lora_loader_name_context() -> bool:
 
     load_lora._hswq_lora_name_ctx = True
     load_lora._hswq_lora_name_ctx_ver = _NAME_VER
+    load_lora._hswq_owner = _LORA_HOOK_OWNER
     load_lora._hswq_orig_load_lora = true_orig
     LoraLoader.load_lora = load_lora
     return True
@@ -1866,7 +1874,10 @@ def _patch_loras_folder_path_name() -> bool:
         original = getattr(folder_paths, fname, None)
         if original is None:
             continue
-        if getattr(original, "_hswq_lora_path_name_ver", 0) >= _PATH_VER:
+        if (
+            getattr(original, "_hswq_lora_path_name_ver", 0) >= _PATH_VER
+            and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
+        ):
             ok = True
             continue
         true_orig = getattr(original, "_hswq_orig_get_full_path", original)
@@ -1878,6 +1889,7 @@ def _patch_loras_folder_path_name() -> bool:
                 return orig(folder_name, filename)
 
             wrapped._hswq_lora_path_name_ver = _PATH_VER
+            wrapped._hswq_owner = _LORA_HOOK_OWNER
             wrapped._hswq_orig_get_full_path = orig
             return wrapped
 
@@ -1896,7 +1908,10 @@ def _patch_load_torch_file_lora_name() -> bool:
     if original is None:
         return False
     _TORCH_VER = 1
-    if getattr(original, "_hswq_lora_torch_name_ver", 0) >= _TORCH_VER:
+    if (
+        getattr(original, "_hswq_lora_torch_name_ver", 0) >= _TORCH_VER
+        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
+    ):
         return True
     true_orig = getattr(original, "_hswq_orig_load_torch_file", original)
 
@@ -1908,6 +1923,7 @@ def _patch_load_torch_file_lora_name() -> bool:
         return true_orig(ckpt, *args, **kwargs)
 
     load_torch_file._hswq_lora_torch_name_ver = _TORCH_VER
+    load_torch_file._hswq_owner = _LORA_HOOK_OWNER
     load_torch_file._hswq_orig_load_torch_file = true_orig
     utils_mod.load_torch_file = load_torch_file
     return True
@@ -1928,7 +1944,10 @@ def _patch_load_lora_key_counts() -> bool:
         return False
 
     _KEY_VER = 6
-    if getattr(orig_for_models, "_hswq_lora_key_count_ver", 0) >= _KEY_VER:
+    if (
+        getattr(orig_for_models, "_hswq_lora_key_count_ver", 0) >= _KEY_VER
+        and getattr(orig_for_models, "_hswq_owner", None) == _LORA_HOOK_OWNER
+    ):
         _patch_lora_loader_name_context()
         _patch_loras_folder_path_name()
         _patch_load_torch_file_lora_name()
@@ -2069,9 +2088,11 @@ def _patch_load_lora_key_counts() -> bool:
         return (new_model, new_clip)
 
     load_lora_counted._hswq_lora_key_count = True
+    load_lora_counted._hswq_owner = _LORA_HOOK_OWNER
     load_lora_counted._hswq_orig_load_lora = orig_load_lora
     load_lora_for_models_counted._hswq_lora_key_count = True
     load_lora_for_models_counted._hswq_lora_key_count_ver = _KEY_VER
+    load_lora_for_models_counted._hswq_owner = _LORA_HOOK_OWNER
     load_lora_for_models_counted._hswq_orig_for_models = orig_for_models
     lora_mod.load_lora = load_lora_counted
     sd_mod.load_lora_for_models = load_lora_for_models_counted
@@ -2116,10 +2137,13 @@ def _patch_kitchen_convrot_float32_act_rotate() -> bool:
         x_grouped = x.reshape(-1, n_groups, group_size)
         if h.dtype != x_grouped.dtype or h.device != x_grouped.device:
             h = h.to(dtype=x_grouped.dtype, device=x_grouped.device)
+        if _SD15_IN_GRAPH_CAPTURE or torch.cuda.is_current_stream_capturing():
+            return (x_grouped @ h).reshape(orig_shape)
         key = (tuple(x_grouped.shape), x_grouped.dtype, str(x_grouped.device))
         out = _ROT_POOL_HSWQ.get(key)
-        if out is None:
-            out = torch.empty_like(x_grouped)
+        if out is None or out.is_inference():
+            with torch.inference_mode(False):
+                out = torch.empty_like(x_grouped)
             _ROT_POOL_HSWQ[key] = out
         torch.matmul(x_grouped, h, out=out)
         return out.reshape(orig_shape)
@@ -2249,6 +2273,7 @@ class _Sd15CudaGraphExecutor:
     """
 
     _MAX_CAPTURE_LATENT_SIDE = 128  # covers up to 1024x1024; larger runs eager
+    _dead_graphs = []  # failed captures: hold refs so GC never frees their pool mid-sampling
     def __init__(self, base_model):
         self._base = base_model
         self._orig = base_model.apply_model
@@ -2276,7 +2301,26 @@ class _Sd15CudaGraphExecutor:
                 if torch.is_tensor(v)
             )
         )
-        return (tuple(x.shape), str(x.dtype), str(x.device), tens)
+        ctrl = c.get("control")
+        if isinstance(ctrl, dict):
+            ctrl_sig = tuple(
+                sorted(
+                    (
+                        k,
+                        tuple(
+                            (tuple(el.shape), str(el.dtype))
+                            if torch.is_tensor(el)
+                            else None
+                            for el in v
+                        ),
+                    )
+                    for k, v in ctrl.items()
+                    if isinstance(v, (list, tuple))
+                )
+            )
+        else:
+            ctrl_sig = ()
+        return (tuple(x.shape), str(x.dtype), str(x.device), tens, ctrl_sig)
 
     def _call(self, x, t, **c):
         import torch
@@ -2297,20 +2341,54 @@ class _Sd15CudaGraphExecutor:
                 self._skip.add(key)
                 return self._orig(x, t, **c)
             self._graphs[key] = ent
-        sx, st, sc, graph, sy = ent
+        sx, st, sc, sc_ctrl, graph, sy = ent
         sx.copy_(x)
         st.copy_(t)
         for k, buf in sc.items():
             src = c[k]
             if torch.is_tensor(src):
                 buf.copy_(src)
-        graph.replay()
+        ctrl = c.get("control")
+        if sc_ctrl is not None and isinstance(ctrl, dict):
+            for k, buf_list in sc_ctrl.items():
+                src_list = ctrl.get(k) or ()
+                for buf, src_t in zip(buf_list, src_list):
+                    if torch.is_tensor(buf) and torch.is_tensor(src_t):
+                        buf.copy_(src_t)
+        try:
+            graph.replay()
+        except Exception as _replay_exc:  # noqa: BLE001
+            try:
+                logger.warning(
+                    "[HSWQ INT8][SD1.5 graph] replay failed, full disarm + eager: %s",
+                    _replay_exc,
+                )
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+            self.disarm()
+            self._graphs.clear()
+            self._skip.add(key)
+            return self._orig(x, t, **c)
         return sy.clone()
 
     def _capture(self, x, t, c):
+        global _SD15_IN_GRAPH_CAPTURE
         import torch
 
         dev = x.device
+        # Ensure model_sampling buffers (e.g. log_sigmas) reside on the graph
+        # device so timestep lookup never triggers a GPU->CPU sync during capture.
+        ms = getattr(self._base, "model_sampling", None)
+        if ms is not None:
+            try:
+                ms.to(dev)
+            except Exception:
+                pass
+            for _bname, _bval in list(getattr(ms, "_buffers", {}).items()):
+                if torch.is_tensor(_bval) and _bval.device != dev:
+                    ms._buffers[_bname] = _bval.to(dev)
+
         sx = x.clone()
         st = t.clone()
         # Tensor inputs are moved to the graph device BEFORE capture: an
@@ -2320,30 +2398,58 @@ class _Sd15CudaGraphExecutor:
             for k, v in c.items()
             if torch.is_tensor(v)
         }
-        c_in = {k: (sc[k] if torch.is_tensor(v) else v) for k, v in c.items()}
+        ctrl = c.get("control")
+        if isinstance(ctrl, dict):
+            sc_ctrl = {
+                k: [
+                    (el.to(dev).clone() if torch.is_tensor(el) else el)
+                    for el in v
+                ]
+                for k, v in ctrl.items()
+                if isinstance(v, (list, tuple))
+            }
+        else:
+            sc_ctrl = None
+
+        def _make_c_in():
+            out_c = {k: (sc[k] if torch.is_tensor(v) else v) for k, v in c.items()}
+            if "transformer_options" in c and isinstance(c["transformer_options"], dict):
+                out_c["transformer_options"] = dict(c["transformer_options"])
+            if sc_ctrl is not None:
+                # UNetModel.apply_control mutates control[name] via .pop(); pass
+                # a fresh list copy referencing the static GPU buffers on each run.
+                out_c["control"] = {k: list(v) for k, v in sc_ctrl.items()}
+            return out_c
+
+        _SD15_IN_GRAPH_CAPTURE = True
         try:
-            s = torch.cuda.Stream()
+            s = torch.cuda.Stream(device=dev)
             s.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s):
                 for _ in range(3):
-                    self._orig(sx, st, **c_in)
+                    self._orig(sx, st, **_make_c_in())
+                s.synchronize()
+                graph = torch.cuda.CUDAGraph()
+                c_cap = _make_c_in()
+                with torch.cuda.graph(graph, stream=s, capture_error_mode="relaxed"):
+                    sy = self._orig(sx, st, **c_cap)
             torch.cuda.current_stream().wait_stream(s)
             torch.cuda.synchronize()
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, capture_error_mode="relaxed"):
-                sy = self._orig(sx, st, **c_in)
-            torch.cuda.synchronize()
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[HSWQ INT8][SD1.5 graph] capture failed, eager fallback: %s", exc
-            )
-            # A failed capture can leave capture state pending; make sure the
-            # context is quiescent so eager fallback stays usable.
+            _g = locals().get("graph")
+            if _g is not None:
+                type(self)._dead_graphs.append(_g)
             try:
+                torch.cuda.current_stream().wait_stream(s)
                 torch.cuda.synchronize()
             except Exception:
                 pass
+            logger.warning(
+                "[HSWQ INT8][SD1.5 graph] capture failed, eager fallback: %s", exc
+            )
             return None
+        finally:
+            _SD15_IN_GRAPH_CAPTURE = False
         self._captures += 1
         ctx_shape = (
             tuple(c["c_crossattn"].shape)
@@ -2354,7 +2460,7 @@ class _Sd15CudaGraphExecutor:
             f"[HSWQ INT8][SD1.5 graph] captured #{self._captures} "
             f"x={tuple(x.shape)} ctx={ctx_shape}"
         )
-        return (sx, st, sc, graph, sy)
+        return (sx, st, sc, sc_ctrl, graph, sy)
 
 
 def _arm_sd15_cudagraph(model) -> bool:
@@ -2395,8 +2501,15 @@ def _patch_sd15_clip_quant_metadata() -> bool:
     except ImportError:
         return False
     original = getattr(_sd, "load_state_dict_guess_config", None)
-    if original is None or getattr(original, "_hswq_sd15_clip_meta", False):
-        return getattr(original, "_hswq_sd15_clip_meta", False)
+    if original is None:
+        return False
+    _cur = original
+    for _ in range(8):
+        if _cur is None:
+            break
+        if getattr(_cur, "_hswq_sd15_clip_meta", False):
+            return True
+        _cur = getattr(_cur, "__wrapped__", None)
 
     def _clip_quant_layers_from_sd(state_dict, metadata):
         layers = {}
@@ -2493,6 +2606,7 @@ def _patch_sd15_clip_quant_metadata() -> bool:
         return out
 
     load_state_dict_guess_config_sd15_clip._hswq_sd15_clip_meta = True
+    load_state_dict_guess_config_sd15_clip.__wrapped__ = original
     _sd.load_state_dict_guess_config = load_state_dict_guess_config_sd15_clip
     return True
 
@@ -2506,6 +2620,7 @@ def apply_comfy_quant_int8_patches() -> bool:
     ok_torch = _patch_load_torch_file_lora_name()
     ok_lowvram = _patch_lowvram_patch_float_intermediate()
     ok_dyn_bake = _patch_model_patcher_dynamic_int8_lora_bake()
+    ok_lora_log = _patch_model_patcher_lora_logs()
     ok_sd15_graph = _patch_sd15_cudagraph_executor()
     ok_sd15_clip = _patch_sd15_clip_quant_metadata()
     # Kitchen float32 rotate must run even if ops patches were applied earlier
@@ -2518,7 +2633,6 @@ def apply_comfy_quant_int8_patches() -> bool:
         return True
     ok_utils = _patch_convert_old_quants()
     ok_ops = _patch_ops_decode_and_conv()
-    ok_lora_log = _patch_model_patcher_lora_logs()
     if ok_ops:
         _PATCHES_APPLIED = True
         _console(
