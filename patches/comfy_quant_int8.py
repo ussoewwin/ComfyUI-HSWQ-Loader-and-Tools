@@ -3685,9 +3685,21 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
             model, clip, _v = out[:3]
             summarize_int8_lora_capability(model)
             if _model_is_sdxl_unet(model):
-                _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(
-                    model, log_prefix="[SDXL INT8]"
-                )
+                try:
+                    if not _load_sdxl_convrot_fast()._arm_sdxl_cudagraph(model):
+                        logger.warning(
+                            "[HSWQ INT8][SDXL graph] arm failed (ckpt branch); fallback to pooled-rotate eager path"
+                        )
+                        _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(
+                            model, log_prefix="[SDXL INT8]"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "[HSWQ INT8][SDXL graph] arm exception (%s); fallback to pooled-rotate eager path", e
+                    )
+                    _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(
+                        model, log_prefix="[SDXL INT8]"
+                    )
             return (model, clip)
 
         if weight_dtype == "fp8_e4m3fn":
