@@ -12,7 +12,7 @@ requant, same idea as BobJohnson24/ComfyUI-INT8-Fast). Injected Conv2d must
 mirror that set_weight; without it ModelPatcher falls back to rounding into
 int8 and LoRA deltas on Conv layers vanish.
 
-Vendored under hswq/benchmark/sd1.5 int8 for SD1.5 INT8 fidelity benches.
+Vendored under nodes/sd1.5 int8 for SD1.5 ConvRot INT8 loading.
 Runtime monkey-patch only — do not permanently edit ComfyUI-master, and do not
 import this module from ComfyUI-nunchaku-unofficial-loader (copy lives here).
 """

@@ -26,8 +26,8 @@ def _load_int8_patch_module():
     """Spec-from-path bootstrap of the vendored comfy_quant_int8 patch module.
 
     Mirrored verbatim from benchmark/sd1.5_int8_traj_compare.py - the vendored
-    folder ``nodes/sd1.5 int8`` is the only authoritative location for the
-    SD1.5 ConvRot INT8 patch (benchmark/int8 is NOT used).
+    ``nodes/sd1.5 int8`` folder is the only authoritative location for the
+    SD1.5 ConvRot INT8 patch.
     """
     import importlib.util
 
