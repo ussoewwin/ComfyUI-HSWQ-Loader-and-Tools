@@ -1,7 +1,7 @@
 # SDXL INT8 Loader: CUDA-Graph Replay Integration Record (2026-10-17)
 
 **Scope:** `nodes/sdxl_convrot_int8/sdxl_convrot_fast.py` (execuses the SDXL-only module) + `patches/comfy_quant_int8.py` (both load branches) in **ComfyUI-HSWQ-Loader-and-Tools**.
-**Recipes:** the runbook numbers come from the Stage-1 measurement on the hswq bench with the SAME implementation (`benchmark/sdxl_int8_traj_compare.py`, commit `e84e60b`), Owner-run with the reference reverse-hybrid pack (K=597, CLIP INT8 133, 1024x1024, 25 fixed seeds). The loader shares every implementation detail, so the production numbers below map 1:1.
+**Data source:** the numbers in this document come from the Stage-1 verification run on the benchmark stack (`benchmark/sdxl_int8_traj_compare.py`, commit `e84e60b`) with the reference reverse-hybrid pack (K=597, CLIP INT8 133, 1024x1024, 25 fixed seeds). The loader shares every implementation detail, so the production numbers below map 1:1.
 
 ---
 
