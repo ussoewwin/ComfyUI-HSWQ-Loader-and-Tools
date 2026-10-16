@@ -3601,7 +3601,19 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
         # This branch also serves Z Image (UNet-style checkpoints), so the SDXL
         # check runs BEFORE the import: non-SDXL never imports the module.
         if is_convrot and needs_conv2d and _model_is_sdxl_unet(model):
-            _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(model)
+            # Graph-first (measured: bit-equal replay 1.23-1.40x at 1024); the
+            # pooled-rotate eager path only arms when the graph arm fails.
+            try:
+                if not _load_sdxl_convrot_fast()._arm_sdxl_cudagraph(model):
+                    logger.warning(
+                        "[HSWQ INT8][SDXL graph] arm failed (unet branch); fallback to pooled-rotate eager path"
+                    )
+                    _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(model)
+            except Exception as e:
+                logger.warning(
+                    "[HSWQ INT8][SDXL graph] arm exception (%s); fallback to pooled-rotate eager path", e
+                )
+                _load_sdxl_convrot_fast().arm_sdxl_convrot_fast(model)
     else:
         model_options = {}
         if weight_dtype == "fp8_e4m3fn":
