@@ -100,5 +100,5 @@ File identity at push: both touched files repo ↔ live byte-identical (SHA256).
 
 ## Related
 
-* hswq bench-side record: `Benchmark/SDXL_INT8_CUDA_Graph_Replay_Speed_Record_2026-10-17.md` (in the Hybrid-Sensitivity-Weighted-Quantization repo `md/`)
+* hswq (bench-side) record: `SDXL_INT8_CUDA_Graph_Replay_Speed_Record_2026-10-17.md` in the Hybrid-Sensitivity-Weighted-Quantization repo, folder `md/`
 * SD1.5 origin: `md/SD1.5_INT8_Production_Speed_Regression_and_Fix_2026-10-16.md`
