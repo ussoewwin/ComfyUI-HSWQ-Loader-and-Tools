@@ -635,6 +635,11 @@ try:
                         # path so the loader can branch per architecture; never
                         # reuse the raw "int8_tensorwise" name across families.
                         "SDXL ConvRot INT8",
+                        # SD1.5-only marker (2026-10-17 node picker addition).
+                        # Routes to the vendored nodes/sd1.5 int8 loader (ported
+                        # from the bench stack; probes INT8 and loads inside the
+                        # INT8 Conv2d scope when the file is a comfy_quant pack).
+                        "SD1.5 ConvRot INT8",
                     ],),
                 }
                 opt = {"device": (devices, {"default": default_dev})}
@@ -659,6 +664,17 @@ try:
                     # ControlLora borrowed weights (control output explodes ->
                     # lineart lock / no coloring / strength dead). Auto-detect
                     # native comfy_quant INT8 files too.
+                    if weight_dtype == "SD1.5 ConvRot INT8":
+                        # SD1.5 picker (2026-10-17): ported from the bench stack;
+                        # loader lives in nodes/sd1.5 int8 (vendored). Folder
+                        # name has a space/dot so go through the file path.
+                        import importlib.util as _ilu
+
+                        _p = os.path.join(os.path.dirname(__file__), "nodes", "sd1.5 int8", "__init__.py")
+                        _spec = _ilu.spec_from_file_location("hswq_sd15_loader", _p)
+                        _mod = importlib.util.module_from_spec(_spec)
+                        _spec.loader.exec_module(_mod)
+                        return _mod.load_checkpoint_sd15_hswq_weight_dtype(ckpt_path, device=None)
                     if weight_dtype in ("SDXL ConvRot INT8", "int8_tensorwise") or _checkpoint_looks_int8(ckpt_path):
                         from .patches.comfy_quant_int8 import load_checkpoint_sdxl_hswq_weight_dtype
                         return load_checkpoint_sdxl_hswq_weight_dtype(
