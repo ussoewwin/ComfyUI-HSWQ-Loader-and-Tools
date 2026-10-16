@@ -2332,14 +2332,9 @@ class _Sd15CudaGraphExecutor:
         except Exception:
             return self._orig(x, t, **c)
         key = self._key(x, t, c)
-        if key in self._skip:
-            return self._orig(x, t, **c)
         ent = self._graphs.get(key)
         if ent is None:
             ent = self._capture(x, t, c)
-            if ent is None:
-                self._skip.add(key)
-                return self._orig(x, t, **c)
             self._graphs[key] = ent
         sx, st, sc, sc_ctrl, graph, sy = ent
         sx.copy_(x)
@@ -2355,21 +2350,7 @@ class _Sd15CudaGraphExecutor:
                 for buf, src_t in zip(buf_list, src_list):
                     if torch.is_tensor(buf) and torch.is_tensor(src_t):
                         buf.copy_(src_t)
-        try:
-            graph.replay()
-        except Exception as _replay_exc:  # noqa: BLE001
-            try:
-                logger.warning(
-                    "[HSWQ INT8][SD1.5 graph] replay failed, full disarm + eager: %s",
-                    _replay_exc,
-                )
-                torch.cuda.synchronize()
-            except Exception:
-                pass
-            self.disarm()
-            self._graphs.clear()
-            self._skip.add(key)
-            return self._orig(x, t, **c)
+        graph.replay()  # OWNER RULE 2026-10-17: no fallback, replay failure propagates
         return sy.clone()
 
     def _capture(self, x, t, c):
@@ -2444,10 +2425,7 @@ class _Sd15CudaGraphExecutor:
                 torch.cuda.synchronize()
             except Exception:
                 pass
-            logger.warning(
-                "[HSWQ INT8][SD1.5 graph] capture failed, eager fallback: %s", exc
-            )
-            return None
+            raise  # OWNER RULE 2026-10-17: no fallback, fail fast
         finally:
             _SD15_IN_GRAPH_CAPTURE = False
         self._captures += 1
