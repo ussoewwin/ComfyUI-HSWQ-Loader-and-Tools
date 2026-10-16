@@ -56,7 +56,6 @@ _AUDITED_ROTATE_FILES = (
     "backends/eager/quantization.py",
     "backends/triton/quantization.py",
     "backends/eager/convrot_w4a4.py",
-    "backends/ascend/__init__.py",  # v2.14-comfy: added NPU rotate helper callers
 )
 
 _AUDIT_CACHE = {"done": False, "ok": False, "detail": "not run"}
@@ -168,7 +167,7 @@ def _audit_rotate_call_sites() -> tuple:
     return True, _AUDIT_CACHE["detail"]
 
 
-_STATE = {"depth": 0, "saved": [], "pool": { "in_graph_capture": False,}, "helpers": None}
+_STATE = {"depth": 0, "saved": [], "pool": {}, "helpers": None}
 
 
 def set_helpers_loader(loader) -> None:
@@ -186,38 +185,9 @@ def _always_false(*_a, **_k):
     return False
 
 
-def _capture_active() -> bool:
-    """True while the SDXL graph executor is warm-ups/capturing/replaying."""
-    if _STATE.get("in_graph_capture"):
-        return True
-    try:
-        import torch
-
-        return torch.cuda.is_current_stream_capturing()
-    except Exception:
-        return False
-
-
 def _pooled_rotate(x, h, group_size):
-    """comfy_kitchen ConvRot activation rotate with a pooled output buffer.
-
-    CUDA-graph guard (measured): pooled shared buffers corrupt replay output
-    (maxdiff ~2.5 vs eager). During warm-up/capture/replay the plain rotate
-    runs so the recorded graph carries stock kernels; eager steps keep the
-    pooled speed benefit.
-    """
+    """comfy_kitchen ConvRot activation rotate with a pooled output buffer."""
     import torch
-
-    if _capture_active():
-        orig_shape = x.shape
-        features = orig_shape[-1]
-        if features % group_size != 0:
-            raise ValueError(f"features {features} not divisible by group_size {group_size}")
-        n_groups = features // group_size
-        x_grouped = x.reshape(-1, n_groups, group_size)
-        if h.dtype != x_grouped.dtype or h.device != x_grouped.device:
-            h = h.to(dtype=x_grouped.dtype, device=x_grouped.device)
-        return (x_grouped @ h).reshape(orig_shape)
 
     orig_shape = x.shape
     features = orig_shape[-1]
@@ -243,16 +213,6 @@ def _pooled_helper_rotate(x, h_matrix, group_size):
     """
     import torch
 
-    if _capture_active():
-        orig_shape = x.shape
-        features = orig_shape[-1]
-        if features % group_size != 0:
-            raise ValueError(f"features {features} not divisible by group_size {group_size}")
-        group_count = features // group_size
-        x_grouped = x.reshape(-1, group_count, group_size)
-        h = _helpers().get_hadamard_on_device(group_size, device=x.device, dtype=x.dtype)
-        return (x_grouped @ h).reshape(orig_shape)
-
     orig_shape = x.shape
     features = orig_shape[-1]
     if features % group_size != 0:
@@ -271,21 +231,6 @@ def _pooled_helper_rotate(x, h_matrix, group_size):
     return out.reshape(orig_shape)
 
 
-def _stock_rotate(x, h, group_size):
-    """Plain rotate (no pooled buffer) used while the graph executor captures."""
-    import torch
-
-    orig_shape = x.shape
-    features = orig_shape[-1]
-    if features % group_size != 0:
-        raise ValueError(f"features {features} not divisible by group_size {group_size}")
-    n_groups = features // group_size
-    x_grouped = x.reshape(-1, n_groups, group_size)
-    if h.dtype != x_grouped.dtype or h.device != x_grouped.device:
-        h = h.to(dtype=x_grouped.dtype, device=x_grouped.device)
-    return (x_grouped @ h).reshape(orig_shape)
-
-
 def _arm_kernels() -> bool:
     if _STATE["depth"] > 0:
         _STATE["depth"] += 1
@@ -298,10 +243,6 @@ def _arm_kernels() -> bool:
         return False
     saved = []
     try:
-        # During the graph executor's warmup/capture window install the STOCK
-        # rotate (measured: pooled buffers corrupt graph replay; stock capture
-        # is bit-equal and +10.6%). Eager steps arm the pooled rotate as before.
-        rotate_impl = _capture_active() and _stock_rotate or _pooled_rotate  # noqa: F841
         for modname in _ROTATE_MODULES:
             try:
                 m = importlib.import_module(modname)
@@ -309,7 +250,7 @@ def _arm_kernels() -> bool:
                 continue
             if hasattr(m, "_rotate_activation"):
                 saved.append((m, "_rotate_activation", m._rotate_activation))
-                m._rotate_activation = _capture_active() and _stock_rotate or _pooled_rotate
+                m._rotate_activation = _pooled_rotate
 
         cuda_mod = importlib.import_module("comfy_kitchen.backends.cuda")
         if hasattr(cuda_mod, "_CONVROT_FUSED_MAX_K"):
@@ -356,164 +297,6 @@ def is_sdxl_convrot_fast_armed() -> bool:
     return _STATE["depth"] > 0
 
 
-class _Sd15CudaGraphExecutor:
-    """Per-(x,t,context) CUDA Graph replay for the SDXL INT8 UNet.
-
-    Ported from the SD1.5 INT8 stack (nodes/sd1.5 int8/comfy_quant_int8.py).
-    The SDXL forward is also partly CPU-launch-bound after the pooledRotate
-    fast path (many small per-op dispatches inside the UNet blocks); capturing
-    the whole denoiser forward removes the per-op CPU cost.
-
-    Correctness contract (same as the SD1.5 port): capture buffers are copied-
-    in before each replay; the graph output is identical to eager. Capture is
-    keyed on the input signature; a signature change re-captures.
-
-    Capture uses capture_error_mode="relaxed" and a side-stream warmup. The
-    SDXL context dict holds several tensor entries (y / timesteps / context /
-    c_concat); the generic keying copies and keys every tensor entry.
-
-    Scope: latent sides up to _MAX_CAPTURE_LATENT_SIDE (covers up to
-    1024x1024); anything larger runs eager.
-    """
-
-    _MAX_CAPTURE_LATENT_SIDE = 128
-    _log_prefix = "[HSWQ INT8][SDXL graph]"
-
-    def __init__(self, base_model):
-        import torch
-
-        self._torch = torch
-        self._base = base_model
-        self._orig = base_model.apply_model
-        # Capture the RAW (unwrapped) forward: the pooled-rotate fast path is
-        # incompatible with graph capture (measured: replay maxdiff 2.3 vs
-        # eager — shared rotate buffers go stale). Bypass the wrapper for
-        # capture/replay; the wrapper stays installed for non-replayable
-        # shapes (eager steps use its speed benefit).
-        self._graphs = {}
-        self._captures = 0
-        self._skip = set()
-        base_model.apply_model = self._call
-        try:
-            base_model._hswq_sdxl_graph_executor = self
-        except Exception:
-            pass
-
-    def disarm(self):
-        if getattr(self._base, "apply_model", None) == self._call:
-            self._base.apply_model = self._orig
-        self._graphs.clear()
-
-    def _key(self, x, t, c):
-        import torch
-
-        tens = tuple(
-            sorted(
-                (k, tuple(v.shape), str(v.dtype))
-                for k, v in c.items()
-                if torch.is_tensor(v)
-            )
-        )
-        return (tuple(x.shape), str(x.dtype), str(x.device), tens)
-
-    def _call(self, x, t, **c):
-        import torch
-
-        try:
-            if max(int(x.shape[-1]), int(x.shape[-2])) > self._MAX_CAPTURE_LATENT_SIDE:
-                return self._orig(x, t, **c)
-        except Exception:
-            return self._orig(x, t, **c)
-        key = self._key(x, t, c)
-        if key in self._skip:
-            return self._orig(x, t, **c)
-        ent = self._graphs.get(key)
-        if ent is None:
-            ent = self._capture(x, t, c)
-            if ent is None:
-                self._skip.add(key)
-                return self._orig(x, t, **c)
-            self._graphs[key] = ent
-        sx, st, sc, graph, sy = ent
-        _STATE["in_graph_capture"] = True
-        try:
-            sx.copy_(x)
-            st.copy_(t)
-            for k, buf in sc.items():
-                src_kw = c[k]
-                if torch.is_tensor(src_kw):
-                    buf.copy_(src_kw)
-        finally:
-            _STATE["in_graph_capture"] = False
-        graph.replay()
-        return sy.clone()
-
-    def _capture(self, x, t, c):
-        import torch
-
-        dev = x.device
-        sx = x.clone()
-        st = t.clone()
-        sc = {
-            k: (v.to(dev) if torch.is_tensor(v) else v).clone()
-            for k, v in c.items()
-            if torch.is_tensor(v)
-        }
-        c_in = {k: (sc[k] if torch.is_tensor(v) else v) for k, v in c.items()}
-        _STATE["in_graph_capture"] = True
-        try:
-            s = torch.cuda.Stream()
-            s.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(s):
-                for _ in range(3):
-                    self._orig(sx, st, **c_in)
-            torch.cuda.current_stream().wait_stream(s)
-            torch.cuda.synchronize()
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, capture_error_mode="relaxed"):
-                sy = self._orig(sx, st, **c_in)
-            torch.cuda.synchronize()
-        except Exception as exc:  # noqa: BLE001
-            _STATE["in_graph_capture"] = False
-            logger.warning(
-                "%s capture failed, eager fallback: %s", self._log_prefix, exc
-            )
-            try:
-                torch.cuda.synchronize()
-            except Exception:
-                pass
-            return None
-        _STATE["in_graph_capture"] = False
-        self._captures += 1
-        ctx_shape = (
-            tuple(c["c_crossattn"].shape)
-            if torch.is_tensor(c.get("c_crossattn"))
-            else "-"
-        )
-        _console(
-            f"{self._log_prefix} captured #{self._captures} "
-            f"x={tuple(x.shape)} ctx={ctx_shape}"
-        )
-        return (sx, st, sc, graph, sy)
-
-
-def _arm_sdxl_cudagraph(model) -> bool:
-    """Arm the CUDA-graph executor on an SDXL INT8 model (no-op otherwise)."""
-    import torch
-
-    inner = getattr(model, "model", None) or model
-    if inner is None:
-        return False
-    apply_model = getattr(inner, "apply_model", None)
-    if apply_model is None:
-        return False
-    if isinstance(apply_model, _Sd15CudaGraphExecutor):
-        return True
-    _Sd15CudaGraphExecutor(inner)
-    return True
-
-
-
 def arm_sdxl_convrot_fast(model, *, log_prefix="[HSWQ INT8]") -> bool:
     """Arm the SDXL ConvRot INT8 fast path for THIS model only.
 
@@ -525,12 +308,7 @@ def arm_sdxl_convrot_fast(model, *, log_prefix="[HSWQ INT8]") -> bool:
         return False
     cls = type(dm).__name__
     mod = type(dm).__module__.lower()
-    # v2.14-comfy: UNetModel no longer exposes adm_in_channels; the BaseModel
-    # carries adm_channels (2816 for SDXL). Accept either source.
-    adm = getattr(dm, "adm_in_channels", None)
-    if adm is None:
-        adm = getattr(inner, "adm_channels", None)
-    if cls != "UNetModel" or "openaimodel" not in mod or not adm:
+    if cls != "UNetModel" or "openaimodel" not in mod or getattr(dm, "adm_in_channels", None) is None:
         logger.debug("[HSWQ INT8][SDXL] fast path refused (arch %s.%s)", mod, cls)
         return False
     if getattr(dm, "_hswq_sdxl_convrot_fast_wrapped", False):
@@ -563,11 +341,4 @@ def arm_sdxl_convrot_fast(model, *, log_prefix="[HSWQ INT8]") -> bool:
     dm._hswq_sdxl_convrot_fast_original_forward = original_forward
     print(f"{log_prefix} SDXL ConvRot INT8 fast path armed for this model only", flush=True)
     logger.info("%s SDXL ConvRot INT8 fast path armed", log_prefix)
-    # CUDA-graph executor (ported from SD1.5): capture-based replay on top of
-    # the fast path. Capture-phase kernel mismatch falls back to eager per
-    # capture without disarming anything.
-    try:
-        _arm_sdxl_cudagraph(model)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[HSWQ INT8][SDXL graph] arm failed: %s", exc)
     return True
