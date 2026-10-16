@@ -7,6 +7,16 @@
   </tr>
 </table>
 
+## Version 3.6.4
+
+- **Added**: **SDXL ConvRot INT8 CUDA-Graph Replay integration** - ported the full-denoiser CUDA Graph replay infrastructure (`_Sd15CudaGraphExecutor`) from the SD1.5 INT8 stack to the SDXL ConvRot INT8 runtime, eliminating the per-op CPU launch overhead remaining after the pooled activation rotate optimization:
+  - **Executor & Architecture**: Integrated into the dedicated SDXL module `nodes/sdxl_convrot_int8/sdxl_convrot_fast.py` (lines 359-500) and loaded via a private non-`sys.modules` loader so no other model family (Z Image / Krea2 / FLUX / SAM3 / SD1.5) is touched. Performs per-`(x, t, context)` CUDA Graph capture keyed on the full input signature with input buffer copy-in and isolated output cloning. Covers latents up to `_MAX_CAPTURE_LATENT_SIDE = 128` (1024x1024); latents larger than 1024 run eager.
+  - **Graph-First Load Ladder**: Both the Checkpoint Loader (`load_checkpoint_sdxl_hswq_weight_dtype`) and UNet Loader (`load_diffusion_model`) branches in `patches/comfy_quant_int8.py` prioritize graph arming (`_arm_sdxl_cudagraph`) and safely fall back to the eager pooled-rotate path on capture/arm failures. The architecture guard accommodates v2.14-comfy by accepting either `dm.adm_in_channels` or `inner.adm_channels` (2816 on SDXL).
+  - **Capture Guard against Pooled-Buffer Corruption**: Solves the shared-buffer replay corruption trap (maxdiff 2.3-4.0). An execution flag (`_STATE["in_graph_capture"]` / `_capture_active()`) forces plain unpooled activation rotation during warm-up, capture, and replay copy-in so that the captured graph holds standard kernels, guaranteeing bit-equal outputs while non-capturable eager steps retain pooled speed.
+  - **Call-Site Audit**: Updated the fail-closed AST rotate call-site audit to include `backends/ascend/__init__.py` introduced in v2.14-comfy, ensuring compliant callers arm cleanly.
+  - **Measured**: 25-seed latent-trajectory comparison on 1024x1024 reference reverse-hybrid pack: steady speed increased from 2.60-2.76 it/s (FP16 eager) to **3.35-3.36 it/s (INT8 graph replay, +22.1%)**, average wall-clock reduced from 9.23s to **7.62s/seed (+17.5%)**, with **bit-identical output (final cosine mean 0.96223, 0/25 bifurcated)**.
+- See [Release Notes v3.6.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.4) for details.
+
 ## Version 3.6.3
 
 - **Added**: **SDXL ConvRot INT8 CLIP support** - the checkpoint-embedded SDXL text encoders (CLIP-L `conditioner.embedders.0` and CLIP-G `conditioner.embedders.1`) can now be packed as **ConvRot INT8** and load correctly in ComfyUI:

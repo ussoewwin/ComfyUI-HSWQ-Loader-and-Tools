@@ -14,7 +14,7 @@ import logging
 import os
 from pathlib import Path
 
-__version__ = "3.6.1"
+__version__ = "3.6.4"
 
 import torch
 from packaging.version import InvalidVersion, Version

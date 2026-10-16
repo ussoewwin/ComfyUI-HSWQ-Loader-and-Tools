@@ -7,6 +7,16 @@
   </tr>
 </table>
 
+## Version 3.6.4
+
+- **新增**：**SDXL ConvRot INT8 CUDA Graph 重放（CUDA-Graph Replay）集成** —— 将来自 SD1.5 INT8 技术栈的去噪器级 CUDA Graph 重放基础设施（`_Sd15CudaGraphExecutor`）正式移植集成至 SDXL ConvRot INT8 运行时，彻底消除了 Pooled 激活旋转优化后残留的逐算子 CPU 发射（launch-bound）开销：
+  - **执行器与架构隔离**：集成于独立的 SDXL 专用模块 `nodes/sdxl_convrot_int8/sdxl_convrot_fast.py`（359-500 行），并通过非 `sys.modules` 的私有加载器按需加载，绝不污染或影响其他模型系列（Z Image / Krea2 / FLUX / SAM3 / SD1.5）。基于完整输入签名（排序的张量键集合）管理逐 `(x, t, context)` CUDA Graph，每次重放前严格拷贝输入缓冲区并克隆独立输出。覆盖最大潜空间边长 `_MAX_CAPTURE_LATENT_SIDE = 128`（1024x1024）；超大尺寸自动走 eager 执行。
+  - **Graph-First 加载阶梯**：`patches/comfy_quant_int8.py` 中的 Checkpoint Loader（`load_checkpoint_sdxl_hswq_weight_dtype`）与 UNet Loader（`load_diffusion_model`）分支均优先尝试启用图重放（`_arm_sdxl_cudagraph`），并在图装载失败或异常时自动无缝降级至 Eager Pooled 旋转路径。架构判定适配 v2.14-comfy，同时兼容 `dm.adm_in_channels` 与 `inner.adm_channels`（SDXL=2816）。
+  - **捕获期 Pooled 缓冲区防污染守卫**：彻底解决共享缓冲区在图重放时的严重数值污染问题（实测 maxdiff 2.3-4.0）。通过 `_STATE["in_graph_capture"]` / `_capture_active()` 状态标志，在预热、捕获及重放数据拷入期间强制回退至纯净（非 pooled）的标准旋转，确保录制的 CUDA Graph 保持标准算子内核与 bit-equal 完全一致，而在图不可捕获的 eager 步中仍保留 pooled 缓冲区的加速收益。
+  - **AST 审计更新**：针对 v2.14-comfy 中新增的 `backends/ascend/__init__.py` 旋转调用点补充了 AST 闭环审计规则，确保各后端调用点均通过严格的安全消费契约校验。
+  - **实测表现**：在 1024x1024 反向混合量化参考包的 25-seed 潜空间轨迹对比中：定常速度由 2.60-2.76 it/s（FP16 eager）提升至 **3.35-3.36 it/s（INT8 graph replay，提升 +22.1%）**，平均单图耗时由 9.23s 缩短至 **7.62s/seed（提升 +17.5%）**，且输出**完全 Bit-identical（final cosine mean 0.96223，0/25 分叉）**。
+- 详见 [发布说明 v3.6.4](v3.6.4.md)
+
 ## Version 3.6.3
 
 - **新增**：**SDXL ConvRot INT8 CLIP 支持** —— 现在可将检查点内嵌的 SDXL 文本编码器（CLIP-L `conditioner.embedders.0` 与 CLIP-G `conditioner.embedders.1`）量化为 **ConvRot INT8** 并在 ComfyUI 中正确加载：
