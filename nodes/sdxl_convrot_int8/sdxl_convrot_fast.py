@@ -414,7 +414,26 @@ class _Sd15CudaGraphExecutor:
                 if torch.is_tensor(v)
             )
         )
-        return (tuple(x.shape), str(x.dtype), str(x.device), tens)
+        ctrl = c.get("control")
+        if isinstance(ctrl, dict):
+            ctrl_sig = tuple(
+                sorted(
+                    (
+                        k,
+                        tuple(
+                            (tuple(el.shape), str(el.dtype))
+                            if torch.is_tensor(el)
+                            else None
+                            for el in v
+                        ),
+                    )
+                    for k, v in ctrl.items()
+                    if isinstance(v, (list, tuple))
+                )
+            )
+        else:
+            ctrl_sig = ()
+        return (tuple(x.shape), str(x.dtype), str(x.device), tens, ctrl_sig)
 
     def _call(self, x, t, **c):
         import torch
@@ -423,6 +442,16 @@ class _Sd15CudaGraphExecutor:
             if max(int(x.shape[-1]), int(x.shape[-2])) > self._MAX_CAPTURE_LATENT_SIDE:
                 return self._orig(x, t, **c)
         except Exception:
+            return self._orig(x, t, **c)
+        # 1. Any ControlNet active: dynamic tensor injection cannot be captured in static CUDA Graph
+        if c.get("control") is not None:
+            return self._orig(x, t, **c)
+        # 2. Dynamic VRAM active: on-demand weight staging/VBAR paging is incompatible with CUDA Graph
+        if (
+            getattr(self._base, "dynamic_vram", False)
+            or hasattr(self._base, "_vbar")
+            or any(hasattr(m, "_v") for m in self._base.modules())
+        ):
             return self._orig(x, t, **c)
         key = self._key(x, t, c)
         if key in self._skip:
@@ -434,7 +463,7 @@ class _Sd15CudaGraphExecutor:
                 self._skip.add(key)
                 return self._orig(x, t, **c)
             self._graphs[key] = ent
-        sx, st, sc, graph, sy = ent
+        sx, st, sc, sc_ctrl, graph, sy = ent
         _STATE["in_graph_capture"] = True
         try:
             sx.copy_(x)
@@ -443,6 +472,12 @@ class _Sd15CudaGraphExecutor:
                 src_kw = c[k]
                 if torch.is_tensor(src_kw):
                     buf.copy_(src_kw)
+            if sc_ctrl is not None and isinstance(ctrl, dict):
+                for k, buf_list in sc_ctrl.items():
+                    src_list = ctrl.get(k) or ()
+                    for buf, src_t in zip(buf_list, src_list):
+                        if torch.is_tensor(buf) and torch.is_tensor(src_t):
+                            buf.copy_(src_t)
         finally:
             _STATE["in_graph_capture"] = False
         graph.replay()
@@ -452,6 +487,16 @@ class _Sd15CudaGraphExecutor:
         import torch
 
         dev = x.device
+        ms = getattr(self._base, "model_sampling", None)
+        if ms is not None:
+            try:
+                ms.to(dev)
+            except Exception:
+                pass
+            for _bname, _bval in list(getattr(ms, "_buffers", {}).items()):
+                if torch.is_tensor(_bval) and _bval.device != dev:
+                    ms._buffers[_bname] = _bval.to(dev)
+
         sx = x.clone()
         st = t.clone()
         sc = {
@@ -459,29 +504,44 @@ class _Sd15CudaGraphExecutor:
             for k, v in c.items()
             if torch.is_tensor(v)
         }
-        c_in = {k: (sc[k] if torch.is_tensor(v) else v) for k, v in c.items()}
+        ctrl = c.get("control")
+        if isinstance(ctrl, dict):
+            sc_ctrl = {
+                k: [
+                    (el.to(dev).clone() if torch.is_tensor(el) else el)
+                    for el in v
+                ]
+                for k, v in ctrl.items()
+                if isinstance(v, (list, tuple))
+            }
+        else:
+            sc_ctrl = None
+
+        def _make_c_in():
+            out_c = {k: (sc[k] if torch.is_tensor(v) else v) for k, v in c.items()}
+            if sc_ctrl is not None:
+                out_c["control"] = {k: list(v) for k, v in sc_ctrl.items()}
+            return out_c
+
         _STATE["in_graph_capture"] = True
         try:
             s = torch.cuda.Stream()
             s.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s):
                 for _ in range(3):
-                    self._orig(sx, st, **c_in)
+                    self._orig(sx, st, **_make_c_in())
             torch.cuda.current_stream().wait_stream(s)
             torch.cuda.synchronize()
             graph = torch.cuda.CUDAGraph()
+            c_cap = _make_c_in()
             with torch.cuda.graph(graph, capture_error_mode="relaxed"):
-                sy = self._orig(sx, st, **c_in)
+                sy = self._orig(sx, st, **c_cap)
             torch.cuda.synchronize()
         except Exception as exc:  # noqa: BLE001
             _STATE["in_graph_capture"] = False
             logger.warning(
                 "%s capture failed, eager fallback: %s", self._log_prefix, exc
             )
-            try:
-                torch.cuda.synchronize()
-            except Exception:
-                pass
             return None
         _STATE["in_graph_capture"] = False
         self._captures += 1
@@ -494,13 +554,19 @@ class _Sd15CudaGraphExecutor:
             f"{self._log_prefix} captured #{self._captures} "
             f"x={tuple(x.shape)} ctx={ctx_shape}"
         )
-        return (sx, st, sc, graph, sy)
+        return (sx, st, sc, sc_ctrl, graph, sy)
 
 
 def _arm_sdxl_cudagraph(model) -> bool:
     """Arm the CUDA-graph executor on an SDXL INT8 model (no-op otherwise)."""
     import torch
 
+    if (
+        type(model).__name__ == "ModelPatcherDynamic"
+        or getattr(model, "is_dynamic", False)
+        or hasattr(model, "dynamic_model")
+    ):
+        return False
     inner = getattr(model, "model", None) or model
     if inner is None:
         return False

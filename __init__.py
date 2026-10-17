@@ -616,6 +616,20 @@ try:
             except Exception:
                 return False
 
+        def _checkpoint_is_sd15(ckpt_path):
+            try:
+                from safetensors import safe_open
+                with safe_open(str(ckpt_path), framework="pt", device="cpu") as f:
+                    for k in f.keys():
+                        if k.startswith("cond_stage_model.") or "output_blocks.11." in k:
+                            return True
+                        if k.startswith("conditioner.embedders."):
+                            return False
+                return False
+            except Exception:
+                base = os.path.basename(str(ckpt_path)).lower()
+                return "sd15" in base or "sd1.5" in base or "v1-5" in base or "v1.5" in base
+
 
         class HSWQCheckpointLoaderSDXL(_UNETLoaderBase):
             """HSWQ Checkpoint Loader (SDXL) with device selection. Ref: CheckpointLoaderSimple."""
@@ -657,28 +671,24 @@ try:
                     set_current_device(device)
                 try:
                     ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
-                    # INT8 (incl. ConvRot) checkpoints MUST go through the INT8-aware
-                    # loader: plain load_checkpoint_guess_config leaves Conv2d
-                    # comfy_quant layers as RAW int8 qdata (absmax ~127, scale
-                    # dropped), which breaks the base forward (NaN) and poisons the
-                    # ControlLora borrowed weights (control output explodes ->
-                    # lineart lock / no coloring / strength dead). Auto-detect
-                    # native comfy_quant INT8 files too.
-                    if weight_dtype == "SD1.5 ConvRot INT8":
-                        # SD1.5 picker (2026-10-17): ported from the bench stack;
+                    is_int8_file = _checkpoint_looks_int8(ckpt_path)
+                    is_sd15 = (weight_dtype == "SD1.5 ConvRot INT8") or _checkpoint_is_sd15(ckpt_path)
+
+                    if (weight_dtype == "SD1.5 ConvRot INT8") or (is_sd15 and (weight_dtype == "default" or is_int8_file)):
+                        # SD1.5 picker: ported from the bench stack;
                         # loader lives in nodes/sd1.5 int8 (vendored). Folder
                         # name has a space/dot so go through the file path.
                         import importlib.util as _ilu
 
                         _p = os.path.join(os.path.dirname(__file__), "nodes", "sd1.5 int8", "__init__.py")
                         _spec = _ilu.spec_from_file_location("hswq_sd15_loader", _p)
-                        _mod = importlib.util.module_from_spec(_spec)
+                        _mod = _ilu.module_from_spec(_spec)
                         _spec.loader.exec_module(_mod)
-                        return _mod.load_checkpoint_sd15_hswq_weight_dtype(ckpt_path, device=None)
-                    if weight_dtype in ("SDXL ConvRot INT8", "int8_tensorwise") or _checkpoint_looks_int8(ckpt_path):
+                        return _mod.load_checkpoint_sd15_hswq_weight_dtype(ckpt_path, device=device)
+                    if weight_dtype in ("SDXL ConvRot INT8", "int8_tensorwise") or is_int8_file:
                         from .patches.comfy_quant_int8 import load_checkpoint_sdxl_hswq_weight_dtype
                         return load_checkpoint_sdxl_hswq_weight_dtype(
-                            ckpt_name, weight_dtype, device=None,
+                            ckpt_name, weight_dtype, device=device,
                         )
                     model_options = {}
                     if weight_dtype == "fp8_e4m3fn":
