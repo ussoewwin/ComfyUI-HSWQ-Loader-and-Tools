@@ -2225,12 +2225,9 @@ def _patch_sd15_cudagraph_executor() -> bool:
 
     def _maybe_arm(model):
         if _SD15_GRAPH_ARM_DISABLED:
-            # The trajectory bench measures eager INT8 with its own SA2
-            # instrumentation; sageattn inside a CUDA-graph capture aborts the
-            # cudaMallocAsync allocator (measured 2026-10-17, native-convert
-            # node bench). The graph executor is production-runtime only and
-            # is verified by the dedicated verify harness - not silently
-            # skipped here: the bench prints its mode explicitly.
+            # Explicit opt-out for measuring contexts only (none in this repo
+            # currently sets it). The SD1.5 graph executor is production
+            # runtime and is also armed inside the trajectory bench.
             return model
         if model is not None and (
             getattr(_int8_quant_conv_tls, "active", False)
