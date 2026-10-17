@@ -7,6 +7,16 @@
   </tr>
 </table>
 
+## Version 3.6.5
+
+- **Added**: **SD1.5 ConvRot INT8 support** - the SD1.5 ConvRot INT8 stack reached the loader: a dedicated vendored module `nodes/sd1.5 int8/` ports the production-verified SD1.5 stack (originally developed in the benchmark stack in the HSWQ repository) into the loader, and the **HSWQ Checkpoint Loader** node gained the **`SD1.5 ConvRot INT8`** `weight_dtype` option:
+  - **Full-stack port**: Triton-fused ConvRot W8A8 IMMA Conv2d (`_int8_conv_rot_imma` with quant/dequant kernels + Hadamard activation rotation), INT8 linear (cuda/triton/eager ladder via `comfy_kitchen`), Conv2d/LoRA/ControlLora/handoff load patches, INT8 probe (`checkpoint_looks_like_comfy_quant_int8`) and the SD1.5 graph-arm_disabled bench flag - byte-identical to the benchmark master at merge time (4-copy SHA256 verified, unique=1).
+  - **CUDA-graph replay executor**: the whole-denoiser `_Sd15CudaGraphExecutor` is armed from the SD1.5 load path (with staticize-for-capture, fail-fast arm, per-capture triton fallback). Replays the fused triton ConvRot kernels inside the captured graph under the default caching allocator; the child process spawns with the `backend:cudaMallocAsync` flag stripped (async pool rejects triton launches inside captures - measured).
+  - **Double-arm guard**: the SD1.5 stack can be imported under different module names (loader + hook copy); a base-object flag `_hswq_sd15_graph_armed` guarantees the executor is armed exactly once per model regardless of import alias - the missing guard was measured to double-wrap the base and invalidate captures (cudaErrorStreamCaptureUnsupported 900 -> 100% NaN sampling).
+  - **CLIP stays FP16 for SD1.5**: SD1.5 packs keep the checkpoint-embedded CLIP in FP16 (the ConvRot INT8 CLIP stage for SD1.5 was abandoned after production debugging; conditioning comparison vs the FP16 baseline measured cos 0.99987). SDXL CLIP INT8 is untouched.
+  - **Measured (production, 512x512, RTX 5060 Ti)**: INT8 steady 17.18-17.34 it/s vs FP16 15.03-15.22 it/s (**+14.5% steady-state**), average wall-clock per seed FP16 1.72s vs INT8 1.50s (**+12.8%**), triton failures 0, capture-fallback 0.
+- Release notes for v3.6.5 will follow (see [Releases](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases)).
+
 ## Version 3.6.4
 
 - **Added**: **SDXL ConvRot INT8 CUDA-Graph Replay integration** - ported the full-denoiser CUDA Graph replay infrastructure (`_Sd15CudaGraphExecutor`) from the SD1.5 INT8 stack to the SDXL ConvRot INT8 runtime, eliminating the per-op CPU launch overhead remaining after the pooled activation rotate optimization:

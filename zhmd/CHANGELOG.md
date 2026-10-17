@@ -7,6 +7,16 @@
   </tr>
 </table>
 
+## Version 3.6.5
+
+- 添加：**SD1.5 ConvRot INT8 支持** -- SD1.5 ConvRot INT8 技术栈登陆加载器：专用内置模块 `nodes/sd1.5 int8/` 把在 HSWQ 仓库基准栈中开发、生产实测验证过的 SD1.5 技术栈移植进加载器，并为 **HSWQ Checkpoint Loader** 节点新增 **`SD1.5 ConvRot INT8`** `weight_dtype` 选项：
+  - **全技术栈移植**：Triton 融合 ConvRot W8A8 IMMA Conv2d（`_int8_conv_rot_imma`，quant/dequant 核 + Hadamard 激活旋转）、INT8 linear（cuda/triton/eager 阶梯，经 `comfy_kitchen`）、Conv2d/LoRA/ControlLora/handoff 加载补丁、INT8 探测（`checkpoint_looks_like_comfy_quant_int8`）与 SD1.5 graph-arm_disabled 基准开关 -- 合并时与基准主干 byte 完全一致（4 副本 SHA256 校验，unique=1）。
+  - **CUDA graph replay 执行器**：全 denoiser `_Sd15CudaGraphExecutor` 由 SD1.5 加载路径激活（含 staticize-for-capture、fail-fast arm、per-capture triton fallback）。在默认 caching allocator 下在捕获图内重放融合 triton ConvRot 核；子进程带上剥除 `backend:cudaMallocAsync` 的环境启动（async pool 拒绝 capture 内的 triton 启动 -- 实测）。
+  - **Double-arm 防护**：SD1.5 技术栈可能在不同模块名下被导入（loader + hook 副本），base 对象标志 `_hswq_sd15_graph_armed` 保证每个模型无论 import 别名都只激活一次 -- 缺少防护时，实测双重包裹使 capture 失效（cudaErrorStreamCaptureUnsupported 900 -> 100% NaN 采样）。
+  - **SD1.5 的 CLIP 保持 FP16**：SD1.5 pack 内置的 CLIP 以 FP16 保存（SD1.5 的 ConvRot INT8 CLIP 阶段在生产调试后放弃；与 FP16 基线的 conditioning 对比实测 cos 0.99987）。SDXL 的 CLIP INT8 完全未动。
+  - **实测（production，512x512，RTX 5060 Ti）**：INT8 稳态 17.18-17.34 it/s vs FP16 15.03-15.22 it/s（**定常 +14.5%**），seed 均值 wall-clock FP16 1.72s vs INT8 1.50s（**+12.8%**），triton 失败 0，capture-fallback 0。
+- v3.6.5 发布说明将稍后补充（见 [Releases](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases)）。
+
 ## Version 3.6.4
 
 - **新增**：**SDXL ConvRot INT8 CUDA Graph 重放（CUDA-Graph Replay）集成** —— 将来自 SD1.5 INT8 技术栈的去噪器级 CUDA Graph 重放基础设施（`_Sd15CudaGraphExecutor`）正式移植集成至 SDXL ConvRot INT8 运行时，彻底消除了 Pooled 激活旋转优化后残留的逐算子 CPU 发射（launch-bound）开销：
