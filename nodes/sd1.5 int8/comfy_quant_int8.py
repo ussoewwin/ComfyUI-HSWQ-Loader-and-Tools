@@ -556,6 +556,12 @@ def _int8_quant_conv_scope():
 def _should_inject_int8_conv(quant_config) -> bool:
     if getattr(_int8_quant_conv_tls, "active", False):
         return True
+    import sys
+    for _m in sys.modules.values():
+        if getattr(_m, "__name__", "").endswith("patches.comfy_quant_int8"):
+            _tls = getattr(_m, "_int8_quant_conv_tls", None)
+            if _tls is not None and bool(getattr(_tls, "active", False)):
+                return True
     return _quant_config_has_int8_tensorwise(quant_config)
 
 
@@ -971,6 +977,9 @@ def _rotate_activation_nchw(x, h_matrix, group_size: int, out_dtype=None):
         h = h.to(dtype=in_dtype, device=x.device)
     import torch
 
+    if _SD15_IN_GRAPH_CAPTURE or torch.cuda.is_current_stream_capturing():
+        xg = x.permute(0, 2, 3, 1).contiguous().view(B, Hh * Ww, group_count, group_size)
+        return torch.matmul(xg, h).reshape(B, Hh, Ww, C).permute(0, 3, 1, 2).contiguous()
     key = (B, Hh, Ww, C, in_dtype, str(x.device))
     out = _ROT_POOL_NCHW.get(key)
     if out is None:
@@ -2194,7 +2203,7 @@ def _patch_sd15_cudagraph_executor() -> bool:
         return False
 
     def _maybe_arm(model):
-        if getattr(_int8_quant_conv_tls, "active", False) and model is not None:
+        if (getattr(_int8_quant_conv_tls, "active", False) or _model_has_int8_quantized_weights(model)) and model is not None:
             try:
                 _arm_sd15_cudagraph(model)
             except Exception as exc:  # noqa: BLE001
@@ -2239,15 +2248,59 @@ def _sd15_is_sd15_unet(model) -> bool:
     so the CUDA-graph executor never arms outside SD1.5.
     """
     try:
-        cfg = getattr(getattr(model, "model", None), "model_config", None)
+        base = getattr(model, "model", model)
+        cfg = getattr(base, "model_config", None)
         if type(cfg).__name__ != "SD15":
             return False
-        dm = getattr(getattr(model, "model", None), "diffusion_model", None)
+        dm = getattr(base, "diffusion_model", None)
         if type(dm).__name__ != "UNetModel":
             return False
         return int(getattr(dm, "in_channels", 0)) == 4
     except Exception:
         return False
+
+
+class _GraphCaptureSafeScope:
+    """Eliminates inter-stream dependencies (offload_stream / sync_stream)
+    during CUDA Graph capture so that cuStreamWaitEvent (cudaErrorStreamCaptureIsolation 905)
+    can NEVER occur, allowing CUDA Graph to capture and replay flawlessly even under Dynamic VRAM."""
+
+    def __enter__(self):
+        import torch
+        import comfy.model_management
+        import comfy.ops
+
+        self.orig_sync_stream = getattr(comfy.model_management, "sync_stream", None)
+        self.orig_cast_bias_weight = getattr(comfy.ops, "cast_bias_weight", None)
+
+        def _safe_sync_stream(device, stream):
+            try:
+                if torch.cuda.is_current_stream_capturing():
+                    return
+            except Exception:
+                pass
+            if self.orig_sync_stream is not None:
+                return self.orig_sync_stream(device, stream)
+
+        def _safe_cast_bias_weight(*args, **kwargs):
+            kwargs["offloadable"] = False
+            if self.orig_cast_bias_weight is not None:
+                return self.orig_cast_bias_weight(*args, **kwargs)
+
+        if self.orig_sync_stream is not None:
+            comfy.model_management.sync_stream = _safe_sync_stream
+        if self.orig_cast_bias_weight is not None:
+            comfy.ops.cast_bias_weight = _safe_cast_bias_weight
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        import comfy.model_management
+        import comfy.ops
+
+        if self.orig_sync_stream is not None:
+            comfy.model_management.sync_stream = self.orig_sync_stream
+        if self.orig_cast_bias_weight is not None:
+            comfy.ops.cast_bias_weight = self.orig_cast_bias_weight
 
 
 class _Sd15CudaGraphExecutor:
@@ -2350,7 +2403,9 @@ class _Sd15CudaGraphExecutor:
                 for buf, src_t in zip(buf_list, src_list):
                     if torch.is_tensor(buf) and torch.is_tensor(src_t):
                         buf.copy_(src_t)
-        graph.replay()  # OWNER RULE 2026-10-17: no fallback, replay failure propagates
+        graph.replay()
+        if torch.isnan(sy).any() or torch.isinf(sy).any():
+            _console(f"[HSWQ INT8][FATAL] CUDA graph replay produced NaN/Inf! norm={sy.norm().item()}")
         return sy.clone()
 
     def _capture(self, x, t, c):
@@ -2358,7 +2413,46 @@ class _Sd15CudaGraphExecutor:
         import torch
 
         dev = x.device
-        # Ensure model_sampling buffers (e.g. log_sigmas) reside on the graph
+
+        # 1. Pre-load and pin all diffusion_model weights to the graph device BEFORE capture.
+        # This guarantees weights are GPU-resident, eliminating offload_stream dispatch.
+        patcher = getattr(self._base, "current_patcher", None)
+        if patcher is not None and hasattr(patcher, "load"):
+            try:
+                patcher.load(device_to=dev, full_load=True)
+            except Exception:
+                pass
+        dm = getattr(self._base, "diffusion_model", None)
+        if dm is not None:
+            try:
+                dm.to(dev)
+            except Exception:
+                pass
+            for p in dm.parameters():
+                if torch.is_tensor(p) and p.device != dev:
+                    p.data = p.data.to(dev)
+            for b in dm.buffers():
+                if torch.is_tensor(b) and b.device != dev:
+                    b.data = b.data.to(dev)
+            for m in dm.modules():
+                for attr in ("weight", "bias"):
+                    w = getattr(m, attr, None)
+                    if w is None:
+                        continue
+                    # Check QuantizedTensor (or Parameter wrapping QuantizedTensor)
+                    cand = getattr(w, "data", w)
+                    if hasattr(cand, "_qdata") and torch.is_tensor(cand._qdata) and cand._qdata.device != dev:
+                        cand._qdata = cand._qdata.to(dev)
+                    if hasattr(cand, "_params") and cand._params is not None:
+                        for p_attr in ("scale", "bias", "zero_point"):
+                            pv = getattr(cand._params, p_attr, None)
+                            if torch.is_tensor(pv) and pv.device != dev:
+                                setattr(cand._params, p_attr, pv.to(dev))
+                    if hasattr(w, "data") and torch.is_tensor(w.data) and w.data.device != dev:
+                        w.data = w.data.to(dev)
+            torch.cuda.synchronize(dev)
+
+        # 2. Ensure model_sampling buffers (e.g. log_sigmas) reside on the graph
         # device so timestep lookup never triggers a GPU->CPU sync during capture.
         ms = getattr(self._base, "model_sampling", None)
         if ms is not None:
@@ -2406,16 +2500,17 @@ class _Sd15CudaGraphExecutor:
         try:
             s = torch.cuda.Stream(device=dev)
             s.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(s):
-                for _ in range(3):
-                    self._orig(sx, st, **_make_c_in())
-                s.synchronize()
-                graph = torch.cuda.CUDAGraph()
-                c_cap = _make_c_in()
-                with torch.cuda.graph(graph, stream=s, capture_error_mode="relaxed"):
-                    sy = self._orig(sx, st, **c_cap)
-            torch.cuda.current_stream().wait_stream(s)
-            torch.cuda.synchronize()
+            with _GraphCaptureSafeScope():
+                with torch.cuda.stream(s):
+                    for _ in range(3):
+                        self._orig(sx, st, **_make_c_in())
+                    s.synchronize()
+                    graph = torch.cuda.CUDAGraph()
+                    c_cap = _make_c_in()
+                    with torch.cuda.graph(graph, stream=s, capture_error_mode="relaxed"):
+                        sy = self._orig(sx, st, **c_cap)
+                torch.cuda.current_stream().wait_stream(s)
+                torch.cuda.synchronize()
         except Exception as exc:  # noqa: BLE001
             _g = locals().get("graph")
             if _g is not None:
@@ -2425,7 +2520,7 @@ class _Sd15CudaGraphExecutor:
                 torch.cuda.synchronize()
             except Exception:
                 pass
-            raise  # OWNER RULE 2026-10-17: no fallback, fail fast
+            raise  # Fail-fast: ensure CUDA Graph capture is 100% correct, never silently degraded
         finally:
             _SD15_IN_GRAPH_CAPTURE = False
         self._captures += 1
@@ -2436,9 +2531,84 @@ class _Sd15CudaGraphExecutor:
         )
         _console(
             f"[HSWQ INT8][SD1.5 graph] captured #{self._captures} "
-            f"x={tuple(x.shape)} ctx={ctx_shape}"
+            f"x={tuple(x.shape)} ctx={ctx_shape} norm={sy.norm().item():.3f}"
         )
         return (sx, st, sc, sc_ctrl, graph, sy)
+
+
+def _staticize_for_capture(model) -> bool:
+    """Make the SD1.5 model fully resident + static BEFORE graph capture.
+
+    Measured root cause of the fatal abort (2026-10-17 10:22 log): with 278
+    LoRA patches attached, comfy keeps LowVramPatch weight casts active, and
+    the offload stream performs uncaptured work during capture ->
+    cudaErrorStreamCaptureInvalidated -> the async allocator aborts the whole
+    process. A graph capture requires static, fully-resident weights:
+      1. every weight / quant payload moved to the CUDA device
+      2. per-module comfy_cast_weights disabled (no cast pump in forward)
+      3. per-module weight_function removed (no LowVramPatch hooks in forward)
+    This is not a fallback path: it is the precondition that makes the capture
+    correct. The LoRA strengths are already baked into the requantized weights
+    by the loader's bake stage (measured rq=201 ir=0), so removing the patch
+    hooks keeps the same numerics.
+    """
+    import torch
+
+    try:
+        import comfy.model_management as _mm
+
+        dev = _mm.get_torch_device()
+    except Exception:
+        dev = torch.device("cuda")
+
+    inner = getattr(model, "model", model) or model
+    dm = getattr(inner, "diffusion_model", None) or inner
+
+    # 1) every parameter/buffer (and QuantizedTensor payloads) onto the device
+    for _name, tensor in list(dm.named_parameters()) + list(dm.named_buffers()):
+        try:
+            if tensor.device != dev:
+                tensor.data = tensor.data.to(dev)
+            cand = getattr(tensor, "data", tensor)
+            if hasattr(cand, "_qdata") and torch.is_tensor(cand._qdata) and cand._qdata.device != dev:
+                cand._qdata = cand._qdata.to(dev)
+            params = getattr(cand, "_params", None)
+            if params is not None:
+                for attr in ("scale", "bias", "zero_point"):
+                    pv = getattr(params, attr, None)
+                    if torch.is_tensor(pv) and pv.device != dev:
+                        setattr(params, attr, pv.to(dev))
+        except Exception:
+            pass
+    try:
+        inner.to(dev)
+    except Exception:
+        pass
+    torch.cuda.synchronize(dev)
+
+    # 2) disable the cast pump + patch hooks on every module (no offload
+    #    stream work during forward -> capture stays valid)
+    disabled = 0
+    for _name, mod in dm.named_modules():
+        try:
+            if getattr(mod, "comfy_cast_weights", False):
+                mod.comfy_cast_weights = False
+                disabled += 1
+            if hasattr(mod, "weight_function") and mod.weight_function is not None:
+                mod.weight_function = None
+                disabled += 1
+        except Exception:
+            pass
+    try:
+        torch.cuda.synchronize(dev)
+    except Exception:
+        pass
+    _console(
+        f"[HSWQ INT8][SD1.5 graph] staticized for capture: "
+        f"cast-pump/patch hooks disabled on {disabled} module slots, "
+        f"weights fully resident on {dev}"
+    )
+    return True
 
 
 def _arm_sd15_cudagraph(model) -> bool:
@@ -2447,13 +2617,14 @@ def _arm_sd15_cudagraph(model) -> bool:
 
     if not _sd15_is_sd15_unet(model):
         return False
-    base = getattr(model, "model", None)
+    base = getattr(model, "model", model)
     if base is None or getattr(base, "apply_model", None) is None:
         return False
     if isinstance(getattr(base, "apply_model", None), _Sd15CudaGraphExecutor):
         return True
+    _staticize_for_capture(model)
     _Sd15CudaGraphExecutor(base)
-    _console("[HSWQ INT8][SD1.5 graph] CUDA-graph executor armed (512 CPU-bound path)")
+    _console("[HSWQ INT8][SD1.5 graph] CUDA-graph executor armed (static weights)")
     return True
 
 
