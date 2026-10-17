@@ -36,14 +36,14 @@ def _load_int8_patch_module():
     if not os.path.isfile(path):
         raise FileNotFoundError(f"INT8 patch module not found: {path}")
     mod_name = "hswq_sd15_int8_comfy_quant_int8"
-    spec = importlib.util.spec_from_file_location(mod_name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load module spec for {path}")
     mod = sys.modules.get(mod_name)
     if mod is None:
+        spec = importlib.util.spec_from_file_location(mod_name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load module spec for {path}")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[mod_name] = mod
-    spec.loader.exec_module(mod)
+        spec.loader.exec_module(mod)
     return mod
 
 
@@ -62,17 +62,60 @@ def load_checkpoint_sd15_hswq_weight_dtype(ckpt_path, device=None):
     checkpoint_looks_like_comfy_quant_int8 = _cq_int8.checkpoint_looks_like_comfy_quant_int8
     _int8_quant_conv_scope = _cq_int8._int8_quant_conv_scope
 
-    path = os.path.abspath(ckpt_path)
+    if not os.path.isabs(str(ckpt_path)) and not os.path.exists(str(ckpt_path)):
+        try:
+            path = folder_paths.get_full_path_or_raise("checkpoints", str(ckpt_path))
+        except Exception:
+            path = os.path.abspath(str(ckpt_path))
+    else:
+        path = os.path.abspath(str(ckpt_path))
+
     use_int8_scope = checkpoint_looks_like_comfy_quant_int8(path)
-    print(f"  [SD1.5 INT8] Conv2d load scope: {use_int8_scope}")
+    print(f"  [SD1.5 INT8] Conv2d load scope: {use_int8_scope}", flush=True)
     if use_int8_scope:
-        with _int8_quant_conv_scope():
+        _cq_int8.apply_comfy_quant_int8_patches()
+        _cq_int8.reset_int8_lora_log_counters()
+        for _m in list(sys.modules.values()):
+            if getattr(_m, "__name__", "").endswith("patches.comfy_quant_int8"):
+                _rst = getattr(_m, "reset_int8_lora_log_counters", None)
+                if callable(_rst):
+                    try:
+                        _rst()
+                    except Exception:
+                        pass
+        import contextlib
+
+        @contextlib.contextmanager
+        def _all_int8_scopes():
+            tls_list = []
+            for _m in list(sys.modules.values()):
+                if "comfy_quant_int8" in getattr(_m, "__name__", ""):
+                    _t = getattr(_m, "_int8_quant_conv_tls", None)
+                    if _t is not None and _t not in tls_list:
+                        tls_list.append(_t)
+            prevs = [getattr(t, "active", False) for t in tls_list]
+            for t in tls_list:
+                t.active = True
+            try:
+                yield
+            finally:
+                for t, p in zip(tls_list, prevs):
+                    t.active = p
+
+        with _all_int8_scopes():
             out = comfy.sd.load_checkpoint_guess_config(
                 path,
                 output_vae=False,
                 output_clip=True,
                 embedding_directory=folder_paths.get_folder_paths("embeddings"),
             )
+        model, clip, _vae = out[:3]
+        _cq_int8._arm_sd15_cudagraph(model)
+        try:
+            _cq_int8.summarize_int8_lora_capability(model)
+        except Exception:
+            pass
+        return (model, clip)
     else:
         out = comfy.sd.load_checkpoint_guess_config(
             path,
