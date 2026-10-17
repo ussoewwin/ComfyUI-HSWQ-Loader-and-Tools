@@ -448,7 +448,7 @@ def install_nvfp4_option_dispatch(node_class_mappings) -> bool:
 
     _FP8_WEIGHT_DTYPES = frozenset({"fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"})
 
-    sdxl_cls = node_class_mappings.get("HSWQCheckpointLoaderSDXL")
+    sdxl_cls = node_class_mappings.get("HSWQCheckpointLoader")
     if sdxl_cls is None:
         return False
 

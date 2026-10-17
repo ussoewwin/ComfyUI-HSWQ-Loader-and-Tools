@@ -617,7 +617,7 @@ try:
                 return False
 
 
-        class HSWQCheckpointLoaderSDXL(_UNETLoaderBase):
+        class HSWQCheckpointLoader(_UNETLoaderBase):
             """HSWQ Checkpoint Loader with device selection. Ref: CheckpointLoaderSimple."""
 
             @classmethod
@@ -701,12 +701,12 @@ try:
                 finally:
                     set_current_device(original_device)
 
-        NODE_CLASS_MAPPINGS["HSWQCheckpointLoaderSDXL"] = HSWQCheckpointLoaderSDXL
-        sdxl_logger.info("[SDXL] Registered HSWQCheckpointLoaderSDXL node (MODEL + CLIP)")
+        NODE_CLASS_MAPPINGS["HSWQCheckpointLoader"] = HSWQCheckpointLoader
+        sdxl_logger.info("[SDXL] Registered HSWQCheckpointLoader node (MODEL + CLIP)")
 
         # Z Image Turbo checkpoint loader removed (Nunchaku Z Image Turbo support dropped).
 except Exception as e:
-    sdxl_logger.exception(f"[SDXL] Failed to register HSWQCheckpointLoaderSDXL: {e}")
+    sdxl_logger.exception(f"[SDXL] Failed to register HSWQCheckpointLoader: {e}")
 
 # Z Image FP8 E4M3 UNet Loader (DiT Loader excluded from init)
 try:
@@ -825,7 +825,7 @@ except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Model Patch Loader not registered: %s", e)
 NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_MAPPINGS.items()}
 # Explicit overrides — TITLE alone is not enough for some ComfyUI graph headers / search menus.
-NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoaderSDXL"] = "HSWQ Checkpoint Loader"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoader"] = "HSWQ Checkpoint Loader"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQControlNetLoader"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Loader"] = "HSWQ SAM3 Loader (ConvRot INT8)"
