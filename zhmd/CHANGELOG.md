@@ -15,7 +15,7 @@
   - **Double-arm 防护**：SD1.5 技术栈可能在不同模块名下被导入（loader + hook 副本），base 对象标志 `_hswq_sd15_graph_armed` 保证每个模型无论 import 别名都只激活一次 -- 缺少防护时，实测双重包裹使 capture 失效（cudaErrorStreamCaptureUnsupported 900 -> 100% NaN 采样）。
   - **SD1.5 的 CLIP 保持 FP16**：SD1.5 pack 内置的 CLIP 以 FP16 保存（SD1.5 的 ConvRot INT8 CLIP 阶段在生产调试后放弃；与 FP16 基线的 conditioning 对比实测 cos 0.99987）。SDXL 的 CLIP INT8 完全未动。
   - **实测（production，512x512，RTX 5060 Ti）**：INT8 稳态 17.18-17.34 it/s vs FP16 15.03-15.22 it/s（**定常 +14.5%**），seed 均值 wall-clock FP16 1.72s vs INT8 1.50s（**+12.8%**），triton 失败 0，capture-fallback 0。
-- v3.6.5 发布说明将稍后补充（见 [Releases](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases)）。
+- 查看 [发布说明 v3.6.5](v3.6.5.md)
 
 ## Version 3.6.4
 

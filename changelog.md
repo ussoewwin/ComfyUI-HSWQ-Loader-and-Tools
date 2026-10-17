@@ -15,7 +15,7 @@
   - **Double-arm guard**: the SD1.5 stack can be imported under different module names (loader + hook copy); a base-object flag `_hswq_sd15_graph_armed` guarantees the executor is armed exactly once per model regardless of import alias - the missing guard was measured to double-wrap the base and invalidate captures (cudaErrorStreamCaptureUnsupported 900 -> 100% NaN sampling).
   - **CLIP stays FP16 for SD1.5**: SD1.5 packs keep the checkpoint-embedded CLIP in FP16 (the ConvRot INT8 CLIP stage for SD1.5 was abandoned after production debugging; conditioning comparison vs the FP16 baseline measured cos 0.99987). SDXL CLIP INT8 is untouched.
   - **Measured (production, 512x512, RTX 5060 Ti)**: INT8 steady 17.18-17.34 it/s vs FP16 15.03-15.22 it/s (**+14.5% steady-state**), average wall-clock per seed FP16 1.72s vs INT8 1.50s (**+12.8%**), triton failures 0, capture-fallback 0.
-- Release notes for v3.6.5 will follow (see [Releases](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases)).
+- See [Release Notes v3.6.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.5) for details.
 
 ## Version 3.6.4
 
