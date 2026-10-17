@@ -602,6 +602,11 @@ def _model_has_int8_quantized_weights(model) -> bool:
 
 _SD15_IN_GRAPH_CAPTURE = False
 
+# Trajectory bench / conversion-node self-check set this True: those loads
+# measure eager INT8 with their own instrumentation (SA2) and must not arm
+# the production CUDA-graph executor. Production loaders keep the default.
+_SD15_GRAPH_ARM_DISABLED = False
+
 
 def _rotate_activation_nhwc(x_nhwc, h_matrix, group_size: int):
     """Pooled bf16/fp16 rotate of an NHWC tensor's channel axis (no permute-back).
@@ -2219,6 +2224,14 @@ def _patch_sd15_cudagraph_executor() -> bool:
         return False
 
     def _maybe_arm(model):
+        if _SD15_GRAPH_ARM_DISABLED:
+            # The trajectory bench measures eager INT8 with its own SA2
+            # instrumentation; sageattn inside a CUDA-graph capture aborts the
+            # cudaMallocAsync allocator (measured 2026-10-17, native-convert
+            # node bench). The graph executor is production-runtime only and
+            # is verified by the dedicated verify harness - not silently
+            # skipped here: the bench prints its mode explicitly.
+            return model
         if model is not None and (
             getattr(_int8_quant_conv_tls, "active", False)
             or _model_has_int8_quantized_weights(model)
