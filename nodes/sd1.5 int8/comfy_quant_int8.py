@@ -855,9 +855,12 @@ def _int8_conv_rot_imma(module, x):
     # Measured: triton launches INSIDE a CUDA-graph capture work under the
     # default caching allocator (17.4x it/s replay) but are rejected under the
     # cudaMallocAsync graph pool ('Pointer argument cannot be accessed from
-    # Triton (cpu tensor?)', args all on cuda:0). Skip triton while warming/
-    # capturing the graph so torch-IMMA is recorded cleanly without stream taint.
-    if tk is not None and x.dtype == torch.float16 and not _in_capture:
+    # Triton (cpu tensor?)', args all on cuda:0). Attempt triton inside the
+    # capture as well (1b6bcdc attempt-and-split): under the caching allocator
+    # it succeeds and the graph records the fast fused kernels; on a
+    # capture-phase failure only THAT capture falls back to torch-IMMA (no
+    # process-wide disarm).
+    if tk is not None and x.dtype == torch.float16:
         try:
             quant_k, dequant_k, triton = tk
             akey = (t, k_dim, str(x.device))
@@ -890,7 +893,21 @@ def _int8_conv_rot_imma(module, x):
                          "dequant-NCHW store active")
             return out
         except Exception as e:
-            if _INT8_CONV_STATS.get("triton_warn") is None:
+            # Two failure regimes (1b6bcdc semantics):
+            # - capture-phase failure: skip triton for THIS capture only; the
+            #   graph records the torch-IMMA path below. No process-wide disarm
+            #   (once-latching poisoned every later eager launch and pinned the
+            #   whole run at the IMMA ceiling).
+            # - eager failure: keep the once-latched warn (legacy behaviour).
+            if _SD15_IN_GRAPH_CAPTURE or torch.cuda.is_current_stream_capturing():
+                _INT8_CONV_STATS["imma_capture_skips"] = (
+                    _INT8_CONV_STATS.get("imma_capture_skips", 0) + 1
+                )
+                if _INT8_CONV_STATS["imma_capture_skips"] == 1:
+                    _console("[HSWQ INT8] triton fused conv unsupported during "
+                             f"CUDA-graph capture ({type(e).__name__}: "
+                             f"{str(e)[:120]}); torch-IMMA recorded for this capture")
+            elif _INT8_CONV_STATS.get("triton_warn") is None:
                 _INT8_CONV_STATS["triton_warn"] = 1
                 _console(f"[HSWQ INT8] triton fused conv failed once ({type(e).__name__}: "
                          f"{str(e)[:120]}); staying on torch-IMMA")
