@@ -2499,6 +2499,30 @@ class _Sd15CudaGraphExecutor:
                 out_c["control"] = {k: list(v) for k, v in sc_ctrl.items()}
             return out_c
 
+        # Re-assert the static precondition right before capture: the patcher
+        # re-attaches LoRA hook state during its load cycle (measured: 391
+        # modules can show weight_function=None after arm), and len(None)
+        # breaks ops.py:1490 inside the captured forward. Rewriting the two
+        # lists is the precondition enforcement for a valid capture, not a
+        # fallback.
+        dm2 = getattr(self._base, "diffusion_model", None)
+        if dm2 is not None:
+            for _n, mod in dm2.named_modules():
+                try:
+                    if getattr(mod, "comfy_cast_weights", False):
+                        mod.comfy_cast_weights = False
+                    if hasattr(mod, "weight_function") and getattr(
+                        mod, "weight_function", None
+                    ) is None:
+                        mod.weight_function = []
+                    if hasattr(mod, "bias_function") and getattr(
+                        mod, "bias_function", None
+                    ) is None:
+                        mod.bias_function = []
+                except Exception:
+                    pass
+            torch.cuda.synchronize(dev)
+
         _SD15_IN_GRAPH_CAPTURE = True
         try:
             s = torch.cuda.Stream(device=dev)
@@ -2597,9 +2621,20 @@ def _staticize_for_capture(model) -> bool:
             if getattr(mod, "comfy_cast_weights", False):
                 mod.comfy_cast_weights = False
                 disabled += 1
-            if hasattr(mod, "weight_function") and mod.weight_function is not None:
-                mod.weight_function = None
-                disabled += 1
+            # comfy.ops int8/Kitchen Linear reads len(weight_function) and
+            # len(bias_function) unconditionally (ops.py:1490). The patcher
+            # writes lists; keep this attribute a LIST on every module that
+            # can carry it - never None. Setting an empty list is the correct
+            # static state (no hooks = pure forward).
+            if hasattr(mod, "weight_function"):
+                wf = getattr(mod, "weight_function", None)
+                if wf is None or len(wf) > 0:
+                    mod.weight_function = []
+                    disabled += 1
+            if hasattr(mod, "bias_function"):
+                bf = getattr(mod, "bias_function", None)
+                if bf is None or len(bf) > 0:
+                    mod.bias_function = []
         except Exception:
             pass
     try:
