@@ -376,7 +376,7 @@ def apply_comfy_quant_nvfp4_patches() -> bool:
     return True
 
 
-# UI / dispatch value — HSWQ Checkpoint Loader (SDXL) dropdown ONLY.
+# UI / dispatch value — HSWQ Checkpoint Loader dropdown ONLY.
 # Z Image / Krea UNet uses ZI_NVFP4_WEIGHT_DTYPE == "Z Image ConvRot NVFP4"
 # (separate being — never the SDXL string below).
 NVFP4_WEIGHT_DTYPE = "ConvRot NVFP4"

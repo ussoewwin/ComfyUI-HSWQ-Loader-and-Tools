@@ -11,7 +11,7 @@ measured on 2026-10-16/17:
   integrate [{'weight_scale':1}] reading, comfortable with both full ConvRot
   and plain tensorwise packs)
 
-Interface mirrors the existing HSWQ Checkpoint Loader (SDXL) contract:
+Interface mirrors the existing HSWQ Checkpoint Loader contract:
 ``(ckpt_name, weight_dtype, device) -> (MODEL, CLIP)``.
 """
 

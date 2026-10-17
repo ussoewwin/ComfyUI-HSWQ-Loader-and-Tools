@@ -21,7 +21,7 @@ HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HS
 
 | Path | Role in this repo |
 | :--- | :--- |
-| **HSWQ ConvRot INT8 (SDXL, reverse hybrid)** | ComfyUI `int8_tensorwise` packs (K lowest-impact layers → FULL ConvRot INT8, every other layer stays FP16; no embedded VAE — decode with a separate SDXL VAE); load via **HSWQ Checkpoint Loader (SDXL)** (`weight_dtype`: `int8_tensorwise` / INT8 auto-detect). Validated by the deterministic 25-seed latent-trajectory gate (cosine mean ≥ 0.95, 0/25 bifurcated). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
+| **HSWQ ConvRot INT8 (SDXL, reverse hybrid)** | ComfyUI `int8_tensorwise` packs (K lowest-impact layers → FULL ConvRot INT8, every other layer stays FP16; no embedded VAE — decode with a separate SDXL VAE); load via **HSWQ Checkpoint Loader** (`weight_dtype`: `int8_tensorwise` / INT8 auto-detect). Validated by the deterministic 25-seed latent-trajectory gate (cosine mean ≥ 0.95, 0/25 bifurcated). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet packs (often Linear NVFP4 + INT8 protect; built by the reverse method — lowest-impact layers converted first); load via **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `Z Image ConvRot NVFP4`, or `default` with NVFP4 auto-detect). Uses the bench-matched **Comfy parity** path (stock GEMM + online act rotate). Validated by the deterministic 20-seed latent-trajectory gate (cosine mean ≥ 0.95, 0/20 bifurcated). **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **HSWQ ConvRot INT8 (Krea2)** | ComfyUI `int8_tensorwise` UNet packs (Krea2 packs carry `txtfusion.projector`); load via **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (`weight_dtype`: `int8_tensorwise`, or `default` with INT8 auto-detect). HSWQ pipeline: structure blacklist protection (`first.` / `last.` / `mod.` / `norm` / `projector` / `txtfusion`) + 4-axis composite ranking; bias correction omitted (`1off`). Krea2 uses a stock-equivalent ConvRot INT8 load (no Z Image parity) and is the **only `weight_dtype` verified with the DisTorch2 loader**. **Supported only for models quantized with [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization).** |
 | **FP8 (E4M3)** | HSWQ **FP8 development has ended** (technical docs remain upstream). Loaders here may still accept existing FP8 weights where ComfyUI supports them |
@@ -67,9 +67,9 @@ Restart ComfyUI to load the nodes.
 
 ## Nodes
 
-### HSWQ Checkpoint Loader (SDXL)
+### HSWQ Checkpoint Loader
 
-<img src="png/fp8e4m3.png?v=3" alt="HSWQ Checkpoint Loader (SDXL) Node" width="400">
+<img src="png/fp8e4m3.png?v=3" alt="HSWQ Checkpoint Loader Node" width="400">
 
 ComfyUI node that loads **MODEL** and **CLIP** from standard SDXL checkpoints, with optional device selection and **INT8** precision support. Use it like the standard Load Checkpoint node; it outputs MODEL and CLIP only (no VAE).
 
@@ -396,7 +396,7 @@ On Windows, other extensions (for example SeedVR2) may raise inductor `compile_t
 - **Inputs**: `model` (MODEL), `backend`, `fullgraph`, `mode`, `dynamic`, `compile_transformer_blocks_only`, `dynamo_cache_size_limit`, `force_parameter_static_shapes`, `patch_distorch_weight_cast`, `debug_compile_keys`; optional `disable_dynamic_vram`
 - **Outputs**: MODEL (compiled clone)
 - **Category**: `HSWQ/torchcompile`
-- **Placement**: After **HSWQ Checkpoint Loader (SDXL)** or **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (and any LoRA), before the sampler / **HSWQ Ultimate SD Upscale**
+- **Placement**: After **HSWQ Checkpoint Loader** or **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** (and any LoRA), before the sampler / **HSWQ Ultimate SD Upscale**
 - **Avoid `cudagraphs` with multi-tile USDU**: Prefer inductor; CUDA graphs often fail on tiled / pool allocation paths
 - **KJNodes**: Base of the torch.compile UI / wrapper design (GPL-3.0). Installing KJNodes is **not** required to run this node; attribution and GPL obligations still apply
 - **Details**: See `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`

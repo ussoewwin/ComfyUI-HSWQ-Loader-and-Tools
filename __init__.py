@@ -618,7 +618,7 @@ try:
 
 
         class HSWQCheckpointLoaderSDXL(_UNETLoaderBase):
-            """HSWQ Checkpoint Loader (SDXL) with device selection. Ref: CheckpointLoaderSimple."""
+            """HSWQ Checkpoint Loader with device selection. Ref: CheckpointLoaderSimple."""
 
             @classmethod
             def INPUT_TYPES(cls):
