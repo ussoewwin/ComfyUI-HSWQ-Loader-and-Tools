@@ -1,5 +1,0 @@
-Starting Windows wheel build job: win_whl_1
-Repo: D:\USERFILES\GitHub\ComfyUI-HSWQ-Loader-and-Tools
-Python: D:\USERFILES\ComfyUI\python_embeded\python.exe
-CUDA: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2
-Batch script: run_sync.bat
