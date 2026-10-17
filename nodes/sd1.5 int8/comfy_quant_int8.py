@@ -2350,6 +2350,8 @@ class _GraphCaptureSafeScope:
 
 
 class _Sd15CudaGraphExecutor:
+    _hswq_sd15_graph_executor = True
+
     """Per-(x,t,context) CUDA Graph replay for the SD1.5 INT8 UNet.
 
     The 512x512 INT8 path is CPU-launch-bound (comfy_kitchen::int8_linear +
@@ -2710,11 +2712,21 @@ def _arm_sd15_cudagraph(model) -> bool:
     base = getattr(model, "model", model)
     if base is None or getattr(base, "apply_model", None) is None:
         return False
-    if isinstance(getattr(base, "apply_model", None), _Sd15CudaGraphExecutor):
+    am = getattr(base, "apply_model", None)
+    # Instance-flag guard (import-alias proof): the same file can be loaded
+    # twice under different module names (loader + spec-from-path + hook),
+    # so isinstance()/__name__ checks can miss an executor class from another
+    # module copy and double-wrap the base. A double-wrapped base replays a
+    # graph while the inner executor is still capturing
+    # (cudaErrorStreamCaptureUnsupported -> NaN output, measured 2026-10-18).
+    if getattr(base, "_hswq_sd15_graph_armed", False):
+        return True
+    if type(am).__name__ == "_Sd15CudaGraphExecutor" or getattr(am, "_hswq_sd15_graph_executor", False):
         return True
     if not _staticize_for_capture(model):
         return False
     _Sd15CudaGraphExecutor(base)
+    base._hswq_sd15_graph_armed = True
     _console("[HSWQ INT8][SD1.5 graph] CUDA-graph executor armed (static weights)")
     return True
 
