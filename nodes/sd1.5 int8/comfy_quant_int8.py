@@ -2378,12 +2378,15 @@ class _Sd15CudaGraphExecutor:
     def _call(self, x, t, **c):
         import torch
 
-        # Large-latent-only guard: skip capture beyond the practical SD1.5 range.
-        try:
-            if max(int(x.shape[-1]), int(x.shape[-2])) > self._MAX_CAPTURE_LATENT_SIDE:
-                return self._orig(x, t, **c)
-        except Exception:
-            return self._orig(x, t, **c)
+        # Size boundary (capability limit, not a fallback): latents beyond the
+        # SD1.5 capture range cannot be graphed. Owner rule: no silent escape -
+        # fail fast so the boundary is explicit.
+        if max(int(x.shape[-1]), int(x.shape[-2])) > self._MAX_CAPTURE_LATENT_SIDE:
+            raise RuntimeError(
+                f"{self._log_prefix} latent {tuple(x.shape[-2:])} exceeds the "
+                f"capture range ({self._MAX_CAPTURE_LATENT_SIDE}); enable a "
+                "smaller resolution for graph replays"
+            )
         key = self._key(x, t, c)
         ent = self._graphs.get(key)
         if ent is None:
