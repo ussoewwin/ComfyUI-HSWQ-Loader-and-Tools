@@ -21,7 +21,7 @@ HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作
 
 | 路径 | 在本仓库中的定位 |
 | :--- | :--- |
-| **HSWQ ConvRot INT8 (SDXL, reverse hybrid)** | ComfyUI `int8_tensorwise` 包（K 个影响最低的层 → FULL ConvRot INT8，其余所有层保持 FP16；不内嵌 VAE —— 请用单独的 SDXL VAE 解码）；通过 **HSWQ Checkpoint Loader (SDXL)** 加载（`weight_dtype`：`int8_tensorwise` / INT8 自动检测）。以确定性 25-seed latent-trajectory gate 验证（cosine mean ≥ 0.95，0/25 bifurcated）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
+| **HSWQ ConvRot INT8 (SDXL, reverse hybrid)** | ComfyUI `int8_tensorwise` 包（K 个影响最低的层 → FULL ConvRot INT8，其余所有层保持 FP16；不内嵌 VAE —— 请用单独的 SDXL VAE 解码）；通过 **HSWQ Checkpoint Loader** 加载（`weight_dtype`：`int8_tensorwise` / INT8 自动检测）。以确定性 25-seed latent-trajectory gate 验证（cosine mean ≥ 0.95，0/25 bifurcated）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
 | **HSWQ ConvRot NVFP4 (SDXL)** | 上游开发已**终止**：确定性轨迹测量表明 4-bit 精度（NVFP4）无法在 SDXL 上维持 latent trajectory fidelity（最终轨迹 cosine 无法达到 0.90；旧解码 SSIM ~0.95 是被 VAE 解码掩盖的假象）。`ConvRot NVFP4` `weight_dtype` 选项已从 SDXL Checkpoint Loader 移除；SDXL 继续通过 **ConvRot INT8 (reverse hybrid)** 支持（见上一行）。遗留 `nvfp4` 包仍可通过 `default` 自动检测加载 |
 | **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet 包（常见为 Linear NVFP4 + INT8 protect；以 reverse method 构建 —— 影响最低的层先转换）；通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 加载（`weight_dtype`：`Z Image ConvRot NVFP4`，或 `default` 触发 NVFP4 自动检测）。走与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock GEMM + online act rotate）。以确定性 20-seed latent-trajectory gate 验证（cosine mean ≥ 0.95，0/20 bifurcated）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
 | **HSWQ ConvRot INT8 (Krea2)** | ComfyUI `int8_tensorwise` UNet 包（Krea2 包带 `txtfusion.projector`）；通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 加载（`weight_dtype`：`int8_tensorwise`，或 `default` 触发 INT8 自动检测）。HSWQ 流程：结构黑名单保护（`first.` / `last.` / `mod.` / `norm` / `projector` / `txtfusion`）+ 4 轴复合排名；省略 bias 校正（`1off`）。Krea2 走 stock-equivalent 的 ConvRot INT8 加载（不做 Z Image parity），并且是**唯一在 DisTorch2 加载器下验证过的 `weight_dtype`**。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
@@ -69,9 +69,9 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 
 ## 节点
 
-### HSWQ Checkpoint Loader (SDXL)
+### HSWQ Checkpoint Loader
 
-<img src="../png/fp8e4m3.png?v=3" alt="HSWQ Checkpoint Loader (SDXL) 节点" width="400">
+<img src="../png/fp8e4m3.png?v=3" alt="HSWQ Checkpoint Loader 节点" width="400">
 
 ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选设备选择，并支持 **INT8** 精度。使用方式与标准 Load Checkpoint 节点相同；仅输出 MODEL 和 CLIP（不包含 VAE）。
 
@@ -398,7 +398,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 - **输入**：`model`（MODEL）、`backend`、`fullgraph`、`mode`、`dynamic`、`compile_transformer_blocks_only`、`dynamo_cache_size_limit`、`force_parameter_static_shapes`、`patch_distorch_weight_cast`、`debug_compile_keys`；可选 `disable_dynamic_vram`
 - **输出**：MODEL（已编译的克隆）
 - **分类**：`HSWQ/torchcompile`
-- **放置位置**：放在 **HSWQ Checkpoint Loader (SDXL)** 或 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
+- **放置位置**：放在 **HSWQ Checkpoint Loader** 或 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
 - **多 tile USDU 时避免 `cudagraphs`**：优先 inductor；CUDA graphs 在 tiled / 池分配路径上经常失败
 - **KJNodes**：torch.compile UI / wrapper 设计的基底（GPL-3.0）。运行本节点**不必**安装 KJNodes；归属与 GPL 义务仍然适用
 - **详情**：见 `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
