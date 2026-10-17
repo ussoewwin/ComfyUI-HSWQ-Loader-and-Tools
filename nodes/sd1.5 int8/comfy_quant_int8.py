@@ -2731,138 +2731,6 @@ def _arm_sd15_cudagraph(model) -> bool:
     return True
 
 
-def _patch_sd15_clip_quant_metadata() -> bool:
-    """SD1.5-only: make ComfyUI consume ConvRot INT8 quantization metadata for the
-    checkpoint-embedded CLIP (cond_stage_model.*).
-
-    Why: SDClipModel builds its Linear layers with comfy.ops.manual_cast unless
-    model_options["quantization_metadata"] is set (comfy/sd1_clip.py). The SD1.5
-    text-encoder load path in comfy.sd never sets it, so the CLIP's int8 weights
-    and .comfy_quant / .weight_scale companions load as raw fp16 (absmax 127) and
-    the text conditioning collapses (cos ~ 0.10) or NaNs.
-
-    Fix: wrap comfy.sd.load_state_dict_guess_config and, when the state dict
-    carries SD1.5 CLIP comfy_quant layers, pass the CLIP-restricted quantization
-    metadata through te_model_options so the text encoder is built with
-    mixed_precision_ops (INT8 + ConvRot). Key space is remapped to the internal
-    CLIP module names (cond_stage_model.* -> clip_l.*), matching
-    SD15.process_clip_state_dict.
-    """
-    try:
-        import comfy.sd as _sd
-    except ImportError:
-        return False
-    original = getattr(_sd, "load_state_dict_guess_config", None)
-    if original is None:
-        return False
-    _cur = original
-    for _ in range(8):
-        if _cur is None:
-            break
-        if getattr(_cur, "_hswq_sd15_clip_meta", False):
-            return True
-        _cur = getattr(_cur, "__wrapped__", None)
-
-    def _clip_quant_layers_from_sd(state_dict, metadata):
-        layers = {}
-        # 1. File-embedded .comfy_quant tensors (authoritative for our packs).
-        for k in list(state_dict.keys()):
-            if not (k.startswith("cond_stage_model.") and k.endswith(".comfy_quant")):
-                continue
-            base = k[: -len(".comfy_quant")]
-            conf = decode_comfy_quant_conf(state_dict[k])
-            if conf is None:
-                continue
-            # cond_stage_model.transformer... -> clip_l.transformer...
-            rest = base[len("cond_stage_model."):]
-            layers["clip_l." + rest] = conf
-        # 2. Metadata fallback (some packs omit the per-layer tensor).
-        if not layers and isinstance(metadata, dict) and "_quantization_metadata" in metadata:
-            try:
-                qm = json.loads(metadata["_quantization_metadata"])
-                for k, v in qm.get("layers", {}).items():
-                    if not k.startswith("cond_stage_model."):
-                        continue
-                    rest = k[len("cond_stage_model."):]
-                    layers["clip_l." + rest] = v
-            except (TypeError, json.JSONDecodeError):
-                pass
-        return layers
-
-    def _complete_sd15_clip_optional_params(out):
-        """text_projection / logit_scale are not in the SD1.5 checkpoint; the FP16
-        CLIP loads text_projection as an unused all-zeros Linear. Under INT8 the
-        same Linear is a quantized ops.Linear whose weight stays None (the pack key
-        cannot be placed at clip_l.transformer.text_projection because
-        SD15.process_clip_state_dict force-nests cond_stage_model.transformer.*
-        into .text_model.), so the INT8 forward crashes on the None weight. Complete
-        it with a plain fp16 zeros weight exactly like the FP16 path.
-        """
-        try:
-            clip = out[1] if isinstance(out, (tuple, list)) and len(out) > 1 else None
-            if clip is None:
-                return
-            csm = getattr(clip, "cond_stage_model", None)
-            inner = getattr(csm, "clip_l", None)
-            if inner is None:
-                return
-            import torch as _t
-            tr = getattr(inner, "transformer", None)
-            tp = getattr(tr, "text_projection", None)
-            if tp is not None and getattr(tp, "weight", None) is None:
-                hidden = 768
-                try:
-                    emb = tr.text_model.embeddings.token_embedding.weight
-                    hidden = int(emb.shape[1])
-                    dtype = emb.dtype
-                except Exception:
-                    dtype = _t.float16
-                tp.weight = _t.nn.Parameter(
-                    _t.zeros((hidden, hidden), dtype=dtype), requires_grad=False
-                )
-            if not hasattr(inner, "logit_scale") or inner.logit_scale is None:
-                inner.logit_scale = _t.nn.Parameter(_t.tensor(4.6055))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[HSWQ INT8][SD1.5 CLIP] optional-param completion skipped: %s", exc)
-
-    def load_state_dict_guess_config_sd15_clip(sd, *args, **kwargs):
-        # Only SD1.5 packs: presence of cond_stage_model.* comfy_quant Linear layers
-        # AND a CLIP-L-only text encoder (SDXL/SD3/Flux carry clip_g/t5 and never
-        # reach this shape). Gated by model detection to keep other archs untouched.
-        try:
-            has_clip_quant = any(
-                k.startswith("cond_stage_model.") and k.endswith(".comfy_quant")
-                for k in sd.keys()
-            )
-        except Exception:
-            has_clip_quant = False
-        if not has_clip_quant:
-            return original(sd, *args, **kwargs)
-
-        clip_layers = _clip_quant_layers_from_sd(sd, kwargs.get("metadata"))
-        if not clip_layers:
-            return original(sd, *args, **kwargs)
-
-        te_model_options = dict(kwargs.get("te_model_options") or {})
-        te_model_options["quantization_metadata"] = {
-            "format_version": "1.0",
-            "layers": clip_layers,
-        }
-        kwargs["te_model_options"] = te_model_options
-        _console(
-            f"[HSWQ INT8][SD1.5 CLIP] injecting ConvRot INT8 metadata for "
-            f"{len(clip_layers)} text-encoder layers"
-        )
-        out = original(sd, *args, **kwargs)
-        _complete_sd15_clip_optional_params(out)
-        return out
-
-    load_state_dict_guess_config_sd15_clip._hswq_sd15_clip_meta = True
-    load_state_dict_guess_config_sd15_clip.__wrapped__ = original
-    _sd.load_state_dict_guess_config = load_state_dict_guess_config_sd15_clip
-    return True
-
-
 def apply_comfy_quant_int8_patches() -> bool:
     """Install INT8 comfy_quant patches once. Returns True if applied (or already applied)."""
     global _PATCHES_APPLIED
@@ -2874,7 +2742,6 @@ def apply_comfy_quant_int8_patches() -> bool:
     ok_dyn_bake = _patch_model_patcher_dynamic_int8_lora_bake()
     ok_lora_log = _patch_model_patcher_lora_logs()
     ok_sd15_graph = _patch_sd15_cudagraph_executor()
-    ok_sd15_clip = _patch_sd15_clip_quant_metadata()
     # Kitchen float32 rotate must run even if ops patches were applied earlier
     # in-process (bench / loader re-entry).
     ok_kitchen_f32 = False
@@ -2897,7 +2764,6 @@ def apply_comfy_quant_int8_patches() -> bool:
             f"{' + LowVramPatch float dtype' if ok_lowvram else ''}"
             f"{' + Dynamic INT8 LoRA bake' if ok_dyn_bake else ''}"
             f"{' + SD1.5 CUDA-graph executor' if ok_sd15_graph else ''}"
-            f"{' + SD1.5 CLIP INT8 metadata' if ok_sd15_clip else ''}"
             f"{' + kitchen float32 ConvRot rotate' if ok_kitchen_f32 else ''})"
         )
         return True
