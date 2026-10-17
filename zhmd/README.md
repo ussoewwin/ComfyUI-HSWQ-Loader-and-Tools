@@ -73,32 +73,50 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 
 <img src="../png/fp8e4m3.png?v=3" alt="HSWQ Checkpoint Loader 节点" width="400">
 
-ComfyUI 节点，从标准 SDXL 检查点加载 **MODEL** 和 **CLIP**，可选设备选择，并支持 **INT8** 精度。使用方式与标准 Load Checkpoint 节点相同；仅输出 MODEL 和 CLIP（不包含 VAE）。
+面向 **SDXL** 与 **SD1.5** 模型的高性能统一检查点加载器，提供可选设备分配、针对各架构深度定制的 **ConvRot INT8** 精度流水线，以及整 denoiser **CUDA-Graph replay** 执行加速。使用方式与标准 ComfyUI Load Checkpoint 节点一致；仅输出 **MODEL** 与 **CLIP**（Latent 解码请使用独立的 VAE 加载器）。
 
-**SDXL ConvRot INT8** **仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型**。其他第三方 ConvRot INT8 包不在支持范围内。**SDXL ConvRot NVFP4 上游开发已终止**；`ConvRot NVFP4` `weight_dtype` 选项已从本加载器移除。
+**SDXL ConvRot INT8** 与 **SD1.5 ConvRot INT8** **仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型**。其他第三方量化包不在支持范围内。
 
-**ConvRot NVFP4（仅遗留自动检测）：**随上游终止，`ConvRot NVFP4` `weight_dtype` 选项已移除。当 `weight_dtype` 为 **`default`** 时，带有 comfy_quant `nvfp4` 标记的检查点仍会路由到 NVFP4 栈（Linear → NVFP4 / `scaled_mm_nvfp4` + 可选的 act ConvRot；Conv2d → INT8 + ConvRot，由 INT8 补丁处理），因此此前发布的包仍可加载。NVFP4 分发在 INT8 分发**之后**安装，因此混合包（NVFP4 Linear + INT8 Conv）不会被仅 INT8 的自动检测抢走。
+#### 针对架构的专属量化流水线
 
-本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。本扩展保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff）；`nodes/nvfp4/` 下的 **NVFP4** 加载与 forward 补丁保留，用于 Z Image ConvRot NVFP4 与遗留的 SDXL `nvfp4` 自动检测。
+- **SD1.5 ConvRot INT8（`weight_dtype`：`SD1.5 ConvRot INT8`）**：
+  - **内置于 `nodes/sd1.5 int8/` 的完整运行时栈**：与基准仓库主干实现 byte 级完全一致（4 副本 SHA256 校验一致）。
+  - **Triton 融合 ConvRot W8A8 IMMA Conv2d 算子**（`_int8_conv_rot_imma`）：将 gather-quant、8 向 Hadamard 激活旋转以及 IMMA GEMM 融合进单个 GPU 核函数中执行。
+  - **整 denoiser CUDA-Graph Replay 执行器**（`_Sd15CudaGraphExecutor`）：捕获前将权重完全驻留化（staticize-for-capture，消除捕获期间的内存分配抖动）、fail-fast 激活检测（超出静态捕获尺寸范围立即抛出异常）、并在默认 PyTorch 缓存分配器下支持单次捕获级别（per-capture）的 Triton 回退。
+  - **Double-Arm 双重激活防护**（`_hswq_sd15_graph_armed`）：防止多模块别名导入导致的底层模型二次包装，彻底杜绝流捕获失效（`cudaErrorStreamCaptureUnsupported 900`）。
+  - **CLIP 严格保持 FP16**：内嵌的 CLIP 文本编码器严格保持为 FP16，确保文本条件特征完全无损（与 FP16 基线对比余弦相似度 0.99987）。
+  - **生产实测性能（512x512，RTX 5060 Ti）**：稳态速度 **17.18–17.34 it/s 对比 FP16 15.03–15.22 it/s（+14.5%）**，单 seed 平均耗时从 1.72 s 降至 1.50 s（+12.8%）。
+
+- **SDXL ConvRot INT8（`weight_dtype`：`SDXL ConvRot INT8`）**：
+  - **反向混合敏感度排序（Reverse Hybrid Ranking）**：将影响度最低的 $K$ 层打包为 FULL ConvRot INT8，敏感层保持 FP16，严格保障潜空间轨迹保真度（25 个随机 seed 下余弦平均值 $\ge 0.95$，0/25 分叉）。
+  - **Conv2d 量化作用域与 MixedPrecisionOps**：打补丁扩展 Conv2d 量化加载，使 UNet 卷积层能够正常反量化与计算，避免梯度或张量类型报错。
+  - **SDXL CLIP INT8 元数据消费**：自动消费内嵌的 `clip_l` 与 `clip_g` ConvRot INT8 标定元数据（`arm_sdxl_clip_quant_metadata`）。
+  - **整 denoiser CUDA Graph 加速**（`_arm_sdxl_cudagraph`）：整图捕获与回放执行，加速稳态采样，并在异常时自动回退至 pooled-rotate eager 路径。
+  - **向后兼容**：旧工作流中指定的 `weight_dtype` = `int8_tensorwise` 会自动路由至该路径。
+
+- **标准 / 自动识别（`weight_dtype`：`default`）**：
+  - 对标准 FP16 / FP8 检查点调用 `load_checkpoint_guess_config`。
+  - 通过 `checkpoint_looks_like_comfy_quant_int8` 自动探测 safetensors 元数据：若检测到 comfy_quant INT8 标记，则直接路由至专用 INT8 执行路径。
+  - 遗留的 comfy_quant NVFP4 检查点也会自动识别并路由至 NVFP4 兼容层。
 
 #### 特性
 
-- **检查点加载**：从单个 SDXL 检查点文件同时加载 UNet (MODEL) 与 CLIP（与标准 Load Checkpoint 一致）
-- **设备选择**：可选设备参数，用于选择 GPU（例如 `cuda:0`、`cuda:1`）或 CPU 来加载模型
-- **INT8 weight dtype**：`int8_tensorwise` —— 基于 ComfyUI `MixedPrecisionOps` 的 **HSWQ SDXL ConvRot INT8 (reverse hybrid)**（本扩展还补丁了 **Conv2d** 量化加载，使 SD UNet INT8 可用，而不仅限于 Linear）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
-- **ConvRot NVFP4（遗留自动检测）**：上游终止后，`ConvRot NVFP4` `weight_dtype` 选项已移除；当 `weight_dtype` 为 `default` 时，comfy_quant `nvfp4` 检查点仍会应用 `nodes/nvfp4` 补丁（packed-K 检测、完整 NVFP4 Linear 加载、Tensor Core 前向）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
-- **INT8 自动检测**：若 safetensors 看起来是 comfy_quant INT8（且不是 NVFP4），即使 `weight_dtype` 未设为 `int8_tensorwise`，加载器也会走 MixedPrecisionOps / INT8 路径
-- **标准 ComfyUI 集成**：使用 `load_checkpoint_guess_config`；与标准 ComfyUI 工作流兼容
-- **无 Triton accelerate 控件**：UI 仅包含检查点 / weight dtype / device；融合 INT8 Linear 加速不受本节点控制
+- **多架构检查点加载**：从标准 SDXL 或 SD1.5 检查点同时加载 UNet（MODEL）与 CLIP
+- **明确的 `weight_dtype` 路由**：UI 下拉项提供 `default`、`SDXL ConvRot INT8` 以及 `SD1.5 ConvRot INT8`
+- **设备选择**：可选设备参数，用于显式指定 GPU（如 `cuda:0`、`cuda:1`）或 CPU
+- **CUDA Graph 加速**：同时为 SD1.5 与 SDXL 架构内置整 denoiser CUDA Graph 执行器
+- **标准 ComfyUI 集成**：无缝对接下游采样器、Conditioning 及 LoRA 节点
 
 #### 使用说明
 
-- **输入**：`ckpt_name`（检查点文件）、`weight_dtype`（`default` / `int8_tensorwise`），以及可选的 `device`
-- **输出**：仅 MODEL 和 CLIP；如需要请使用单独的 VAE 加载器
+- **输入**：
+  - `ckpt_name`：`models/checkpoints` 目录下的检查点文件名
+  - `weight_dtype`：精度模式 — `default`（自动识别 / FP16）、`SDXL ConvRot INT8` 或 `SD1.5 ConvRot INT8`
+  - `device`：目标执行设备（`cuda:0`、`cuda:1` 等）
+- **输出**：仅 MODEL 与 CLIP；如需解码请连接独立的 VAE 加载器
 - **分类**：Loaders（`loaders`）
-- **SDXL ConvRot INT8 兼容性**：**仅限**由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的检查点
-- **INT8 速度**：Linear 加速依赖 ComfyUI / `comfy_kitchen`；本节点不安装也不开关 Triton
-- **INT8 + LoRA**：关于 INT8 LoRA bake / Status 日志的详情，请见 `md/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md`
+- **兼容性**：仅支持使用 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型
+- **INT8 + LoRA**：关于 INT8 LoRA 烘焙及 Status 状态日志详情，请参阅 [`zhmd/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md`](zhmd/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md)
 - **VRAM 清理（通用 HSWQ 必备要求）**：如上方通用工作流要求所述，在所有 HSWQ 运行中，请务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并开启其 **`HSWQ`** 开关。
 
 ### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader

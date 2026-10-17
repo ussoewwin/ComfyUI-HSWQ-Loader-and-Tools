@@ -628,7 +628,7 @@ try:
                 devices = get_device_list()
                 default_dev = devices[1] if len(devices) > 1 else devices[0]
                 req = {
-                    "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"tooltip": "SDXL checkpoint to load MODEL and CLIP from (same as standard Load Checkpoint)."}),
+                    "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"tooltip": "SDXL or SD1.5 checkpoint to load MODEL and CLIP from (same as standard Load Checkpoint)."}),
                     "weight_dtype": ([
                         "default",
                         # SDXL-only marker. Distinct from the SD1.5 ConvRot INT8
@@ -646,7 +646,7 @@ try:
                 return {"required": req, "optional": opt}
 
             RETURN_TYPES = ("MODEL", "CLIP")
-            OUTPUT_TOOLTIPS = ("The UNet diffusion model from checkpoint.", "The CLIP model from the SDXL checkpoint.")
+            OUTPUT_TOOLTIPS = ("The UNet diffusion model from checkpoint.", "The CLIP model from the checkpoint.")
             FUNCTION = "load_checkpoint"
             CATEGORY = "loaders"
             TITLE = "HSWQ Checkpoint Loader"
