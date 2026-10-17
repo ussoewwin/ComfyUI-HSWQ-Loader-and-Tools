@@ -581,47 +581,6 @@ def _probe_path_is_krea2(path: str) -> bool:
         return "krea" in os.path.basename(path).lower()
 
 
-def _probe_path_is_sd15(path: str) -> bool:
-    """Lightweight safetensors probe for SD1.5 checkpoint architecture.
-
-    SD1.5 carries cond_stage_model.* (text encoder) or diffusion_model.output_blocks.11.*.
-    SDXL carries conditioner.embedders.* and only 9 output blocks (0 to 8).
-    """
-    try:
-        from safetensors import safe_open
-        with safe_open(str(path), framework="pt", device="cpu") as f:
-            for k in f.keys():
-                if k.startswith("cond_stage_model.") or "output_blocks.11." in k:
-                    return True
-                if k.startswith("conditioner.embedders."):
-                    return False
-        return False
-    except Exception as e:
-        logger.debug("[HSWQ INT8] sd15 probe failed for %s: %s", path, e)
-        base = os.path.basename(str(path)).lower()
-        return "sd15" in base or "sd1.5" in base or "v1-5" in base or "v1.5" in base
-
-
-def checkpoint_is_sd15(state_dict_or_path) -> bool:
-    """True if checkpoint is SD1.5 (or SD2.x UNet with cond_stage_model / 12 output blocks)."""
-    if isinstance(state_dict_or_path, (str, os.PathLike)):
-        return _probe_path_is_sd15(str(state_dict_or_path))
-
-    state_dict = state_dict_or_path
-    keys = getattr(state_dict, "keys", None)
-    if keys is None:
-        return False
-    try:
-        k_list = list(keys())
-        if any(k.startswith("cond_stage_model.") for k in k_list):
-            return True
-        if any("output_blocks.11." in k for k in k_list):
-            return True
-        return False
-    except Exception:
-        return False
-
-
 def _probe_path_comfy_quant_convrot(path: str) -> bool:
     """Lightweight safetensors probe for comfy_quant.convrot=true."""
     try:
@@ -753,13 +712,7 @@ def _should_inject_int8_conv(quant_config) -> bool:
     # int8_tensorwise config — injecting our Conv2d there is wrong for DiT/ConvRot
     # and can inflate VRAM vs stock.
     _ = quant_config
-    if bool(getattr(_int8_quant_conv_tls, "active", False)):
-        return True
-    import sys
-    _sd15 = sys.modules.get("hswq_sd15_int8_comfy_quant_int8")
-    if _sd15 is not None and bool(getattr(getattr(_sd15, "_int8_quant_conv_tls", None), "active", False)):
-        return True
-    return False
+    return bool(getattr(_int8_quant_conv_tls, "active", False))
 
 
 def _module_path_is_real_nunchaku_package(mod: str) -> bool:
@@ -1214,8 +1167,6 @@ def _make_quantized_conv2d(ops_module, MixedPrecisionOps, disabled):
                 ).to(self.weight.dtype)
             else:
                 weight = weight.to(self.weight.dtype)
-            self._hswq_bake_ver = getattr(self, "_hswq_bake_ver", 0) + 1
-            self._hswq_imma_wcache = None
             if return_weight:
                 return weight
 
@@ -1342,13 +1293,7 @@ def _patch_ops_decode_and_conv() -> bool:
         # Inject Quantized Conv2d only during HSWQ INT8 load scope
         # (_int8_quant_conv_scope). Never from quant_config alone — that would
         # also hit stock UNETLoader / Krea2 ConvRot MixedPrecision builds.
-        import sys as _sys
-        _sd15_mod = _sys.modules.get("hswq_sd15_int8_comfy_quant_int8")
-        if _sd15_mod is not None and bool(
-            getattr(getattr(_sd15_mod, "_int8_quant_conv_tls", None), "active", False)
-        ):
-            result.Conv2d = _sd15_mod._make_quantized_conv2d(ops_module, result, disabled)
-        elif _should_inject_int8_conv(quant_config):
+        if _should_inject_int8_conv(quant_config):
             result.Conv2d = _make_quantized_conv2d(ops_module, result, disabled)
         return result
 
@@ -1555,8 +1500,6 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
         for param_key, _key in keys_to_bake:
             if hasattr(module, param_key + "_lowvram_function"):
                 setattr(module, param_key + "_lowvram_function", None)
-        if hasattr(module, "_v_signature"):
-            module._v_signature = None
 
         for _param_key, key in keys_to_bake:
             patcher.patch_weight_to_device(key, device_to=device_to)
@@ -1579,9 +1522,6 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
     return baked
 
 
-_LORA_HOOK_OWNER = "patches_int8"
-
-
 def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     """After ModelPatcherDynamic.load, bake INT8 LoRA via set_weight."""
     try:
@@ -1601,10 +1541,7 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
     # LoRA bake strength breaks even when Status shows APPLIED.
     if getattr(original, "_hswq_zi_nvfp4_lora_bake", False):
         return True
-    if (
-        getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER
-        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
-    ):
+    if getattr(original, "_hswq_int8_lora_bake_ver", 0) >= _DYN_VER:
         return True
     true_orig = getattr(original, "_hswq_orig_dynamic_load", original)
 
@@ -1639,7 +1576,6 @@ def _patch_model_patcher_dynamic_int8_lora_bake() -> bool:
 
     load._hswq_int8_lora_bake = True
     load._hswq_int8_lora_bake_ver = _DYN_VER
-    load._hswq_owner = _LORA_HOOK_OWNER
     load._hswq_orig_dynamic_load = true_orig
     Dynamic.load = load
     return True
@@ -1810,14 +1746,8 @@ def _patch_model_patcher_lora_logs() -> bool:
         return False
 
     original = getattr(mp.ModelPatcher, "patch_weight_to_device", None)
-    if original is None:
-        return False
-    if (
-        getattr(original, "_hswq_int8_lora_log", False)
-        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
-    ):
-        return True
-    true_orig = getattr(original, "_hswq_orig_patch_weight_to_device", original)
+    if original is None or getattr(original, "_hswq_int8_lora_log", False):
+        return getattr(original, "_hswq_int8_lora_log", False)
 
     def patch_weight_to_device_logged(self, key, device_to=None, inplace_update=False, return_weight=False, force_cast=False):
         global _lora_patcher_logs
@@ -1874,7 +1804,7 @@ def _patch_model_patcher_lora_logs() -> bool:
                 dump_int8_lora_bake_stats(force=False)
 
 
-        return true_orig(
+        return original(
             self,
             key,
             device_to=device_to,
@@ -1884,8 +1814,6 @@ def _patch_model_patcher_lora_logs() -> bool:
         )
 
     patch_weight_to_device_logged._hswq_int8_lora_log = True
-    patch_weight_to_device_logged._hswq_owner = _LORA_HOOK_OWNER
-    patch_weight_to_device_logged._hswq_orig_patch_weight_to_device = true_orig
     mp.ModelPatcher.patch_weight_to_device = patch_weight_to_device_logged
     return True
 
@@ -1982,10 +1910,7 @@ def _patch_lora_loader_name_context() -> bool:
     if original is None:
         return False
     _NAME_VER = 6
-    if (
-        getattr(original, "_hswq_lora_name_ctx_ver", 0) >= _NAME_VER
-        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
-    ):
+    if getattr(original, "_hswq_lora_name_ctx_ver", 0) >= _NAME_VER:
         return True
     true_orig = getattr(original, "_hswq_orig_load_lora", original)
 
@@ -2008,7 +1933,6 @@ def _patch_lora_loader_name_context() -> bool:
 
     load_lora._hswq_lora_name_ctx = True
     load_lora._hswq_lora_name_ctx_ver = _NAME_VER
-    load_lora._hswq_owner = _LORA_HOOK_OWNER
     load_lora._hswq_orig_load_lora = true_orig
     LoraLoader.load_lora = load_lora
     return True
@@ -2028,10 +1952,7 @@ def _patch_loras_folder_path_name() -> bool:
         original = getattr(folder_paths, fname, None)
         if original is None:
             continue
-        if (
-            getattr(original, "_hswq_lora_path_name_ver", 0) >= _PATH_VER
-            and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
-        ):
+        if getattr(original, "_hswq_lora_path_name_ver", 0) >= _PATH_VER:
             ok = True
             continue
         true_orig = getattr(original, "_hswq_orig_get_full_path", original)
@@ -2043,7 +1964,6 @@ def _patch_loras_folder_path_name() -> bool:
                 return orig(folder_name, filename)
 
             wrapped._hswq_lora_path_name_ver = _PATH_VER
-            wrapped._hswq_owner = _LORA_HOOK_OWNER
             wrapped._hswq_orig_get_full_path = orig
             return wrapped
 
@@ -2062,10 +1982,7 @@ def _patch_load_torch_file_lora_name() -> bool:
     if original is None:
         return False
     _TORCH_VER = 1
-    if (
-        getattr(original, "_hswq_lora_torch_name_ver", 0) >= _TORCH_VER
-        and getattr(original, "_hswq_owner", None) == _LORA_HOOK_OWNER
-    ):
+    if getattr(original, "_hswq_lora_torch_name_ver", 0) >= _TORCH_VER:
         return True
     true_orig = getattr(original, "_hswq_orig_load_torch_file", original)
 
@@ -2077,7 +1994,6 @@ def _patch_load_torch_file_lora_name() -> bool:
         return true_orig(ckpt, *args, **kwargs)
 
     load_torch_file._hswq_lora_torch_name_ver = _TORCH_VER
-    load_torch_file._hswq_owner = _LORA_HOOK_OWNER
     load_torch_file._hswq_orig_load_torch_file = true_orig
     utils_mod.load_torch_file = load_torch_file
     return True
@@ -2098,10 +2014,7 @@ def _patch_load_lora_key_counts() -> bool:
         return False
 
     _KEY_VER = 6
-    if (
-        getattr(orig_for_models, "_hswq_lora_key_count_ver", 0) >= _KEY_VER
-        and getattr(orig_for_models, "_hswq_owner", None) == _LORA_HOOK_OWNER
-    ):
+    if getattr(orig_for_models, "_hswq_lora_key_count_ver", 0) >= _KEY_VER:
         _patch_lora_loader_name_context()
         _patch_loras_folder_path_name()
         _patch_load_torch_file_lora_name()
@@ -2242,11 +2155,9 @@ def _patch_load_lora_key_counts() -> bool:
         return (new_model, new_clip)
 
     load_lora_counted._hswq_lora_key_count = True
-    load_lora_counted._hswq_owner = _LORA_HOOK_OWNER
     load_lora_counted._hswq_orig_load_lora = orig_load_lora
     load_lora_for_models_counted._hswq_lora_key_count = True
     load_lora_for_models_counted._hswq_lora_key_count_ver = _KEY_VER
-    load_lora_for_models_counted._hswq_owner = _LORA_HOOK_OWNER
     load_lora_for_models_counted._hswq_orig_for_models = orig_for_models
     lora_mod.load_lora = load_lora_counted
     sd_mod.load_lora_for_models = load_lora_for_models_counted
@@ -3297,6 +3208,9 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
             metadata=None,
             disable_dynamic=False,
         ):
+            # Arm sub-patches first
+            apply_comfy_quant_int8_patches()
+
             # Strict SAM3 gate: NEVER affect SDXL, Krea2, ZImage, FLUX, SD1.5, SD3, Wan, etc.
             is_sam3 = any(k.startswith("detector.") or "detector.backbone.vision_backbone" in k for k in sd.keys())
             if not is_sam3:
@@ -3312,9 +3226,6 @@ def _patch_load_state_dict_guess_config_int8() -> bool:
                     metadata=metadata,
                     disable_dynamic=disable_dynamic,
                 )
-
-            # Arm sub-patches only for SAM3
-            apply_comfy_quant_int8_patches()
 
             model_options = dict(model_options) if model_options else {}
             te_model_options = dict(te_model_options) if te_model_options else {}
@@ -3418,20 +3329,14 @@ def apply_comfy_quant_int8_patches() -> bool:
     ok_torch = _patch_load_torch_file_lora_name()
     ok_lowvram = _patch_lowvram_patch_float_intermediate()
     ok_dyn_bake = _patch_model_patcher_dynamic_int8_lora_bake()
-    ok_lora_log = _patch_model_patcher_lora_logs()
     ok_handoff = _patch_load_models_gpu_int8_nunchaku_handoff()
     ok_controllora = _patch_controllora_int8_dequant()
-    try:
-        sd15_l = _load_sd15_loader()
-        sd15_cq = sd15_l._load_int8_patch_module()
-        sd15_cq.apply_comfy_quant_int8_patches()
-    except Exception as exc:
-        logger.debug("[HSWQ INT8] sd15 sub-patches hook: %s", exc)
     # Re-apply ops when patch version bumps (e.g. Conv2d inject gate change).
     ok_ops = _patch_ops_decode_and_conv()
     if _PATCHES_APPLIED:
         return True
     ok_utils = _patch_convert_old_quants()
+    ok_lora_log = _patch_model_patcher_lora_logs()
     if ok_ops:
         _PATCHES_APPLIED = True
         _console(
@@ -3499,24 +3404,6 @@ def _load_sdxl_clip_quant():
         spec.loader.exec_module(mod)
         _SDXL_CLIP_QUANT_MOD = mod
     return _SDXL_CLIP_QUANT_MOD
-
-
-_SD15_LOADER_MOD = None
-
-
-def _load_sd15_loader():
-    global _SD15_LOADER_MOD
-    if _SD15_LOADER_MOD is None:
-        import importlib.util
-        import os as _os
-
-        repo = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-        path = _os.path.join(repo, "nodes", "sd1.5 int8", "__init__.py")
-        spec = importlib.util.spec_from_file_location("hswq_sd15_loader", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _SD15_LOADER_MOD = mod
-    return _SD15_LOADER_MOD
 
 
 def _model_is_sdxl_unet(model) -> bool:
@@ -3769,10 +3656,6 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None)
             or checkpoint_looks_like_comfy_quant_int8(ckpt_path)
         )
 
-        if is_int8 and _probe_path_is_sd15(ckpt_path):
-            sd15_loader = _load_sd15_loader()
-            return sd15_loader.load_checkpoint_sd15_hswq_weight_dtype(ckpt_path, device=device)
-
         model_options = {}
         if is_int8:
             # Z Image comfy_parity + ZI Dynamic bake must not wrap SDXL INT8.
@@ -3903,8 +3786,6 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
         def load_checkpoint(self, ckpt_name, weight_dtype, device=None, **kwargs):
             if weight_dtype in _FP8_WEIGHT_DTYPES:
                 return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
-            if weight_dtype == "SD1.5 ConvRot INT8":
-                return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
             if weight_dtype == "SDXL ConvRot INT8":
                 return load_checkpoint_sdxl_hswq_weight_dtype(
                     ckpt_name, weight_dtype, device=device
@@ -3912,8 +3793,6 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
             import folder_paths
 
             ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
-            if _probe_path_is_sd15(ckpt_path):
-                return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
             if checkpoint_looks_like_comfy_quant_int8(ckpt_path):
                 return load_checkpoint_sdxl_hswq_weight_dtype(
                     ckpt_name, weight_dtype, device=device

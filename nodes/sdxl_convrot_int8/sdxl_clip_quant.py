@@ -270,13 +270,8 @@ def arm_sdxl_clip_quant_metadata() -> bool:
     original = getattr(_sd, "load_state_dict_guess_config", None)
     if original is None:
         return False
-    _cur = original
-    for _ in range(8):
-        if _cur is None:
-            break
-        if getattr(_cur, _MARKER, False):
-            return True
-        _cur = getattr(_cur, "__wrapped__", None)
+    if getattr(original, _MARKER, False):
+        return True
 
     def load_state_dict_guess_config_sdxl_clip(sd, *args, **kwargs):
         try:
