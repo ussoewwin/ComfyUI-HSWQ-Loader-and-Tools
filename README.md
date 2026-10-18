@@ -17,7 +17,7 @@ This custom node pack loads and runs **[Hybrid-Sensitivity-Weighted-Quantization
 
 **HSWQ** (the quantization method, scripts, and upstream docs) is an **original work by ussoewwin**, published separately under the **GNU Affero General Public License v3 (AGPL-3.0)** at [ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization). This ComfyUI loader pack is a related but distinct repository (see License below).
 
-HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HSWQ work focuses on **ConvRot INT8** for **SDXL** (reverse hybrid), plus **ConvRot NVFP4** for **Z Image / ZIT** UNets and **ConvRot INT8** for **Krea2** UNets. **SDXL ConvRot NVFP4 development has been cancelled**: deterministic trajectory measurements showed that 4-bit precision fails to preserve latent trajectory fidelity on SDXL, so SDXL is supported strictly in **ConvRot INT8**. For SDXL ConvRot INT8 (reverse hybrid), the FP16 checkpoint is the only input; a per-layer **trajectory-impact** ranking packs the **K lowest-impact layers** as **FULL ConvRot INT8** while every other layer stays FP16 — not a keep-ratio percentage scheme.
+HSWQ is a high-fidelity quantization line for diffusion UNets. Current public HSWQ work focuses on **ConvRot INT8** for **SDXL** (reverse hybrid), plus **ConvRot NVFP4** for **Z Image / ZIT** UNets and **ConvRot INT8** for **Krea2** UNets. For SDXL ConvRot INT8 (reverse hybrid), the FP16 checkpoint is the only input; a per-layer **trajectory-impact** ranking packs the **K lowest-impact layers** as **FULL ConvRot INT8** while every other layer stays FP16 — not a keep-ratio percentage scheme.
 
 | Path | Role in this repo |
 | :--- | :--- |
