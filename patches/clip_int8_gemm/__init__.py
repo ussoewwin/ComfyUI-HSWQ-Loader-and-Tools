@@ -44,6 +44,7 @@ The patch only touches layers whose weight is a ``TensorWiseINT8Layout``
 from __future__ import annotations
 
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,47 @@ def int8_gemm_stats() -> dict:
 def reset_int8_gemm_stats() -> None:
     _STATS["int8_linear_calls"] = 0
     _STATS["layers_patched"] = 0
+
+
+def _complete_text_projection(clip):
+    """CLIP-L checkpoints may ship no ``text_projection``.
+
+    Under the stock (dequant) path the missing projection is harmless, but once
+    the real INT8 GEMM is used the forward reaches the projection with a
+    ``None`` weight and dies with ``'NoneType' object has no attribute
+    'device'``. Complete it with fp16 zeros, which is what the FP16 path
+    effectively does for a missing projection.
+    """
+    try:
+        import torch
+        csm = getattr(clip, "cond_stage_model", None)
+        if csm is None:
+            return
+        candidates = [csm]
+        for a in ("clip_l", "clip_g"):
+            sub = getattr(csm, a, None)
+            if sub is not None:
+                candidates.append(sub)
+        for inner in candidates:
+            tr = getattr(inner, "transformer", None)
+            if tr is None:
+                continue
+            tp = getattr(tr, "text_projection", None)
+            if tp is None or getattr(tp, "weight", None) is not None:
+                continue
+            hidden = 768
+            dtype = torch.float16
+            try:
+                emb = tr.text_model.embeddings.token_embedding.weight
+                hidden = int(emb.shape[1])
+                dtype = emb.dtype
+            except Exception:  # noqa: BLE001
+                pass
+            tp.weight = torch.nn.Parameter(torch.zeros((hidden, hidden), dtype=dtype),
+                                          requires_grad=False)
+            logger.info("[HSWQ INT8 GEMM] completed text_projection (%dx%d zeros)", hidden, hidden)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[HSWQ INT8 GEMM] text_projection completion skipped: %s", exc)
 
 
 def _enable_int8_gemm_for_clip_text() -> bool:
@@ -152,6 +194,19 @@ def _enable_int8_gemm_for_clip_text() -> bool:
             sd1_clip.comfy.ops = ops
     except Exception:  # noqa: BLE001
         pass
+
+    # A CLIP-L checkpoint may ship no text_projection; the INT8 GEMM path
+    # reaches it and dies on the None weight. Complete it at load time.
+    import comfy.sd as _csd
+    _orig_load_clip = getattr(_csd, "load_clip", None)
+    if _orig_load_clip is not None and not getattr(_orig_load_clip, "_hswq_int8_gemm", False):
+        def load_clip_with_projection_fix(*args, **kwargs):
+            clip = _orig_load_clip(*args, **kwargs)
+            _complete_text_projection(clip)
+            return clip
+        load_clip_with_projection_fix._hswq_int8_gemm = True
+        load_clip_with_projection_fix.__wrapped__ = _orig_load_clip
+        _csd.load_clip = load_clip_with_projection_fix
 
     ops._hswq_int8_gemm_patched = True
     _PATCHED = True
