@@ -7,6 +7,18 @@
   </tr>
 </table>
 
+## Version 3.6.6
+
+- 添加：**CLIP 文本塔启用真正的 INT8 GEMM** -- ComfyUI 的 `int8_tensorwise` 算法声明为 `quantize_input: False`，属于 **weight-only** 格式：权重虽以 int8 留在显存，但每次矩阵乘都会先 dequant，真正的 INT8 GEMM（`comfy_kitchen` 的 `int8_linear`）根本走不到。共有两处阻塞：
+  - **根因 1 - 量化矩阵乘被关闭**：`comfy/sd1_clip.py` 以 `mixed_precision_ops(quant_config, dtype, full_precision_mm=True)` 构建文本编码器，而 `full_precision_mm=True` 会使 `MixedPrecisionOps.Linear.forward` 中的 `_use_quantized` 为 false，输入同样不会被量子化。
+  - **根因 2 - weight-only 分支会 dequant 权重**：即使打开量化矩阵乘，`forward_comfy_cast_weights` 的 weight-only 路径仍会在 `F.linear` 前把权重 dequant，结果依旧是用 int8 体积跑 fp16 GEMM。
+  - **对策**：在 import 时安装的 runtime arm（`patches/clip_int8_gemm/arm.py`）包装 `comfy.ops.mixed_precision_ops`，使量子化调用方拿到 `full_precision_mm=False`；同时包装 `MixedPrecisionOps.Linear.forward_comfy_cast_weights`，让 `TensorWiseINT8Layout` 权重不再被 dequant，而是连同在线 ConvRot 激活旋转一起交给 `int8_linear`。**ComfyUI core 未作任何修改**；仅 `TensorWiseINT8Layout` 层走新路径，其他 layout 全部保持 stock 行为。
+  - **补全缺失的 `text_projection`**：CLIP-L checkpoint 可能不带 `text_projection`，在 stock 路径下无害，但 INT8 GEMM 会带着 `None` 权重走到该投影并以 `'NoneType' object has no attribute 'device'` 崩溃。arm 在加载时以 fp16 零矩阵补全。
+  - **实测（CLIP ViT-L/14，RTX 5060 Ti，batch 1，11 轮 CUDA event 计时取中位数，两次独立运行复现）**：FP16 参照 14.05 / 14.56 ms；INT8 pack 走 stock 路径 27.77 / 26.37 ms 且 **`int8_linear` 调用 0 次**；INT8 pack 启用 arm 后 19.53 / 19.74 ms 且 **`int8_linear` 调用 73 次** —— 相对 stock 路径 **-29.7 %**，而 stock 路径原本比 FP16 **慢 1.9 倍**。全部已发布 CLIP pack 均确认走 INT8 GEMM：`clip_l` 70 次、`ViT-L-14-BEST-smooth-GmP` 64 次、`Long-ViT-L-14` 73 次。
+  - **保真度（256 条固定种子 42 验收集合，对比 FP16 基线）**：stock 路径 mean 0.999792 / min 0.999641 / p5 0.999711；启用 arm 后 mean 0.999712 / min 0.999548 / p5 0.999616 —— 该微小变化是动态激活量化的预期代价，两者都远高于验收阈值。
+  - **体积不变**：pack 仍保持 ConvRot INT8 权重布局（文件 1631.80 MB -> 413.20 MB，常驻权重 235.90 MB -> 118.48 MB）。
+- 查看 [发布说明 v3.6.6](v3.6.6.md)
+
 ## Version 3.6.5
 
 - 添加：**SD1.5 ConvRot INT8 支持** -- SD1.5 ConvRot INT8 技术栈登陆加载器：专用内置模块 `nodes/sd1.5 int8/` 把在 HSWQ 仓库基准栈中开发、生产实测验证过的 SD1.5 技术栈移植进加载器，并为 **HSWQ Checkpoint Loader** 节点新增 **`SD1.5 ConvRot INT8`** `weight_dtype` 选项：

@@ -7,6 +7,18 @@
   </tr>
 </table>
 
+## Version 3.6.6
+
+- **Added**: **Real INT8 GEMM for the CLIP text tower** - ComfyUI's `int8_tensorwise` algorithm is declared with `quantize_input: False`, so it is a **weight-only** format: the weight stays int8 in memory but is dequantized for every matmul and the real INT8 GEMM (`comfy_kitchen`'s `int8_linear`) is never reached. Two things blocked it:
+  - **Root cause 1 - the quantized matmul was disabled**: `comfy/sd1_clip.py` builds the text encoder with `mixed_precision_ops(quant_config, dtype, full_precision_mm=True)`, and `full_precision_mm=True` makes `_use_quantized` false in `MixedPrecisionOps.Linear.forward`, so the input is never quantized either.
+  - **Root cause 2 - the weight-only branch dequantizes**: even with the quantized matmul enabled, the weight-only path of `forward_comfy_cast_weights` dequantizes the weight before `F.linear`, so the result is an fp16 GEMM with an int8-sized weight.
+  - **The fix**: a runtime arm installed at import time (`patches/clip_int8_gemm/arm.py`) wraps `comfy.ops.mixed_precision_ops` so a quantized caller gets `full_precision_mm=False`, and wraps `MixedPrecisionOps.Linear.forward_comfy_cast_weights` so a `TensorWiseINT8Layout` weight is handed to `int8_linear` with the online ConvRot activation rotation instead of being dequantized. **ComfyUI core is not modified**; only `TensorWiseINT8Layout` layers take the new path and every other layout keeps the stock behaviour.
+  - **Missing `text_projection` is completed**: a CLIP-L checkpoint may ship no `text_projection`; that is harmless under the stock path, but the INT8 GEMM reaches the projection with a `None` weight and dies with `'NoneType' object has no attribute 'device'`. The arm completes it with fp16 zeros at load time.
+  - **Measured (CLIP ViT-L/14, RTX 5060 Ti, batch 1, median of 11 CUDA-event timed rounds, reproduced across two runs)**: FP16 reference 14.05 / 14.56 ms; INT8 pack on the stock path 27.77 / 26.37 ms with **0 `int8_linear` calls**; INT8 pack with the arm 19.53 / 19.74 ms with **73 `int8_linear` calls** - **-29.7 %** against the stock path, which was **1.9x slower than FP16**. The INT8 GEMM is confirmed active for every shipped CLIP pack: `clip_l` 70 calls, `ViT-L-14-BEST-smooth-GmP` 64, `Long-ViT-L-14` 73.
+  - **Fidelity (256-prompt acceptance set, seed 42, vs the FP16 baseline)**: stock path mean 0.999792 / min 0.999641 / p5 0.999711; with the arm mean 0.999712 / min 0.999548 / p5 0.999616 - the small change is the expected cost of the dynamic activation quantization, and both stay far above the acceptance threshold.
+  - **Size is unchanged**: the pack keeps its ConvRot INT8 weight layout (file 1631.80 MB -> 413.20 MB, resident weights 235.90 MB -> 118.48 MB).
+- See [Release Notes v3.6.6](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.6) for details.
+
 ## Version 3.6.5
 
 - **Added**: **SD1.5 ConvRot INT8 support** - the SD1.5 ConvRot INT8 stack reached the loader: a dedicated vendored module `nodes/sd1.5 int8/` ports the production-verified SD1.5 stack (originally developed in the benchmark stack in the HSWQ repository) into the loader, and the **HSWQ Checkpoint Loader** node gained the **`SD1.5 ConvRot INT8`** `weight_dtype` option:
