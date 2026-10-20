@@ -167,6 +167,19 @@ try:
 except Exception:
     logger.exception("SAM3 INT8 load patches failed to install")
 
+# Standalone CLIP / text-encoder INT8 GEMM: ComfyUI's int8_tensorwise is a
+# weight-only algorithm ("quantize_input": False), so the stock CLIP text path
+# dequantizes the weight for every matmul and never reaches the int8 kernel.
+# This arm keeps the weights in int8 AND runs the real int8 GEMM (with the
+# online ConvRot activation rotation) for those layers. ComfyUI core is not
+# modified; the patch is installed at import time.
+try:
+    from .patches.clip_int8_gemm.arm import _enable_int8_gemm_for_clip_text
+    if not _enable_int8_gemm_for_clip_text():
+        logger.warning("CLIP INT8 GEMM arm not installed")
+except Exception as e:
+    logger.exception("CLIP INT8 GEMM arm failed to install: %s", e)
+
 # Model Patch CPU-offload apply patch: keeps ZImageControlPatch on CPU when a
 # MODEL_PATCH was loaded with cpu_offload=True (ported ModelPatchLoaderCustom).
 try:
