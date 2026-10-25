@@ -836,6 +836,12 @@ try:
     logger.info("Registered HSWQ Model Patch Loader (ConvRot INT8 / CPU offload)")
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Model Patch Loader not registered: %s", e)
+try:
+    from .nodes.hswq_moss_image_prompt_enhancer import HSWQMossImagePromptEnhancer
+    NODE_CLASS_MAPPINGS["HSWQMossImagePromptEnhancer"] = HSWQMossImagePromptEnhancer
+    logger.info("Registered HSWQ Moss-Image Prompt Enhancer (prompt expansion)")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ Moss-Image Prompt Enhancer not registered: %s", e)
 NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_MAPPINGS.items()}
 # Explicit overrides — TITLE alone is not enough for some ComfyUI graph headers / search menus.
 NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoader"] = "HSWQ Checkpoint Loader"
@@ -846,6 +852,7 @@ NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8SAM3"] = "HSWQ SAM3 Loader (ConvR
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Detect"] = "HSWQ SAM3 Detect"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQFP8E4M3UNetLoader"] = "HSWQ UNet Loader (Z Image / Krea2)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQUNetLoaderDisTorch2"] = "HSWQ UNet Loader (Z Image / Krea2) (DisTorch2)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQMossImagePromptEnhancer"] = "HSWQ Moss-Image Prompt Enhancer"
 WEB_DIRECTORY = "js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 logger.info("=" * (80 + len(" ComfyUI-nunchaku Initialization ")))

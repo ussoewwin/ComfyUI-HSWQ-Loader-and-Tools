@@ -419,6 +419,25 @@ On Windows, other extensions (for example SeedVR2) may raise inductor `compile_t
 - **KJNodes**: Base of the torch.compile UI / wrapper design (GPL-3.0). Installing KJNodes is **not** required to run this node; attribution and GPL obligations still apply
 - **Details**: See `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
+### HSWQ Moss-Image Prompt Enhancer
+
+<img src="png/prompt_enhancer.png" alt="HSWQ Moss-Image Prompt Enhancer" width="600">
+
+#### Overview
+A specialized prompt expansion and text encoding node for MOSS-Image models. Functions as an advanced drop-in replacement for standard `CLIP Text Encode (Prompt)`: it expands a short prompt or reference image into a rich, self-contained English description using either a Vision LLM (`vision_llm` from `models/clip`, e.g. Qwen3-VL) or the connected text encoder's own LLM (Qwen3.5-9B loaded with CLIPLoader type `moss_image`), then encodes that full caption into conditioning ready for MOSS-Image sampling.
+
+#### Features
+- **Built-in 8,398-character MOSS-Image Prompt Engineering Prompt**: Embeds the exact official MOSS-Image prompt engineering instruction covering 8 visual facets (Subject, Action, Space, Setting, Framing, Light, Tone, Text verbatim preservation) and reference image rules.
+- **Vision-Language Model (VLM) Integration (`vision_llm`)**: Automatically populates a dropdown of models from `ComfyUI/models/clip` (e.g. `Qwen3_VL_4B_Thinking_abliterated_hswq_convrot_int8.safetensors`). When selected with an optional input `image`, the Vision LLM reads and understands the visual contents of the image and authors a comprehensive description.
+- **Hardware-Closed Thinking Block (`<think>\n\n</think>\n`)**: Specially crafted prompt template automatically injects a pre-closed thinking block into reasoning/thinking LLMs (such as Qwen3-Thinking), suppressing lengthy chain-of-thought loops and forcing immediate final prompt generation within seconds.
+- **MTP (Multi-Token Prediction) Speculative Decoding**: Supports MTP acceleration options (`auto`, `off`, `2`, `3`, `4`, `5`) for models with MTP modules.
+- **Dual Outputs**: Outputs both `conditioning` (ready for KSampler / MOSS-Image DiT) and `expanded_caption` (STRING) for display and chaining with other nodes.
+
+#### Usage Notes
+- **Inputs**: `clip` (CLIP, Qwen3.5-9B loaded via CLIPLoader with `type="moss_image"`), `prompt` (STRING), `seed`, `temperature` (default 0.7), `top_k` (64), `top_p` (0.95), `min_p` (0.05), `repetition_penalty` (1.0), `max_length` (4096), `mtp` (`auto`), `vision_llm` (dropdown of `models/clip` or `none`); optional `image` (IMAGE)
+- **Outputs**: `conditioning` (CONDITIONING), `expanded_caption` (STRING)
+- **Category**: `conditioning/moss_image`
+
 ## Changelog
 
 See [changelog.md](changelog.md).

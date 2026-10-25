@@ -420,6 +420,25 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 - **KJNodes**：torch.compile UI / wrapper 设计的基底（GPL-3.0）。运行本节点**不必**安装 KJNodes；归属与 GPL 义务仍然适用
 - **详情**：见 `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
 
+### HSWQ Moss-Image Prompt Enhancer
+
+<img src="../png/prompt_enhancer.png" alt="HSWQ Moss-Image Prompt Enhancer" width="600">
+
+#### 概述
+专为 MOSS-Image 模型打造的提示词增强与文本编码一体化节点。作为标准 `CLIP Text Encode (Prompt)` 节点的直接无缝替代方案：可通过 Vision LLM（从 `models/clip` 下拉选择的多模态大模型，如 Qwen3-VL）或直连的文本编码器内置 LLM（以 `type="moss_image"` 加载的 Qwen3.5-9B），将简短提示词或参考图像扩展为结构完整、细节丰富的专业英文提示词，随后自动编码为 MOSS-Image 所需的 `conditioning`。
+
+#### 特性
+- **内置官方 8,398 字符 MOSS-Image 提示词工程 System Prompt**：完整内嵌涵盖 8 大视觉维度（主体、动作、空间、场景、构图、光影、色调、原文文字严格保留）及参考图像分析规则的官方提示词工程规范。
+- **Vision-Language Model (VLM) 视觉多模态集成（`vision_llm`）**：自动扫描 `ComfyUI/models/clip` 目录并在下拉菜单中列出可选模型（如 `Qwen3_VL_4B_Thinking_abliterated_hswq_convrot_int8.safetensors`）。接入参考图像（`image`）时，由 VLM 深入理解画面内容并自主撰写精细化的重构提示词。
+- **Thinking 思考模型硬件闭合保护（`<think>\n\n</think>\n`）**：针对带思维链的思考模型（如 Qwen3-Thinking），Prompt 模板末尾自动注入已预闭合的空思考块，物理阻止冗长思考循环，强制模型在数秒内直接输出最终提示词。
+- **MTP（Multi-Token Prediction 多 Token 投机预测）加速**：支持 MTP 加速档位切换（`auto`, `off`, `2`, `3`, `4`, `5`）。
+- **双路输出**：同时输出直接供 KSampler / MOSS-Image DiT 使用的 `conditioning`，以及可在前端展示或传递给其他节点的完整提示词文本 `expanded_caption`（STRING）。
+
+#### 使用说明
+- **输入**：`clip`（CLIP，通过 CLIPLoader 以 `type="moss_image"` 加载的 Qwen3.5-9B）、`prompt`（STRING）、`seed`、`temperature`（默认 0.7）、`top_k`（64）、`top_p`（0.95）、`min_p`（0.05）、`repetition_penalty`（1.0）、`max_length`（4096）、`mtp`（`auto`）、`vision_llm`（`models/clip` 下拉菜单或 `none`）；可选 `image`（IMAGE）
+- **输出**：`conditioning`（CONDITIONING）、`expanded_caption`（STRING）
+- **分类**：`conditioning/moss_image`
+
 ## 更新日志
 
 见 [zhmd/CHANGELOG.md](CHANGELOG.md)。
