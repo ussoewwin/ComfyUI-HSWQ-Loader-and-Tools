@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.7
+
+- 添加：**HSWQ Moss-Image Prompt Enhancer**（`HSWQMossImagePromptEnhancer`）-- 专为 MOSS-Image 模型打造的提示词扩展与文本编码一体化节点，作为标准 `CLIP Text Encode (Prompt)` 节点的直接无缝替代方案：
+  - **Vision-Language Model (VLM) 视觉多模态集成**：新增 `vision_llm` 下拉菜单，动态扫描并列出 `ComfyUI/models/clip` 下的大模型（如 `Qwen3_VL_4B_Thinking_abliterated_hswq_convrot_int8.safetensors`）。接入参考图像（`image`）时，由 VLM 深入解析画面视觉特征并自主撰写精细化的重构提示词，再经直连的 Qwen3.5-9B 文本编码器直接输出 MOSS-Image 所需的 `conditioning`。
+  - **内嵌官方 8,398 字符提示词工程规范**：完整内置涵盖 8 大视觉维度（主体、动作、空间、场景、构图、光影、色调、原文文字严格保留）及参考图像分析规则的官方提示词工程 System Prompt。
+  - **Thinking 思考模型闭合保护**：采用专用 Prompt 模板（`NO_THINK_VISION_TEMPLATE` / `NO_THINK_TEXT_TEMPLATE`），向 Assistant 注入已预闭合的空 `<think>\n\n</think>\n` 块，物理阻止思考模型（如 Qwen3-Thinking）陷入思维链循环，强制其在数秒内直接输出最终提示词。
+  - **健壮容错与双路输出**：配备 `_partition_thinking` 内容兜底恢复逻辑，同时输出供采样器使用的 `conditioning` 与完整的提示词文本 `expanded_caption`（STRING），并支持前端直接展示（`OUTPUT_NODE = True`）。
+- 查看 [发布说明 v3.6.7](v3.6.7.md)
+
 ## Version 3.6.6
 
 - 添加：**CLIP 文本塔启用真正的 INT8 GEMM** -- ComfyUI 的 `int8_tensorwise` 算法声明为 `quantize_input: False`，属于 **weight-only** 格式：权重虽以 int8 留在显存，但每次矩阵乘都会先 dequant，真正的 INT8 GEMM（`comfy_kitchen` 的 `int8_linear`）根本走不到。共有两处阻塞：

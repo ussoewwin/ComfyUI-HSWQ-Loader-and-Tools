@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.7
+
+- **Added**: **HSWQ Moss-Image Prompt Enhancer** (`HSWQMossImagePromptEnhancer`) - A specialized prompt expansion and text encoding node for MOSS-Image models, serving as an advanced drop-in replacement for standard `CLIP Text Encode (Prompt)`:
+  - **Vision-Language Model (VLM) Integration**: Adds a `vision_llm` dropdown menu dynamically populated from `ComfyUI/models/clip` (e.g. `Qwen3_VL_4B_Thinking_abliterated_hswq_convrot_int8.safetensors`). When a reference image is passed via the optional `image` input, the Vision LLM analyzes visual features and authors a comprehensive description, which is then automatically encoded into MOSS-Image conditioning via the connected Qwen3.5-9B text encoder.
+  - **Built-in Official Prompt Engineering Instruction**: Integrates the exact official 8,398-character MOSS-Image system prompt covering 8 visual facets (Subject, Action, Space, Setting, Framing, Light, Tone, and verbatim text preservation) plus reference image interpretation rules.
+  - **Thinking Block Hardware Closure**: Employs prompt templates (`NO_THINK_VISION_TEMPLATE` / `NO_THINK_TEXT_TEMPLATE`) that inject a pre-closed empty `<think>\n\n</think>\n` assistant block, suppressing reasoning loops in thinking models (such as Qwen3-Thinking) to output final generation prompts in seconds.
+  - **Robust Fallback & Dual Outputs**: Features `_partition_thinking` recovery logic to rescue generated content and outputs both `conditioning` (ready for KSampler / MOSS-Image DiT) and `expanded_caption` (STRING) with terminal output support (`OUTPUT_NODE = True`).
+- See [Release Notes v3.6.7](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.7) for details.
+
 ## Version 3.6.6
 
 - **Added**: **Real INT8 GEMM for the CLIP text tower** - ComfyUI's `int8_tensorwise` algorithm is declared with `quantize_input: False`, so it is a **weight-only** format: the weight stays int8 in memory but is dequantized for every matmul and the real INT8 GEMM (`comfy_kitchen`'s `int8_linear`) is never reached. Two things blocked it:
