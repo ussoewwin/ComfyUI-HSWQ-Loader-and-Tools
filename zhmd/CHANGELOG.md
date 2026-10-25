@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.6.7
+
+- 移除：**彻底移除 SpargeAttn** -- 实测确认 SpargeAttn 在多轮生成过程中会导致显存污染残留（VRAM pollution）及严重的画面噪点化缺陷（image noise artifacts），现已从代码库中彻底删除 SpargeAttn 相关集成。
+- 查看 [发布说明 v3.6.7](v3.6.7.md)
+
 ## Version 3.6.6
 
 - 添加：**CLIP 文本塔启用真正的 INT8 GEMM** -- ComfyUI 的 `int8_tensorwise` 算法声明为 `quantize_input: False`，属于 **weight-only** 格式：权重虽以 int8 留在显存，但每次矩阵乘都会先 dequant，真正的 INT8 GEMM（`comfy_kitchen` 的 `int8_linear`）根本走不到。共有两处阻塞：

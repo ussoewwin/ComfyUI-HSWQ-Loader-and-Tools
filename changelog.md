@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.6.7
+
+- **Removed**: **SpargeAttn completely removed** - SpargeAttn integration has been entirely removed from the codebase. Empirical testing confirmed that SpargeAttn causes persistent VRAM pollution and progressive image noise artifacts across generation runs.
+- See [Release Notes v3.6.7](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.7) for details.
+
 ## Version 3.6.6
 
 - **Added**: **Real INT8 GEMM for the CLIP text tower** - ComfyUI's `int8_tensorwise` algorithm is declared with `quantize_input: False`, so it is a **weight-only** format: the weight stays int8 in memory but is dequantized for every matmul and the real INT8 GEMM (`comfy_kitchen`'s `int8_linear`) is never reached. Two things blocked it:
