@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.8
+
+- 修复：**SDXL ConvRot INT8 走 stock CheckpointLoaderSimple 时输出全黑图（ComfyUI v0.44 更新后）** -- ComfyUI 更新至 v0.44.0 后，通过 stock `CheckpointLoaderSimple` 节点加载 SDXL ConvRot INT8 checkpoint 会出现整图全黑（任务状态 success、latent 全为 NaN）：
+  - **根因**：ComfyUI stock `MixedPrecisionOps` 只含 `Linear` / `MoEExperts` / `Embedding`，**没有 `Conv2d` 类**（至少自 v0.42.5 起如此，经 git 历史实测确认）。HSWQ 的量化 Conv2d 只在 **INT8 conv scope 打开期间**注入到该 ops 类中，而 scope 仅由 loader 专用加载路径打开 -- `comfy.sd.load_checkpoint_guess_config`（stock 节点直接调用的路径）从不打开它。于是 v0.44 下 conv 权重以 **int8 原始值直接 cast 成 fp16（`weight_scale` 未应用）**加载，每个输出通道被放大到正确的约 `1/scale_i` ~ **1300 倍**（实测：loader 侧 std 29.255 vs 正确 dequant std 0.02229）。forward 激活值溢出 fp16（实测首个 inf 出现在 `input_blocks.3.0.op`），下一层 GroupNorm 把所有元素转成 NaN，DiT 输出全 NaN -- 即全黑图。FP16 checkpoint 不受影响，因为其加载根本不走向量化路径。
+  - **修复**（`patches/comfy_quant_int8.py`）：新增围绕 `comfy.sd.load_checkpoint_guess_config` 的 wrapper，**仅当 checkpoint 为 SDXL/SD1.5 系 INT8 pack**（按 block key 检测：存在 `input_blocks` / `middle_block` / `output_blocks` 且不含 DiT block key -- `checkpoint_needs_hswq_int8_conv2d`）时，在加载窗口打开 INT8 conv scope。scope 内 loader 的 `mixed_precision_ops_force_conv` 注入 HSWQ 量化 Conv2d，其 `_load_from_state_dict` 构建带 scale 与 ConvRot 元数据的真实 `QuantizedTensor`/`TensorWiseINT8Layout` 权重并在线旋转激活。该 wrapper 在 import 时安装（`_hswq_ensure_loader_scope_at_import()`），对任何 stock CheckpointLoaderSimple 加载即刻生效。**不含 SDXL/SD1.5 block key 的 checkpoint（Krea2、FLUX/DiT、MOSS）完全绕开 wrapper，不受影响。ComfyUI core 未作任何修改。**
+  - **实测（对 `perfectionRealisticILXL_80_hswq_r32_1on_convrot_int8` 的单次 `apply_model` forward 探针）**：加载后 `op.weight` 为 `QuantizedTensor` / `TensorWiseINT8Layout` 且 `_hswq_convrot=True`（HSWQ Conv2d 在位，自有 `_load_from_state_dict`）。DiT forward 输出为有限值 -- **mean -0.0344 / std 0.7010 / nan 0 / inf 0** -- 对比修复前的全 NaN 输出。
+  - **PromptServer AttributeError 修复**（`model_management_mgpu.py`）：ComfyUI 不再在类定义时定义 `PromptServer.instance`（由服务器在启动时创建），在脱离服务器的 offload 路径中直接读取会以 `type object 'PromptServer' has no attribute 'instance'` 崩溃。3 处直接读取全部改为 `getattr(server.PromptServer, "instance", None)` -- 恢复「未初始化时为 None」的良性行为。
+- 查看 [发布说明 v3.6.8](v3.6.8.md)
+
 ## Version 3.6.7
 
 - 添加：**HSWQ Moss-Image Prompt Enhancer**（`HSWQMossImagePromptEnhancer`）-- 专为 MOSS-Image 模型打造的提示词扩展与文本编码一体化节点，作为标准 `CLIP Text Encode (Prompt)` 节点的直接无缝替代方案：
