@@ -121,7 +121,7 @@ def trigger_executor_cache_reset(reason="policy", force=False):
     """Trigger PromptExecutor.reset() by setting 'free_memory' flag"""
     global _last_cpu_usage_at_reset
 
-    prompt_server = server.PromptServer.instance
+    prompt_server = getattr(server.PromptServer, "instance", None)
     if prompt_server is None:
         logger.debug("[MultiGPU_Memory_Management] PromptServer not initialized")
         return
@@ -143,10 +143,11 @@ def trigger_executor_cache_reset(reason="policy", force=False):
 
 def check_cpu_memory_threshold(threshold_percent=CPU_MEMORY_THRESHOLD_PERCENT):
     """Check CPU memory and trigger reset if threshold exceeded"""
-    if server.PromptServer.instance is None:
+    prompt_server = getattr(server.PromptServer, "instance", None)
+    if prompt_server is None:
         return
 
-    if server.PromptServer.instance.prompt_queue.currently_running:
+    if prompt_server.prompt_queue.currently_running:
         return
 
     vm = psutil.virtual_memory()
@@ -170,8 +171,9 @@ def force_full_system_cleanup(reason="manual", force=True):
     multigpu_memory_log("full_cleanup", f"start:{reason}")
     logger.info(f"[ManagerMatch] Requesting cleanup (reason={reason}) | pre_models={pre_models}, cpu_used_gib={pre_cpu/(1024**3):.2f}")
 
-    if server.PromptServer.instance is not None:
-        pq = server.PromptServer.instance.prompt_queue
+    prompt_server = getattr(server.PromptServer, "instance", None)
+    if prompt_server is not None:
+        pq = prompt_server.prompt_queue
         if (not pq.currently_running) or force:
             pq.set_flag("unload_models", True)
             pq.set_flag("free_memory", True)

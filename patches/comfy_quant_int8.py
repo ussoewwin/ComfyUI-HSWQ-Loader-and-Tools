@@ -715,6 +715,54 @@ def _should_inject_int8_conv(quant_config) -> bool:
     return bool(getattr(_int8_quant_conv_tls, "active", False))
 
 
+def _patch_checkpoint_loader_simple_int8_scope() -> bool:
+    """Stock CheckpointLoaderSimple path (v0.40+): comfy.sd.load_checkpoint_guess_config
+    never opens the INT8 conv scope, so an SDXL INT8 pack loads its conv weights as
+    raw int8 values cast to fp16 (v0.44 stock MixedPrecisionOps has no Conv2d class
+    and no ConvRot handling) - the model then produces inf/NaN (black images).
+
+    Wrap load_checkpoint_guess_config: when the checkpoint is an SDXL/SD1.5-style
+    INT8 pack (block keys present), open _int8_quant_conv_scope() around the load
+    so mixed_precision_ops injects the HSWQ quantized Conv2d. Every other path
+    (Krea2, DiT, MOSS) is untouched - detection is scope-wide and any other
+    checkpoint that lacks the SDXL/SD1.5 block keys bypasses the wrapper logic.
+    """
+    try:
+        import comfy.sd as sd_module
+        import comfy.utils as utils_module
+    except ImportError:
+        return False
+    original = getattr(sd_module, "load_checkpoint_guess_config", None)
+    if original is None or getattr(original, "_hswq_int8_conv_scope_patched", False):
+        return True
+
+    def load_checkpoint_guess_config_scope(*args, **kwargs):
+        open_scope = False
+        try:
+            ckpt_paths = args[0] if args else None
+            if isinstance(ckpt_paths, (str, os.PathLike)):
+                path = os.fspath(ckpt_paths)
+            elif isinstance(ckpt_paths, (list, tuple)) and ckpt_paths:
+                path = os.fspath(ckpt_paths[0])
+            else:
+                path = None
+            if path is not None:
+                from safetensors import safe_open
+                with safe_open(path, framework="pt", device="cpu") as f:
+                    keys = list(f.keys())
+                open_scope = _keys_need_hswq_int8_conv2d(keys)
+        except Exception:
+            open_scope = False
+        if not open_scope:
+            return original(*args, **kwargs)
+        with _int8_quant_conv_scope():
+            return original(*args, **kwargs)
+
+    load_checkpoint_guess_config_scope._hswq_int8_conv_scope_patched = True
+    sd_module.load_checkpoint_guess_config = load_checkpoint_guess_config_scope
+    return True
+
+
 def _module_path_is_real_nunchaku_package(mod: str) -> bool:
     """True only for real Nunchaku package modules — never this unofficial-loader.
 
@@ -3333,6 +3381,14 @@ def apply_comfy_quant_int8_patches() -> bool:
     ok_controllora = _patch_controllora_int8_dequant()
     # Re-apply ops when patch version bumps (e.g. Conv2d inject gate change).
     ok_ops = _patch_ops_decode_and_conv()
+    # Stock CheckpointLoaderSimple path: open the INT8 conv scope around
+    # load_checkpoint_guess_config when the checkpoint is an SDXL/SD1.5 INT8 pack
+    # (v0.44 stock MixedPrecisionOps has no Conv2d, so without this the conv
+    # weights load as raw int8 lambda casts to fp16 -> inf/NaN black images).
+    try:
+        _patch_checkpoint_loader_simple_int8_scope()
+    except Exception as e:
+        logger.debug("[HSWQ INT8] checkpoint loader scope patch failed: %s", e)
     if _PATCHES_APPLIED:
         return True
     ok_utils = _patch_convert_old_quants()
@@ -3802,3 +3858,21 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
         sdxl_cls.load_checkpoint = load_checkpoint
 
     return True
+
+def _hswq_ensure_loader_scope_at_import() -> None:
+    """Import-time install of the stock CheckpointLoaderSimple INT8 conv scope.
+
+    Without this, an SDXL INT8 checkpoint loaded via the stock CheckpointLoaderSimple
+    node goes through comfy's pick_operations -> mixed_precision_ops with no Conv2d
+    class injected (scope closed). v0.44's stock MixedPrecisionOps has no Conv2d, so
+    the int8 weights load as raw int8 values cast to fp16 and the model converts the
+    forward to inf/NaN (black images). Scoped explicitly to SDXL/SD1.5-style INT8
+    packs; Krea2/DiT/MOSS load paths are untouched.
+    """
+    try:
+        _patch_checkpoint_loader_simple_int8_scope()
+    except Exception:
+        pass
+
+
+_hswq_ensure_loader_scope_at_import()
