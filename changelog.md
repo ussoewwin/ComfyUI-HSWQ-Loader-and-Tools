@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.9
+
+- **Added**: **quantized Conv2d support for ControlNet models** - ControlNet packs so far kept every Conv2d weight in FP16, which capped the size reduction: an SD1.5 ControlNet carries ~440 MB of 3×3 conv weights (64 % of the file) that never left FP16, so a pack stayed at ~15.9 % reduction while the Linear half alone shrank 44 %. The loaders now inject the HSWQ quantized Conv2d (rotation along in_channels, per-out-channel scale `[out, 1, 1, 1]`, online activation rotation) when a checkpoint actually carries quantized Conv2d layers:
+  - **Detection**: `_has_int8_comfy_quant_conv2d()` in both `nodes/hswq_load_convrot_int8_controlnet.py` and `nodes/hswq_model_patch_loader.py` returns True only when an `int8_tensorwise` `comfy_quant` layer sits on a 4D weight. Packs whose quantized layers are all Linear keep the previous load path byte for byte.
+  - **Injection**: `custom_operations` is now built inside `_int8_quant_conv_scope()`, and `_patch_ops_decode_and_conv()` is applied explicitly - without it the ops class carries no Conv2d and the int8 payload is read as float. A failed patch raises and stops the load instead of passing silently.
+  - **Measured (SD1.5 recolor ControlNet, Conv2d 24 of 61 quantized - the other 37 have in_channels not divisible by the group size)**: pack 607,603,903 B → 411,127,471 B (**43.1 % reduction**, −187.4 MiB); route declared 77 / INT8 77 / not applied 0; output difference vs source cosine mean 0.9996957 / min 0.9996680; 256-item gate mean 0.999861 / min 0.999834 PASS; rendered frame inspected, no artefacts. The Linear-only pack measured cosine mean 0.9997190 / min 0.9996969 - the Conv2d half costs 2.3e-05 of cosine for 187.4 MiB.
+  - **Regression**: an existing Linear-only ControlNet pack loads unchanged (`applies`, 53/53) and the Qwen-Image model patch path loads unchanged (602 tensors).
+- See [Release Notes v3.6.9](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.6.9) for details.
+
 ## Version 3.6.8
 
 - **Fixed**: **SDXL ConvRot INT8 black images on the stock CheckpointLoaderSimple path (ComfyUI v0.44)** - after the ComfyUI v0.44.0 update, an SDXL ConvRot INT8 checkpoint loaded through the stock `CheckpointLoaderSimple` node produced a completely black image (success status, all-NaN latents):

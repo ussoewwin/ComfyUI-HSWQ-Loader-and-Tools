@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.6.9
+
+- 新增：**ControlNet 模型的量化 Conv2d 支持** -- 此前的 ControlNet pack 将全部 Conv2d 权重保留在 FP16，压缩率因此受限：SD1.5 ControlNet 携带约 440 MB 的 3×3 conv 权重（占文件 64%），从未离开 FP16，pack 压缩率停留在约 15.9%，而 Linear 半边单独压缩了 44%。当 checkpoint 实际携带量化 Conv2d 层时，加载器现在注入 HSWQ 量化 Conv2d（沿 in_channels 旋转、per-out-channel scale `[out, 1, 1, 1]`、在线激活旋转）：
+  - **检测**：`nodes/hswq_load_convrot_int8_controlnet.py` 与 `nodes/hswq_model_patch_loader.py` 中新增 `_has_int8_comfy_quant_conv2d()`，仅当某个 `int8_tensorwise` `comfy_quant` 层落在 4D 权重上时返回 True。量化层全为 Linear 的 pack 加载路径逐字节保持不变。
+  - **注入**：`custom_operations` 现在在 `_int8_quant_conv_scope()` 内构建，并显式应用 `_patch_ops_decode_and_conv()` -- 没有它 ops 类上没有 Conv2d，int8 载荷会被当作 float 读取。patch 失败将抛出并中止加载，而不是静默通过。
+  - **实测（SD1.5 recolor ControlNet，61 个 Conv2d 中量化 24 个 -- 其余 37 个 in_channels 不能被 group size 整除）**：pack 607,603,903 B → 411,127,471 B（**压缩率 43.1%**，−187.4 MiB）；route declared 77 / INT8 77 / not applied 0；与 source 的输出差 cosine mean 0.9996957 / min 0.9996680；256 项 gate mean 0.999861 / min 0.999834 PASS；渲染帧目视检查无伪影。仅 Linear 的 pack 实测 cosine mean 0.9997190 / min 0.9996969 -- Conv2d 一半以 2.3e-05 的 cosine 代价换来 187.4 MiB。
+  - **回归**：既有仅 Linear 的 ControlNet pack 加载不变（`applies`，53/53），Qwen-Image model patch 路径加载不变（602 张量）。
+- 查看 [发布说明 v3.6.9](v3.6.9.md)
+
 ## Version 3.6.8
 
 - 修复：**SDXL ConvRot INT8 走 stock CheckpointLoaderSimple 时输出全黑图（ComfyUI v0.44 更新后）** -- ComfyUI 更新至 v0.44.0 后，通过 stock `CheckpointLoaderSimple` 节点加载 SDXL ConvRot INT8 checkpoint 会出现整图全黑（任务状态 success、latent 全为 NaN）：
