@@ -73,6 +73,26 @@ def _has_int8_comfy_quant(sd: dict) -> bool:
     return False
 
 
+def _has_int8_comfy_quant_conv2d(sd: dict) -> bool:
+    """True if an int8_tensorwise comfy_quant layer sits on a 4D (Conv2d) weight.
+
+    Only that kind of checkpoint needs the HSWQ quantized Conv2d injected; a pack
+    whose comfy_quant layers are all Linear loads through the plain
+    MixedPrecisionOps graph exactly as before.
+    """
+    for key in sd.keys():
+        if not key.endswith(".comfy_quant"):
+            continue
+        base = key[: -len(".comfy_quant")]
+        weight = sd.get(base + ".weight")
+        if weight is None or getattr(weight, "ndim", 0) != 4:
+            continue
+        conf = _decode_comfy_quant(sd[key])
+        if conf.get("format") == "int8_tensorwise":
+            return True
+    return False
+
+
 def _get_default_compute_dtype(device: torch.device | None = None) -> torch.dtype:
     """Select BF16 on modern GPUs (Ampere/Ada/Blackwell) or FP16 on Turing/older GPUs."""
     if device is None:
@@ -247,12 +267,39 @@ class HSWQControlNetLoader:
                 _patch_comfy_kitchen_int8_gemm_fallback()
             except Exception:
                 pass
-            model_options = {
-                # Build the module graph in float; quantized weights are
-                # attached by MixedPrecisionOps during state_dict load.
-                "dtype": compute_dtype,
-                "custom_operations": _int8_mixed_precision_ops(compute_dtype=compute_dtype),
-            }
+            if _has_int8_comfy_quant_conv2d(sd):
+                # Idempotent: makes mixed_precision_ops carry the HSWQ quantized
+                # Conv2d class while the INT8 conv scope is open. A silent miss
+                # would load the int8 payload as a float Conv2d and blow the
+                # output up, so a failure stops the load instead of passing.
+                from ..patches.comfy_quant_int8 import _patch_ops_decode_and_conv
+
+                if not _patch_ops_decode_and_conv():
+                    raise RuntimeError(
+                        "[HSWQ INT8 CN] quantized Conv2d patch failed to install; "
+                        f"refusing to load {control_net_name} (its int8 Conv2d "
+                        "weights would be read as float)"
+                    )
+            if _has_int8_comfy_quant_conv2d(sd):
+                # Conv2d quantized layers: build the ops inside the HSWQ INT8 conv
+                # scope, otherwise the mixed_precision_ops result carries no
+                # Conv2d class and the int8 payload loads as a float Conv2d.
+                from ..patches.comfy_quant_int8 import _int8_quant_conv_scope
+
+                with _int8_quant_conv_scope():
+                    model_options = {
+                        # Build the module graph in float; quantized weights are
+                        # attached by MixedPrecisionOps during state_dict load.
+                        "dtype": compute_dtype,
+                        "custom_operations": _int8_mixed_precision_ops(compute_dtype=compute_dtype),
+                    }
+            else:
+                model_options = {
+                    # Build the module graph in float; quantized weights are
+                    # attached by MixedPrecisionOps during state_dict load.
+                    "dtype": compute_dtype,
+                    "custom_operations": _int8_mixed_precision_ops(compute_dtype=compute_dtype),
+                }
             logger.info(
                 "[HSWQ INT8 CN] INT8 ComfyQuant detected: loading %s with "
                 "MixedPrecisionOps (%s, weights stay INT8 in VRAM)",
@@ -266,9 +313,26 @@ class HSWQControlNetLoader:
                 control_net_name,
             )
 
-        control = comfy.controlnet.load_controlnet_state_dict(
-            sd, model_options=model_options
-        )
+        if _has_int8_comfy_quant_conv2d(sd):
+            # Conv2d quantized layers: open the HSWQ INT8 conv scope so
+            # mixed_precision_ops injects the quantized Conv2d (online activation
+            # rotate + per-out-channel scale) instead of a plain float Conv2d that
+            # would read the int8 payload as float and blow the output up.
+            from ..patches.comfy_quant_int8 import _int8_quant_conv_scope
+
+            logger.info(
+                "[HSWQ INT8 CN] Conv2d INT8 layers detected: injecting HSWQ quantized "
+                "Conv2d while loading %s",
+                control_net_name,
+            )
+            with _int8_quant_conv_scope():
+                control = comfy.controlnet.load_controlnet_state_dict(
+                    sd, model_options=model_options
+                )
+        else:
+            control = comfy.controlnet.load_controlnet_state_dict(
+                sd, model_options=model_options
+            )
         if control is None:
             raise RuntimeError(
                 f"[HSWQ INT8 CN] Failed to detect controlnet in {control_net_name}"

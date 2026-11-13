@@ -240,6 +240,25 @@ def _has_int8_comfy_quant(sd) -> bool:
     return False
 
 
+def _has_int8_comfy_quant_conv2d(sd) -> bool:
+    """True if an int8_tensorwise comfy_quant layer sits on a 4D (Conv2d) weight.
+
+    Only that kind of checkpoint needs the HSWQ quantized Conv2d injected; a pack
+    whose comfy_quant layers are all Linear keeps the plain MixedPrecisionOps graph.
+    """
+    for key in sd.keys():
+        if not key.endswith(".comfy_quant"):
+            continue
+        base = key[: -len(".comfy_quant")]
+        weight = sd.get(base + ".weight")
+        if weight is None or getattr(weight, "ndim", 0) != 4:
+            continue
+        conf = _decode_comfy_quant(sd[key])
+        if conf.get("format") == "int8_tensorwise":
+            return True
+    return False
+
+
 def _get_default_compute_dtype(device: torch.device | None = None) -> torch.dtype:
     """Select BF16 on modern GPUs (Ampere/Ada/Blackwell) or FP16 on Turing/older GPUs."""
     if device is None:
@@ -314,7 +333,31 @@ class HSWQModelPatchLoaderCustom:
             except Exception:
                 pass
             dtype = _get_default_compute_dtype()
-            operations = _int8_mixed_precision_ops(compute_dtype=dtype)
+            if _has_int8_comfy_quant_conv2d(sd):
+                # Conv2d quantized layers present: build the ops under the HSWQ
+                # INT8 conv scope so the quantized Conv2d class is injected
+                # (online activation rotate + per-out-channel scale). A silent
+                # miss would read the int8 payload as float and explode the
+                # patch output, so a failed patch stops the load.
+                from ..patches.comfy_quant_int8 import (
+                    _int8_quant_conv_scope,
+                    _patch_ops_decode_and_conv,
+                )
+
+                if not _patch_ops_decode_and_conv():
+                    raise RuntimeError(
+                        "[HSWQ ModelPatch] quantized Conv2d patch failed to install; "
+                        f"refusing to load {name} (its int8 Conv2d weights would be "
+                        "read as float)"
+                    )
+                logger.info(
+                    "[HSWQ ModelPatch] Conv2d INT8 layers detected in '%s': "
+                    "injecting HSWQ quantized Conv2d", name,
+                )
+                with _int8_quant_conv_scope():
+                    operations = _int8_mixed_precision_ops(compute_dtype=dtype)
+            else:
+                operations = _int8_mixed_precision_ops(compute_dtype=dtype)
             logger.info(
                 "[HSWQ ModelPatch] INT8 ComfyQuant detected in '%s': loading with "
                 "MixedPrecisionOps (weights stay INT8 / ConvRot)", name,
