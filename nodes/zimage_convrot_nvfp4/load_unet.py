@@ -234,7 +234,10 @@ def _install_permanent_dynamic_load_guard() -> None:
 
     def _guarded_load(self, *args, **kwargs):
         try:
-            _ensure_dynamic_load_bake_wrap()
+            from .nvfp4_lora_bake import _patcher_is_zi_nvfp4_pack
+
+            if _patcher_is_zi_nvfp4_pack(self):
+                _ensure_dynamic_load_bake_wrap()
         except Exception:
             pass
         return cur(self, *args, **kwargs)
@@ -313,6 +316,12 @@ def load_unet_nvfp4_weight_dtype(unet_name, weight_dtype, **kwargs):
     )
     with _int8_quant_conv_scope():
         model = comfy.sd.load_diffusion_model(unet_path, model_options={})
+    try:
+        model._hswq_zi_nvfp4_pack = True
+        if getattr(model, "model", None) is not None:
+            model.model._hswq_zi_nvfp4_pack = True
+    except Exception:
+        pass
     summarize_int8_lora_capability(model)
     return (model,)
 
@@ -364,8 +373,6 @@ def install_zimage_nvfp4_unet_dispatch(node_class_mappings=None) -> bool:
 
     def load_unet(self, unet_name, weight_dtype, **kwargs):
         # Pass through any loader options (e.g. attention_accel) unchanged.
-        _ensure_dynamic_load_bake_wrap()
-        _install_permanent_dynamic_load_guard()
         if weight_dtype in _fp8:
             return _prev(self, unet_name, weight_dtype, **kwargs)
         if weight_dtype == ZI_NVFP4_WEIGHT_DTYPE:

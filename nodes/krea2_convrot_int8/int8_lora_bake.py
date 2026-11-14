@@ -124,7 +124,7 @@ def _bake_keys_on_module(patcher, module, keys_to_bake, device_to, already) -> i
 
 
 def _extract_lora_residual(patcher, key):
-    """Extract rank-decomposed LoRA (A=down, B=up, scale) from a patch list.
+    """Extract rank-decomposed LoRA (A=down, B=up, scale, offset) from a patch list.
 
     Small LoRA deltas are ~0.1-0.8% of weight amax vs the ~amax/127 INT8
     requant step, so instead of
@@ -147,8 +147,18 @@ def _extract_lora_residual(patcher, key):
         strength_model = p[2]
         offset = p[3]
         function = p[4]
-        if offset is not None or function is not None:
+        if function is not None:
             return None
+        off_tuple = None
+        if offset is not None:
+            if (
+                isinstance(offset, (tuple, list))
+                and len(offset) == 3
+                and int(offset[0]) == 0
+            ):
+                off_tuple = (int(offset[1]), int(offset[2]))
+            else:
+                return None
         if float(strength_model) != 1.0:
             # strength_model scales the BASE weight; residual path keeps the
             # base packed (unscaled), so fall back to the requantize bake.
@@ -166,6 +176,12 @@ def _extract_lora_residual(patcher, key):
         reshape = weights[5] if len(weights) > 5 else None
         if mid is not None or dora_scale is not None or reshape is not None:
             return None
+        if getattr(mat_up, "ndim", 0) > 2:
+            mat_up = mat_up.flatten(start_dim=1)
+        if getattr(mat_dn, "ndim", 0) > 2:
+            mat_dn = mat_dn.flatten(start_dim=1)
+        if getattr(mat_up, "ndim", 0) != 2 or getattr(mat_dn, "ndim", 0) != 2:
+            return None
         if alpha is not None:
             try:
                 alpha = alpha / mat_dn.shape[0]
@@ -174,7 +190,7 @@ def _extract_lora_residual(patcher, key):
         else:
             alpha = 1.0
         scale = float(strength) * float(alpha)
-        residual.append((mat_dn, mat_up, scale))
+        residual.append((mat_dn, mat_up, scale, off_tuple))
     return residual or None
 
 
@@ -195,11 +211,13 @@ def _bake_residual_keys_on_module(patcher, module, keys_to_bake, device_to, alre
             res = _extract_lora_residual(patcher, key)
         if res is not None:
             module._hswq_krea2_lora_res = res
+            module._hswq_krea2_lora_name = key
             if hasattr(module, "_hswq_krea2_lora_res_gpu"):
                 delattr(module, "_hswq_krea2_lora_res_gpu")
             n_residual += 1
         else:
-            patcher.patch_weight_to_device(key, device_to=device_to)
+            w_dev = getattr(getattr(module, "weight", None), "device", None) or device_to
+            patcher.patch_weight_to_device(key, device_to=w_dev)
             n_requant += 1
         if key in patcher.backup:
             try:
@@ -231,6 +249,7 @@ def _iter_patch_weight_keys(patcher):
         yield key, module_path, param_key, module
 
 
+def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
     """Bake leftover QT LoRA (ConvRot INT8 protect etc.).
 
     INT8 protect ConvRot Linears use ``_hswq_int8_convrot`` + cleared Params (Conv2d twin) via
@@ -258,6 +277,9 @@ def _iter_patch_weight_keys(patcher):
 
     already = _get_baked_key_set(patcher.model)
     uuid = getattr(patcher, "patches_uuid", None)
+    prev_uuid = getattr(patcher.model, "_hswq_krea2_int8_baked_uuid", None)
+    if prev_uuid is not None and prev_uuid != uuid:
+        already.clear()
 
     by_module: dict = {}
     modules: dict = {}
@@ -427,9 +449,17 @@ def run_krea2_int8_lora_bake_on_patcher(patcher, device_to=None, reason: str = "
     has_baked = bool(getattr(model, "_hswq_krea2_int8_baked_keys", None))
     patches = getattr(patcher, "patches", None) or {}
     n_patches = len(patches)
+    _uuid = getattr(patcher, "patches_uuid", None)
+    _last_uuid = getattr(model, "_hswq_krea2_int8_baked_uuid", None)
+    # Idempotency: if this patcher's LoRA run was already baked (same
+    # patches_uuid) and all target patches were consumed (or only non-QT float
+    # patches remain), do not clear the residuals we just baked!
+    if _uuid is not None and _last_uuid == _uuid and (has_baked or n_patches == 0):
+        return True
     if n_patches == 0:
-        # LoRA removed (or none): wipe residuals left by any previous bake on
-        # this shared inner model so "LoRA off" really turns it off.
+        # LoRA removed (or none) under a NEW patches_uuid: wipe residuals left
+        # by any previous bake on this shared inner model so "LoRA off" really
+        # turns it off.
         if has_baked or any(
             hasattr(m, "_hswq_krea2_lora_res")
             for _n, m in model.named_modules()
@@ -439,20 +469,16 @@ def run_krea2_int8_lora_bake_on_patcher(patcher, device_to=None, reason: str = "
                 model._hswq_krea2_int8_baked_keys = set()
             except Exception:
                 pass
+        model._hswq_krea2_int8_baked_uuid = _uuid
         return False
-    # Keep only keys this patcher still patches; clear stale residuals first.
-    # Idempotency: if this patcher's LoRA run was already baked (same
-    # patches_uuid), the only patches left are non-QT (float) layers that the
-    # bake intentionally leaves for the stock path. Re-entering here (the
-    # load_models_gpu hook fires after Dynamic.load) would clear the residuals
-    # we just baked, because _clear_stale_lora_residuals only keeps the
-    # leftover patch keys. Skip instead.
-    _uuid = getattr(patcher, "patches_uuid", None)
-    if _uuid is not None and getattr(
-        model, "_hswq_krea2_int8_baked_uuid", None
-    ) == _uuid:
-        return True
-    _clear_stale_lora_residuals(patcher, set(patches.keys()))
+    if _last_uuid is not None and _uuid != _last_uuid:
+        _clear_stale_lora_residuals(patcher, set())
+        try:
+            model._hswq_krea2_int8_baked_keys = set()
+        except Exception:
+            pass
+    else:
+        _clear_stale_lora_residuals(patcher, set(patches.keys()))
     if device_to is None:
         device_to = getattr(patcher, "load_device", None)
     rem_stats = bake_remaining_quant_patches_on_dynamic_patcher(
@@ -533,6 +559,28 @@ def uninstall_krea2_int8_lora_bake() -> bool:
                         else ""
                     )
                 )
+        Legacy = getattr(mp, "ModelPatcher", None)
+        if Legacy is not None:
+            cur_leg = getattr(Legacy, "load", None)
+            if getattr(cur_leg, "_hswq_krea2_int8_legacy_bake", False):
+                while getattr(cur_leg, "_hswq_krea2_int8_legacy_bake", False):
+                    nxt = getattr(cur_leg, "_hswq_krea2_prev_legacy_load", None)
+                    if nxt is None or nxt is cur_leg:
+                        break
+                    cur_leg = nxt
+                if cur_leg is not None:
+                    Legacy.load = cur_leg
+                    removed = True
+            cur_pl = getattr(Legacy, "partially_load", None)
+            if getattr(cur_pl, "_hswq_krea2_int8_legacy_pl_bake", False):
+                while getattr(cur_pl, "_hswq_krea2_int8_legacy_pl_bake", False):
+                    nxt = getattr(cur_pl, "_hswq_krea2_prev_legacy_pl", None)
+                    if nxt is None or nxt is cur_pl:
+                        break
+                    cur_pl = nxt
+                if cur_pl is not None:
+                    Legacy.partially_load = cur_pl
+                    removed = True
     try:
         import comfy.model_management as mm
     except ImportError:
@@ -598,6 +646,188 @@ def _deep_clean_dynamic_load(load_fn):
             break
         break
     return cur, discarded_int8
+
+
+def _krea2_legacy_target_keys(patcher) -> set:
+    """Keys whose ConvRot INT8 QT the Krea2 bake consumes.
+
+    Only these are hidden from the legacy stock load; every other patch key
+    (float layers, non-convrot QT, biases without a set_weight) keeps the stock
+    behaviour byte for byte.
+    """
+    try:
+        import comfy.model_patcher as mp
+        from comfy.quant_ops import QuantizedTensor
+    except ImportError:
+        return set()
+    keys = set()
+    for key, _module_path, _param_key, _module in list(_iter_patch_weight_keys(patcher)):
+        try:
+            weight, set_func, _convert = mp.get_key_weight(patcher.model, key)
+        except Exception:
+            continue
+        if weight is None or set_func is None:
+            continue
+        if _qt_payload(weight, QuantizedTensor) is None:
+            continue
+        keys.add(key)
+    return keys
+
+
+def install_krea2_int8_lora_bake_legacy(force: bool = False) -> bool:
+    """Bake Krea2 INT8 ConvRot LoRA on LEGACY ModelPatcher.load and partially_load.
+
+    Measured root cause: the bake hook above decorates only
+    ``ModelPatcherDynamic.load``. The DisTorch2 node clones with
+    ``disable_dynamic=True`` and replaces ``ModelPatcher.partially_load`` with
+    ``new_partially_load`` (which calls ``patch_weight_to_device`` directly
+    without calling ``ModelPatcher.load``). Wrapping both ``partially_load`` and
+    ``load`` hides ConvRot INT8 keys from the stock/DisTorch2 load and runs the
+    low-rank residual bake instead.
+    """
+    try:
+        import comfy.model_patcher as mp
+    except ImportError:
+        return False
+    Legacy = getattr(mp, "ModelPatcher", None)
+    if Legacy is None:
+        return False
+    original = getattr(Legacy, "load", None)
+    if original is None:
+        return False
+
+    orig_pl = getattr(Legacy, "partially_load", None)
+    if orig_pl is not None and (
+        force
+        or not getattr(orig_pl, "_hswq_krea2_int8_legacy_pl_bake", False)
+        or getattr(orig_pl, "_hswq_krea2_int8_legacy_pl_bake_ver", 0) < _BAKE_HOOK_VER
+    ):
+        prev_pl = orig_pl
+        while getattr(prev_pl, "_hswq_krea2_int8_legacy_pl_bake", False):
+            nxt = getattr(prev_pl, "_hswq_krea2_prev_legacy_pl", None)
+            if nxt is None or nxt is prev_pl:
+                break
+            prev_pl = nxt
+
+        def partially_load(self, device_to, extra_memory=0, force_patch_weights=False):
+            try:
+                if self.is_dynamic():
+                    return prev_pl(
+                        self,
+                        device_to,
+                        extra_memory=extra_memory,
+                        force_patch_weights=force_patch_weights,
+                    )
+            except Exception:
+                pass
+            if not (
+                bool(getattr(getattr(self, "model", None), "_hswq_bake_enabled", True))
+                and _patcher_is_krea2_pack(self)
+            ):
+                return prev_pl(
+                    self,
+                    device_to,
+                    extra_memory=extra_memory,
+                    force_patch_weights=force_patch_weights,
+                )
+            hidden = {}
+            try:
+                if getattr(self, "patches", None):
+                    for key in _krea2_legacy_target_keys(self) & set(self.patches.keys()):
+                        hidden[key] = self.patches.pop(key)
+            except Exception as exc:
+                _console(f"[HSWQ Krea2 INT8 LoRA] legacy partially_load scan error: {exc!r}")
+            try:
+                result = prev_pl(
+                    self,
+                    device_to,
+                    extra_memory=extra_memory,
+                    force_patch_weights=force_patch_weights,
+                )
+            finally:
+                if hidden:
+                    self.patches.update(hidden)
+            if hidden or not getattr(self, "patches", None):
+                try:
+                    run_krea2_int8_lora_bake_on_patcher(
+                        self, device_to=device_to, reason="legacy partially_load"
+                    )
+                except Exception as exc:
+                    _console(f"[HSWQ Krea2 INT8 LoRA] legacy partially_load bake error: {exc!r}")
+            return result
+
+        partially_load._hswq_krea2_int8_legacy_pl_bake = True  # type: ignore[attr-defined]
+        partially_load._hswq_krea2_int8_legacy_pl_bake_ver = _BAKE_HOOK_VER  # type: ignore[attr-defined]
+        partially_load._hswq_krea2_prev_legacy_pl = prev_pl  # type: ignore[attr-defined]
+        Legacy.partially_load = partially_load
+
+    if (
+        not force
+        and getattr(original, "_hswq_krea2_int8_legacy_bake", False)
+        and getattr(original, "_hswq_krea2_int8_legacy_bake_ver", 0) >= _BAKE_HOOK_VER
+    ):
+        return True
+    prev_load = original
+    while getattr(prev_load, "_hswq_krea2_int8_legacy_bake", False):
+        nxt = getattr(prev_load, "_hswq_krea2_prev_legacy_load", None)
+        if nxt is None or nxt is prev_load:
+            break
+        prev_load = nxt
+
+    def load(
+        self,
+        device_to=None,
+        lowvram_model_memory=0,
+        force_patch_weights=False,
+        full_load=False,
+    ):
+        if not (
+            bool(getattr(getattr(self, "model", None), "_hswq_bake_enabled", True))
+            and _patcher_is_krea2_pack(self)
+        ):
+            return prev_load(
+                self,
+                device_to=device_to,
+                lowvram_model_memory=lowvram_model_memory,
+                force_patch_weights=force_patch_weights,
+                full_load=full_load,
+            )
+        hidden = {}
+        try:
+            if getattr(self, "patches", None):
+                for key in _krea2_legacy_target_keys(self) & set(self.patches.keys()):
+                    hidden[key] = self.patches.pop(key)
+        except Exception as exc:
+            _console(f"[HSWQ Krea2 INT8 LoRA] legacy pre-load scan error: {exc!r}")
+        try:
+            result = prev_load(
+                self,
+                device_to=device_to,
+                lowvram_model_memory=lowvram_model_memory,
+                force_patch_weights=force_patch_weights,
+                full_load=full_load,
+            )
+        finally:
+            if hidden:
+                self.patches.update(hidden)
+        if hidden or not getattr(self, "patches", None):
+            try:
+                run_krea2_int8_lora_bake_on_patcher(
+                    self, device_to=device_to, reason="legacy load"
+                )
+            except Exception as exc:
+                _console(f"[HSWQ Krea2 INT8 LoRA] legacy load bake error: {exc!r}")
+        return result
+
+    load._hswq_krea2_int8_legacy_bake = True  # type: ignore[attr-defined]
+    load._hswq_krea2_int8_legacy_bake_ver = _BAKE_HOOK_VER  # type: ignore[attr-defined]
+    load._hswq_krea2_prev_legacy_load = prev_load  # type: ignore[attr-defined]
+    Legacy.load = load
+    _console(
+        f"[HSWQ Krea2 INT8 LoRA] legacy ModelPatcher.load+partially_load bake hook ON "
+        f"v{_BAKE_HOOK_VER} (hide ConvRot INT8 keys -> family bake)"
+    )
+    return True
 
 
 def install_krea2_int8_lora_bake(force: bool = False) -> bool:
@@ -683,6 +913,12 @@ def install_krea2_int8_lora_bake(force: bool = False) -> bool:
         f"[HSWQ Krea2 INT8 LoRA] Dynamic.load bake hook ON v{_BAKE_HOOK_VER} "
         "(Krea2 INT8 QT LoRA bake + load_models_gpu)"
     )
+    try:
+        install_krea2_int8_lora_bake_legacy(force=force)
+    except Exception as e:
+        logger.warning(
+            "[HSWQ Krea2 INT8 LoRA] legacy load bake hook skipped: %s", e
+        )
     try:
         install_load_models_gpu_bake_hook(force=True)
     except Exception as e:

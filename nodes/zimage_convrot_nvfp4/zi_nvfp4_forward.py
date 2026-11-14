@@ -224,9 +224,17 @@ def _linear_convrot_lora_groupsize(module) -> int | None:
         return int(getattr(module, "_hswq_nvfp4_convrot_groupsize", 256) or 256)
     if getattr(module, "_hswq_int8_convrot", False):
         return int(getattr(module, "_hswq_int8_convrot_groupsize", 256) or 256)
-    # Late arm if load missed: Params.convrot still True on INT8 QT.
+    # Late arm if load missed on the comfy_parity path ONLY.
+    # On the TC path (forward_nvfp4), INT8 layers run stock_forward (ck.int8_linear)
+    # which reads Params.convrot=True natively; clearing Params.convrot there would
+    # disable activation rotation while leaving weights rotated.
     try:
+        import comfy.ops as _ops
         from comfy.quant_ops import QuantizedTensor
+
+        _fwd = getattr(_ops.mixed_precision_ops().Linear, "forward", None)
+        if not getattr(_fwd, "_hswq_nvfp4_convrot_parity", False):
+            return None
 
         w = getattr(module, "weight", None)
         qt = w if isinstance(w, QuantizedTensor) else getattr(w, "data", None)
@@ -454,6 +462,99 @@ def _tc_forward_pooled(module, input_2d, weight_qt, bias, act_scale, out_dtype):
         return None
 
 
+_ZI_RES_APPLIED = 0
+_ZI_RES_LOGGED = set()
+_ZI_RES_LOG_MAX = 6
+_ZI_RES_COUNT_LOGGED = 0
+
+
+def add_zi_lora_residual(module, inp, out):
+    """Add the baked low-rank LoRA residual to a ZI forward output.
+
+    NVFP4 requant cannot carry a LoRA delta (4-bit step ~amax/16 vs a
+    0.1-0.8% amax delta; measured kept_ratio 0.00-0.19 on the hybrid pack), so
+    the delta is kept as a rank-decomposed residual in the ORIGINAL weight
+    basis and re-added on the layer output. The output is always in the
+    original basis (ConvRot activation rotation is internal and
+    Hadamard-orthogonal), so the add is basis-exact. ``inp`` must be the RAW
+    layer input (before act rotation).
+    """
+    import torch
+
+    res = getattr(module, "_hswq_zi_lora_res", None)
+    if res is None or out is None:
+        return out
+    dev = inp.device
+    dt = getattr(inp, "dtype", None)
+    if dt is None:
+        return out
+    cache = getattr(module, "_hswq_zi_lora_res_gpu", None)
+    if cache is None or cache[0] != dev or cache[1] != dt:
+        cache = (
+            dev,
+            dt,
+            [
+                (
+                    item[0].to(device=dev, dtype=dt),
+                    item[1].to(device=dev, dtype=dt),
+                    item[2],
+                    item[3] if len(item) > 3 else None,
+                )
+                for item in res
+            ],
+        )
+        module._hswq_zi_lora_res_gpu = cache
+    acc = None
+    for md, mu, sc, off in cache[2]:
+        if sc == 0.0:
+            continue
+        term = torch.matmul(torch.matmul(inp, md.t()), mu.t())
+        if sc != 1.0:
+            term = term * sc
+        if off is not None:
+            o_start, o_len = off
+            if acc is None:
+                acc = torch.zeros_like(out)
+            if term.shape[:-1] != acc.shape[:-1]:
+                term = term.reshape(*acc.shape[:-1], o_len)
+            acc[..., o_start : o_start + o_len] = (
+                acc[..., o_start : o_start + o_len] + term
+            )
+        else:
+            if acc is not None and term.shape != acc.shape:
+                term = term.reshape(acc.shape)
+            acc = term if acc is None else acc + term
+    if acc is None:
+        return out
+    if acc.shape != out.shape:
+        acc = acc.reshape(out.shape)
+    global _ZI_RES_APPLIED, _ZI_RES_COUNT_LOGGED
+    _ZI_RES_APPLIED += 1
+    name = getattr(module, "_hswq_zi_lora_res_name", None) or type(module).__name__
+    if name not in _ZI_RES_LOGGED and len(_ZI_RES_LOGGED) < _ZI_RES_LOG_MAX:
+        _ZI_RES_LOGGED.add(name)
+        try:
+            rn = float(acc.float().norm())
+            on = float(out.float().norm())
+            ratio = (rn / on) if on > 0.0 else -1.0
+            sc = cache[2][0][2] if cache[2] else -1.0
+            msg = (
+                f"[HSWQ ZI NVFP4 LoRA] RESIDUAL FORWARD-APPLIED "
+                f"name={name} terms={len(cache[2])} scale={sc} "
+                f"|res|/|out|={ratio:.6f}"
+            )
+            print(msg, flush=True)
+            logger.info(msg)
+        except Exception as _e:
+            print(f"[HSWQ ZI NVFP4 LoRA] RESIDUAL log error: {_e!r}", flush=True)
+    if _ZI_RES_APPLIED >= _ZI_RES_COUNT_LOGGED + 256:
+        _ZI_RES_COUNT_LOGGED = _ZI_RES_APPLIED
+        msg = f"[HSWQ ZI NVFP4 LoRA] RESIDUAL count={_ZI_RES_APPLIED}"
+        print(msg, flush=True)
+        logger.info(msg)
+    return out + acc
+
+
 def make_nvfp4_linear_forward(stock_forward):
     """
     Return a Linear.forward replacement.
@@ -467,11 +568,29 @@ def make_nvfp4_linear_forward(stock_forward):
 
     def forward_nvfp4(self, input, *args, **kwargs):
         if not getattr(self, "_hswq_nvfp4", False) or getattr(self, "_full_precision_mm", False):
-            return stock_forward(self, input, *args, **kwargs)
+            raw_input = input
+            if getattr(self, "_hswq_int8_convrot", False):
+                gs = int(getattr(self, "_hswq_int8_convrot_groupsize", 256) or 256)
+                h = getattr(self, "_hswq_nvfp4_H", None)
+                if h is None or h.device != input.device or h.dtype != input.dtype:
+                    h = build_hadamard(gs, device=input.device, dtype=input.dtype)
+                    self._hswq_nvfp4_H = h
+                if input.ndim >= 3:
+                    in_2d = rotate_last_dim_pooled(
+                        input.reshape(-1, input.shape[-1]), h, gs
+                    )
+                    input = in_2d.reshape(input.shape)
+                elif input.ndim == 2:
+                    input = rotate_last_dim_pooled(input, h, gs)
+            return add_zi_lora_residual(
+                self, raw_input, stock_forward(self, input, *args, **kwargs)
+            )
 
         # Training / forced cast: fall back to stock
         if input.requires_grad or getattr(self, "comfy_force_cast_weights", False):
-            return stock_forward(self, input, *args, **kwargs)
+            return add_zi_lora_residual(
+                self, input, stock_forward(self, input, *args, **kwargs)
+            )
         # LoRA weight_function: stay on HSWQ path (act ConvRot + cast_bias_weight
         # with want_requant). Stock forward would skip act rotate → ConvRot break.
 
@@ -483,7 +602,9 @@ def make_nvfp4_linear_forward(stock_forward):
         reshaped_nd = input.ndim >= 3
         input_2d = input.reshape(-1, input_shape[-1]) if reshaped_nd else input
         if input_2d.ndim != 2:
-            return stock_forward(self, input, *args, **kwargs)
+            return add_zi_lora_residual(
+                self, input, stock_forward(self, input, *args, **kwargs)
+            )
 
         # 2) FULL ConvRot: dense Hadamard GEMM (gs=256 butterfly is ~15x slower)
         if getattr(self, "_hswq_nvfp4_convrot", False):
@@ -528,7 +649,9 @@ def make_nvfp4_linear_forward(stock_forward):
         if layout is None:
             if offload_stream is not None:
                 uncast_bias_weight(self, weight, bias, offload_stream)
-            return stock_forward(self, input, *args, **kwargs)
+            return add_zi_lora_residual(
+                self, input, stock_forward(self, input, *args, **kwargs)
+            )
 
         # 4) Pooled Tensor Core path (no QuantizedTensor.from_float alloc)
         out_2d = _tc_forward_pooled(
@@ -549,7 +672,7 @@ def make_nvfp4_linear_forward(stock_forward):
 
         if offload_stream is not None:
             uncast_bias_weight(self, weight, bias, offload_stream)
-        return out
+        return add_zi_lora_residual(self, input, out)
 
     forward_nvfp4._hswq_nvfp4_full_forward = True  # type: ignore[attr-defined]
     return forward_nvfp4

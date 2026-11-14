@@ -152,14 +152,153 @@ def _resolve_module(model, module_path: str):
         return None
 
 
-def _bake_keys_on_module(patcher, module, keys_to_bake, device_to, already) -> int:
-    """Clear LowVramPatch, patch_weight_to_device, drop backup+patches. Keep ``_v``."""
+def _extract_zi_lora_residual(patcher, key):
+    """Extract rank-decomposed LoRA (up, down, scale, offset) from a patch list.
+
+    Supports both full-layer patches (offset=None) and output-channel slice
+    patches (offset=(0, start, length), e.g. Z Image fused attention.qkv.weight
+    for to_q / to_k / to_v). Anything else returns None and falls back to the
+    requant bake.
+    """
+    try:
+        from comfy.weight_adapter.base import WeightAdapterBase
+    except ImportError:
+        return None
+    patches = getattr(patcher, "patches", {}).get(key)
+    if not patches:
+        return None
+    residual = []
+    for p in patches:
+        strength = p[0]
+        v = p[1]
+        strength_model = p[2]
+        offset = p[3]
+        function = p[4]
+        if function is not None:
+            return None
+        off_tuple = None
+        if offset is not None:
+            if not (
+                isinstance(offset, (tuple, list))
+                and len(offset) == 3
+                and int(offset[0]) == 0
+            ):
+                return None
+            o_start, o_len = int(offset[1]), int(offset[2])
+            if o_start < 0 or o_len <= 0:
+                return None
+            off_tuple = (o_start, o_len)
+        if float(strength_model) != 1.0:
+            return None
+        if not isinstance(v, WeightAdapterBase):
+            return None
+        weights = getattr(v, "weights", None)
+        if weights is None or len(weights) < 3:
+            return None
+        mat_up = weights[0]  # lora_B (up)   [out, rank]
+        mat_dn = weights[1]  # lora_A (down) [rank, in]
+        alpha = weights[2]
+        mid = weights[3] if len(weights) > 3 else None
+        dora_scale = weights[4] if len(weights) > 4 else None
+        reshape = weights[5] if len(weights) > 5 else None
+        if mid is not None or dora_scale is not None or reshape is not None:
+            return None
+        if getattr(mat_up, "ndim", 0) > 2 and all(
+            int(s) == 1 for s in mat_up.shape[2:]
+        ):
+            mat_up = mat_up.reshape(mat_up.shape[0], mat_up.shape[1])
+        if getattr(mat_dn, "ndim", 0) > 2 and all(
+            int(s) == 1 for s in mat_dn.shape[2:]
+        ):
+            mat_dn = mat_dn.reshape(mat_dn.shape[0], mat_dn.shape[1])
+        if getattr(mat_up, "ndim", 0) != 2 or getattr(mat_dn, "ndim", 0) != 2:
+            return None
+        if off_tuple is not None and int(mat_up.shape[0]) != off_tuple[1]:
+            return None
+        if alpha is not None:
+            try:
+                alpha = alpha / mat_dn.shape[0]
+            except Exception:
+                alpha = 1.0
+        else:
+            alpha = 1.0
+        scale = float(strength) * float(alpha)
+        residual.append((mat_dn, mat_up, scale, off_tuple))
+    return residual or None
+
+
+def _model_has_zi_lora_residuals(model) -> bool:
+    if model is None:
+        return False
+    for _name, module in model.named_modules():
+        if hasattr(module, "_hswq_zi_lora_res"):
+            return True
+    return False
+
+
+def _clear_zi_stale_lora_residuals(patcher, keep_keys) -> int:
+    """Drop residuals this run no longer wants (LoRA removed / swapped)."""
+    model = getattr(patcher, "model", None)
+    if model is None:
+        return 0
+    cleared = 0
+    for name, module in model.named_modules():
+        if not hasattr(module, "_hswq_zi_lora_res"):
+            continue
+        key = f"{name}.weight"
+        if key in keep_keys:
+            continue
+        try:
+            delattr(module, "_hswq_zi_lora_res")
+        except Exception:
+            pass
+        if hasattr(module, "_hswq_zi_lora_res_gpu"):
+            try:
+                delattr(module, "_hswq_zi_lora_res_gpu")
+            except Exception:
+                pass
+        cleared += 1
+    if cleared:
+        _console(
+            f"[HSWQ ZI NVFP4 LoRA] cleared {cleared} stale LoRA residual(s)"
+        )
+    return cleared
+
+
+def _bake_keys_on_module(patcher, module, keys_to_bake, device_to, already) -> tuple:
+    """Bake keys as a low-rank residual (exact) with requant fallback.
+
+    NVFP4 requant cannot carry a LoRA delta (4-bit step ~amax/16 vs a
+    0.1-0.8% amax delta; measured kept_ratio 0.00-0.19 on the hybrid pack),
+    so rank-decomposed weight keys are stored on the module
+    (``_hswq_zi_lora_res``) and re-added by the ZI forward. Requant stays only
+    as the fallback for patches the residual cannot represent (bias keys,
+    strength_model != 1.0, non rank-decomposed adapters).
+    """
     baked = 0
+    n_residual = 0
+    n_requant = 0
     for param_key, _key in keys_to_bake:
         if hasattr(module, param_key + "_lowvram_function"):
             setattr(module, param_key + "_lowvram_function", None)
-    for _param_key, key in keys_to_bake:
-        patcher.patch_weight_to_device(key, device_to=device_to)
+    for param_key, key in keys_to_bake:
+        res = None
+        if param_key == "weight":
+            res = _extract_zi_lora_residual(patcher, key)
+        if res is not None:
+            module._hswq_zi_lora_res = res
+            module._hswq_zi_lora_res_name = key
+            if hasattr(module, "_hswq_zi_lora_res_gpu"):
+                try:
+                    delattr(module, "_hswq_zi_lora_res_gpu")
+                except Exception:
+                    pass
+            n_residual += 1
+        else:
+            w_obj = getattr(module, "weight", None)
+            target_dev = getattr(w_obj, "device", None) or device_to
+            patcher.patch_weight_to_device(key, device_to=target_dev)
+            n_requant += 1
         if key in patcher.backup:
             try:
                 del patcher.backup[key]
@@ -171,7 +310,7 @@ def _bake_keys_on_module(patcher, module, keys_to_bake, device_to, already) -> i
             pass
         already.add(key)
         baked += 1
-    return baked
+    return baked, n_residual, n_requant
 
 
 def _iter_patch_weight_keys(patcher):
@@ -194,6 +333,8 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
     """Bake LoRA into ConvRot NVFP4 Linears after ModelPatcherDynamic.load."""
     stats = {
         "baked_nvfp4": 0,
+        "residual_nvfp4": 0,
+        "requant_nvfp4": 0,
         "candidates": 0,
         "skipped_no_set": 0,
         "skipped_not_nvfp4": 0,
@@ -266,10 +407,12 @@ def bake_nvfp4_convrot_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         modules[module_path] = module
 
     for module_path, keys_to_bake in by_module.items():
-        n = _bake_keys_on_module(
+        n, n_res, n_rq = _bake_keys_on_module(
             patcher, modules[module_path], keys_to_bake, device_to, already
         )
         stats["baked_nvfp4"] += n
+        stats["residual_nvfp4"] += n_res
+        stats["requant_nvfp4"] += n_rq
         if n > 0 and len(stats["sample_nvfp4_keys"]) < 3:
             for _pk, full_key in keys_to_bake:
                 if full_key not in stats["sample_nvfp4_keys"]:
@@ -292,6 +435,8 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
     """
     stats = {
         "baked_int8": 0,
+        "residual_int8": 0,
+        "requant_int8": 0,
         "baked_other_qt": 0,
         "candidates": 0,
         "skipped_no_set": 0,
@@ -350,9 +495,11 @@ def bake_remaining_quant_patches_on_dynamic_patcher(patcher, device_to) -> dict:
         modules[module_path] = module
 
     for module_path, keys_to_bake in by_module.items():
-        n = _bake_keys_on_module(
+        n, n_res, n_rq = _bake_keys_on_module(
             patcher, modules[module_path], keys_to_bake, device_to, already
         )
+        stats["residual_int8"] += n_res
+        stats["requant_int8"] += n_rq
         if kinds.get(module_path) == "int8":
             stats["baked_int8"] += n
             if len(stats["sample_int8_keys"]) < 3:
@@ -402,6 +549,8 @@ def _dump_bake_status(
         f"rem_candidates={rem_stats.get('candidates', 0)} "
         f"nv_pass_skip_int8_rem={skip_i8_in_nv_pass} "
         f"(INT8 rem baked separately as int8_baked) "
+        f"nvfp4_residual={nv_stats.get('residual_nvfp4', 0)} "
+        f"int8_residual={rem_stats.get('residual_int8', 0)} "
         f"patches_left={left} patches_uuid={uuid_s}"
     )
     try:
@@ -445,21 +594,58 @@ def _patcher_has_quant_via_keys(patcher) -> bool:
     return False
 
 
+def _patcher_is_zi_nvfp4_pack(patcher) -> bool:
+    """True only for Z Image NVFP4 / Hybrid packs (never Krea2 INT8 or SDXL)."""
+    if patcher is None:
+        return False
+    model = getattr(patcher, "model", None)
+    if model is None:
+        return False
+    if getattr(patcher, "_hswq_krea2_int8_pack", False) or getattr(
+        model, "_hswq_krea2_int8_pack", False
+    ):
+        return False
+    if getattr(patcher, "_hswq_zi_nvfp4_pack", False) or getattr(
+        model, "_hswq_zi_nvfp4_pack", False
+    ):
+        return True
+    if bool(getattr(model, "_hswq_zi_nvfp4_baked_keys", None)) or _model_has_zi_lora_residuals(model):
+        return True
+    return bool(_nvfp4_convrot_diag(model)["has"])
+
+
 def run_zimage_nvfp4_lora_bake_on_patcher(patcher, device_to=None, reason: str = "wrap") -> bool:
     """Bake NVFP4 ConvRot + leftover QT if this patcher is a ZI NVFP4 pack with LoRA."""
     model = getattr(patcher, "model", None)
     if model is None:
         return False
-    diag = _nvfp4_convrot_diag(model)
-    has_flag = bool(diag["has"])
-    has_baked = bool(getattr(model, "_hswq_zi_nvfp4_baked_keys", None))
-    n_patches = len(getattr(patcher, "patches", None) or {})
-    if not has_flag and not has_baked:
-        # Fallback: patches present and QT visible via get_key_weight
-        if n_patches == 0 or not _patcher_has_quant_via_keys(patcher):
-            return False
-    if n_patches == 0 and not has_baked:
+    if not _patcher_is_zi_nvfp4_pack(patcher):
         return False
+    patches = getattr(patcher, "patches", None) or {}
+    n_patches = len(patches)
+    uuid = getattr(patcher, "patches_uuid", None)
+    last = getattr(model, "_hswq_zi_nvfp4_baked_uuid", None)
+    if last is not None and uuid == last and n_patches == 0:
+        return True
+    if n_patches == 0:
+        # LoRA removed (or swapped): wipe residuals left by a previous bake on
+        # this shared inner model so "LoRA off" really turns it off.
+        if last is not None or _model_has_zi_lora_residuals(model):
+            _clear_zi_stale_lora_residuals(patcher, set())
+            try:
+                model._hswq_zi_nvfp4_baked_keys = set()
+                model._hswq_zi_nvfp4_baked_uuid = uuid
+            except Exception:
+                pass
+        return False
+    if last is not None and uuid != last:
+        _clear_zi_stale_lora_residuals(patcher, set())
+        try:
+            model._hswq_zi_nvfp4_baked_keys = set()
+        except Exception:
+            pass
+    else:
+        _clear_zi_stale_lora_residuals(patcher, set(patches.keys()))
     if device_to is None:
         device_to = getattr(patcher, "load_device", None)
     try:
@@ -615,6 +801,28 @@ def uninstall_zimage_nvfp4_lora_bake() -> bool:
                 "failed: %s",
                 e,
             )
+    # Also strip legacy ModelPatcher.load / partially_load wraps
+    if mp is not None:
+        Legacy = getattr(mp, "ModelPatcher", None)
+        if Legacy is not None:
+            cur_leg = getattr(Legacy, "load", None)
+            while getattr(cur_leg, "_hswq_zi_nvfp4_legacy_bake", False):
+                nxt = getattr(cur_leg, "_hswq_zi_nvfp4_prev_legacy_load", None)
+                if nxt is None or nxt is cur_leg:
+                    break
+                cur_leg = nxt
+            if cur_leg is not None and cur_leg is not getattr(Legacy, "load", None):
+                Legacy.load = cur_leg
+                removed = True
+            cur_pl = getattr(Legacy, "partially_load", None)
+            while getattr(cur_pl, "_hswq_zi_nvfp4_legacy_partially_load", False):
+                nxt = getattr(cur_pl, "_hswq_zi_nvfp4_prev_legacy_partially_load", None)
+                if nxt is None or nxt is cur_pl:
+                    break
+                cur_pl = nxt
+            if cur_pl is not None and cur_pl is not getattr(Legacy, "partially_load", None):
+                Legacy.partially_load = cur_pl
+                removed = True
     # Also strip VER=8 convert/set left on mp0.Linear by comfy_parity install.
     try:
         import comfy.ops as ops
@@ -631,6 +839,180 @@ def uninstall_zimage_nvfp4_lora_bake() -> bool:
             "[HSWQ ZI NVFP4 LoRA] peel Linear bake wraps failed: %s", e
         )
     return removed
+
+
+def _zi_legacy_target_keys(patcher) -> set:
+    """Keys whose ConvRot NVFP4 / INT8 QT the Z Image bake consumes."""
+    if not _patcher_is_zi_nvfp4_pack(patcher):
+        return set()
+    try:
+        import comfy.model_patcher as mp
+        from comfy.quant_ops import QuantizedTensor
+    except ImportError:
+        return set()
+    keys = set()
+    for key, _module_path, _param_key, module in list(_iter_patch_weight_keys(patcher)):
+        try:
+            weight, set_func, _convert = mp.get_key_weight(patcher.model, key)
+        except Exception:
+            continue
+        if weight is None or set_func is None:
+            continue
+        qt = _qt_payload(weight, QuantizedTensor)
+        if qt is None:
+            continue
+        if _module_is_nvfp4_convrot(module) or _qt_is_nvfp4(
+            weight, QuantizedTensor
+        ) or _qt_is_int8_tensorwise(weight, QuantizedTensor):
+            keys.add(key)
+    return keys
+
+
+def install_zimage_nvfp4_lora_bake_legacy(force: bool = False) -> bool:
+    """Bake Z Image NVFP4 ConvRot LoRA on LEGACY ModelPatcher.load & partially_load.
+
+    DisTorch2 (when ``disable_dynamic=True``) replaces ``ModelPatcher.partially_load``
+    with ``new_partially_load``, which loops over ``_load_list()`` and calls
+    ``self.patch_weight_to_device(weight_key)`` directly without calling
+    ``ModelPatcher.load``. Wrapping both ``partially_load`` and ``load`` hides
+    the ConvRot keys from ``new_partially_load`` / stock ``load`` and runs the
+    low-rank residual bake right after.
+    """
+    try:
+        import comfy.model_patcher as mp
+    except ImportError:
+        return False
+    Legacy = getattr(mp, "ModelPatcher", None)
+    if Legacy is None:
+        return False
+    original = getattr(Legacy, "load", None)
+    if original is None:
+        return False
+    need_load_wrap = (
+        force
+        or not getattr(original, "_hswq_zi_nvfp4_legacy_bake", False)
+        or getattr(original, "_hswq_zi_nvfp4_legacy_bake_ver", 0) < _BAKE_HOOK_VER
+    )
+    if need_load_wrap:
+        prev_load = original
+        while getattr(prev_load, "_hswq_zi_nvfp4_legacy_bake", False):
+            nxt = getattr(prev_load, "_hswq_zi_nvfp4_prev_legacy_load", None)
+            if nxt is None or nxt is prev_load:
+                break
+            prev_load = nxt
+
+        def load(
+            self,
+            device_to=None,
+            lowvram_model_memory=0,
+            force_patch_weights=False,
+            full_load=False,
+        ):
+            hidden = {}
+            is_zi = False
+            try:
+                is_zi = (
+                    bool(getattr(getattr(self, "model", None), "_hswq_bake_enabled", True))
+                    and _patcher_is_zi_nvfp4_pack(self)
+                )
+                if is_zi and getattr(self, "patches", None):
+                    for key in _zi_legacy_target_keys(self) & set(self.patches.keys()):
+                        hidden[key] = self.patches.pop(key)
+            except Exception as exc:
+                _console(f"[HSWQ ZI NVFP4 LoRA] legacy pre-load scan error: {exc!r}")
+            try:
+                result = prev_load(
+                    self,
+                    device_to=device_to,
+                    lowvram_model_memory=lowvram_model_memory,
+                    force_patch_weights=force_patch_weights,
+                    full_load=full_load,
+                )
+            finally:
+                if hidden:
+                    self.patches.update(hidden)
+            if is_zi and (hidden or not getattr(self, "patches", None)):
+                try:
+                    run_zimage_nvfp4_lora_bake_on_patcher(
+                        self, device_to=device_to, reason="legacy load"
+                    )
+                except Exception as exc:
+                    _console(f"[HSWQ ZI NVFP4 LoRA] legacy load bake error: {exc!r}")
+            return result
+
+        load._hswq_zi_nvfp4_legacy_bake = True  # type: ignore[attr-defined]
+        load._hswq_zi_nvfp4_legacy_bake_ver = _BAKE_HOOK_VER  # type: ignore[attr-defined]
+        load._hswq_zi_nvfp4_prev_legacy_load = prev_load  # type: ignore[attr-defined]
+        Legacy.load = load
+        _console(
+            f"[HSWQ ZI NVFP4 LoRA] legacy ModelPatcher.load bake hook ON "
+            f"v{_BAKE_HOOK_VER} (hide ConvRot keys -> family bake)"
+        )
+
+    orig_pl = getattr(Legacy, "partially_load", None)
+    if orig_pl is not None and (
+        force
+        or not getattr(orig_pl, "_hswq_zi_nvfp4_legacy_partially_load", False)
+        or getattr(orig_pl, "_hswq_zi_nvfp4_legacy_partially_load_ver", 0) < _BAKE_HOOK_VER
+    ):
+        prev_pl = orig_pl
+        while getattr(prev_pl, "_hswq_zi_nvfp4_legacy_partially_load", False):
+            nxt = getattr(prev_pl, "_hswq_zi_nvfp4_prev_legacy_partially_load", None)
+            if nxt is None or nxt is prev_pl:
+                break
+            prev_pl = nxt
+
+        def partially_load(
+            self,
+            device_to,
+            extra_memory=0,
+            force_patch_weights=False,
+            **kwargs,
+        ):
+            hidden = {}
+            is_zi = False
+            try:
+                is_dyn = bool(getattr(self, "is_dynamic", lambda: False)())
+                is_zi = (
+                    not is_dyn
+                    and bool(getattr(getattr(self, "model", None), "_hswq_bake_enabled", True))
+                    and _patcher_is_zi_nvfp4_pack(self)
+                )
+                if is_zi and getattr(self, "patches", None):
+                    for key in _zi_legacy_target_keys(self) & set(self.patches.keys()):
+                        hidden[key] = self.patches.pop(key)
+            except Exception as exc:
+                _console(
+                    f"[HSWQ ZI NVFP4 LoRA] legacy partially_load scan error: {exc!r}"
+                )
+            try:
+                result = prev_pl(
+                    self,
+                    device_to,
+                    extra_memory=extra_memory,
+                    force_patch_weights=force_patch_weights,
+                    **kwargs,
+                )
+            finally:
+                if hidden:
+                    self.patches.update(hidden)
+            if is_zi and (hidden or not getattr(self, "patches", None)):
+                try:
+                    run_zimage_nvfp4_lora_bake_on_patcher(
+                        self, device_to=device_to, reason="legacy partially_load"
+                    )
+                except Exception as exc:
+                    _console(
+                        f"[HSWQ ZI NVFP4 LoRA] legacy partially_load bake error: {exc!r}"
+                    )
+            return result
+
+        partially_load._hswq_zi_nvfp4_legacy_partially_load = True  # type: ignore[attr-defined]
+        partially_load._hswq_zi_nvfp4_legacy_partially_load_ver = _BAKE_HOOK_VER  # type: ignore[attr-defined]
+        partially_load._hswq_zi_nvfp4_prev_legacy_partially_load = prev_pl  # type: ignore[attr-defined]
+        Legacy.partially_load = partially_load
+
+    return True
 
 
 def install_zimage_nvfp4_lora_bake(force: bool = False) -> bool:
@@ -703,6 +1085,12 @@ def install_zimage_nvfp4_lora_bake(force: bool = False) -> bool:
         f"[HSWQ ZI NVFP4 LoRA] Dynamic.load bake hook ON v{_BAKE_HOOK_VER} "
         "(NVFP4 ConvRot bake + leftover INT8/QT bake + load_models_gpu)"
     )
+    try:
+        install_zimage_nvfp4_lora_bake_legacy(force=force)
+    except Exception as e:
+        logger.warning(
+            "[HSWQ ZI NVFP4 LoRA] legacy load bake hook skipped: %s", e
+        )
     install_load_models_gpu_bake_hook(force=True)
     return True
 

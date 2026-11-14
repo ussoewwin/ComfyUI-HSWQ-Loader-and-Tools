@@ -69,22 +69,35 @@ def _add_krea2_lora_residual(module, inp, out):
             dt,
             [
                 (
-                    md.to(device=dev, dtype=dt),
-                    mu.to(device=dev, dtype=dt),
-                    sc,
+                    item[0].to(device=dev, dtype=dt),
+                    item[1].to(device=dev, dtype=dt),
+                    item[2],
+                    item[3] if len(item) > 3 else None,
                 )
-                for md, mu, sc in res
+                for item in res
             ],
         )
         module._hswq_krea2_lora_res_gpu = cache
     acc = None
-    for md, mu, sc in cache[2]:
+    for md, mu, sc, off in cache[2]:
         if sc == 0.0:
             continue
         term = torch.matmul(torch.matmul(inp, md.t()), mu.t())
         if sc != 1.0:
             term = term * sc
-        acc = term if acc is None else acc + term
+        if off is not None:
+            o_start, o_len = off
+            if acc is None:
+                acc = torch.zeros_like(out)
+            if term.shape[:-1] != acc.shape[:-1]:
+                term = term.reshape(*acc.shape[:-1], o_len)
+            acc[..., o_start : o_start + o_len] = (
+                acc[..., o_start : o_start + o_len] + term
+            )
+        else:
+            if acc is not None and term.shape != acc.shape:
+                term = term.reshape(acc.shape)
+            acc = term if acc is None else acc + term
     if acc is None:
         return out
     _name = getattr(module, "_hswq_krea2_lora_name", None) or "?"

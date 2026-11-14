@@ -1495,6 +1495,10 @@ def _bake_int8_patches_on_dynamic_patcher(patcher, device_to) -> int:
     # Never apply the SDXL (3.3.0 nodes/sdxl_convrot_nvfp4) Dynamic bake to them.
     if _model_is_zimage_nvfp4_parity(getattr(patcher, "model", None)):
         return 0
+    if getattr(patcher, "_hswq_krea2_int8_pack", False) or getattr(
+        getattr(patcher, "model", None), "_hswq_krea2_int8_pack", False
+    ):
+        return 0
     if not getattr(patcher, "patches", None):
         return 0
     try:
@@ -2733,6 +2737,7 @@ def _patch_comfy_kitchen_rms_rope_fallback() -> bool:
                 try:
                     return orig_ja_forward(self, x, x_mask, freqs_cis, transformer_options=transformer_options)
                 except Exception as exc:
+                    import torch
                     logger.warning("[HSWQ] JointAttention forward fallback triggered (%s)", exc)
                     bsz, seqlen, _ = x.shape
                     xq, xk, xv = torch.split(
@@ -3538,71 +3543,56 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
         # Without this, comfy_parity stays on mixed_precision_ops / _load_quantized_module
         # from the previous Z Image run, arming _hswq_int8_convrot on Krea2 INT8 ConvRot
         # layers and installing forward_parity (online act rotate) on every Linear.
-        # Krea2 does not need or want Z Image parity - it uses stock MixedPrecision -
-        # but the leftover wrapper makes forward_parity fire Hadamard rotations every
-        # step, causing progressive slowdown (4s/step -> 16s -> 22s -> 26s across runs).
-        # UI toggle: hswq_bake ON = HSWQ path (HSWQ patches).
-        # OFF = stock ComfyUI path (DynamicVRAM / shared VRAM, no HSWQ patches).
-        _aimdo_dynamic = not bool(hswq_bake)
-        if _aimdo_dynamic:
-            # DynamicVRAM (comfy-aimdo): run the stock ComfyUI path exactly like
-            # upstream ComfyUI-MultiGPU. HSWQ parity/mp-stack/LoRA-bake are skipped
-            # (they fight the mmap/vbar representation; measured 2x slowdown).
-            logging.info(
-                "[HSWQ INT8] Krea2 ConvRot INT8: DynamicVRAM (comfy-aimdo) active -> "
-                "stock path (HSWQ parity/mp-stack/LoRA-bake skipped, upstream parity)"
+        try:
+            from ..nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4 import (
+                _clear_zimage_parity_contamination_for_sdxl,
             )
-        else:
-            try:
-                from ..nodes.sdxl_convrot_nvfp4.comfy_quant_nvfp4 import (
-                    _clear_zimage_parity_contamination_for_sdxl,
-                )
 
-                _clear_zimage_parity_contamination_for_sdxl()
-            except Exception as e:
-                logging.warning(
-                    "[HSWQ INT8] clear Z Image NVFP4 contamination for Krea2 failed: %s", e
-                )
+            _clear_zimage_parity_contamination_for_sdxl()
+        except Exception as e:
+            logging.warning(
+                "[HSWQ INT8] clear Z Image NVFP4 contamination for Krea2/DiT failed: %s", e
+            )
         model_options = {}
-        # Krea2 ConvRot INT8 needs the SAME low-rank residual LoRA bake +
-        # forward as Krea2 ConvRot NVFP4 (INT8 8-bit requant rounds away small
-        # style-LoRA deltas just like 4-bit). Gate on the Krea2 txtfusion
-        # projector only - never other DiT (FLUX), SDXL, or Z Image ConvRot INT8.
-        is_krea2 = checkpoint_is_krea2(unet_path)
+        # ConvRot INT8 DiT / Lumina2 / Krea2 (is_int8 and is_convrot and not needs_conv2d)
+        # need low-rank residual LoRA bake + forward (INT8 8-bit requant rounds away small
+        # style-LoRA deltas, and stock LowVramPatch fails on INT8 ConvRot because
+        # MixedPrecisionOps.Linear sets want_requant=False for int8_tensorwise and
+        # _dit_quant_lock skips dequantization on Step 2+). Low-rank residual keeps the
+        # packed QT untouched in VBAR/mmap and adds the exact FP16/BF16 delta in Linear.forward.
         krea2_bake_ok = False
-        if is_krea2 and not _aimdo_dynamic:
-            try:
-                from ..nodes.krea2_convrot_int8.comfy_quant_int8_krea2 import (
-                    apply_comfy_quant_int8_patches,
-                )
-                from ..nodes.krea2_convrot_int8.int8_lora_bake import (
-                    install_krea2_int8_lora_bake,
-                    reset_krea2_int8_lora_bake_log_counters,
-                )
-                from ..nodes.krea2_convrot_int8.int8_forward import (
-                    reset_int8_forward_stats,
-                )
+        try:
+            from ..nodes.krea2_convrot_int8.comfy_quant_int8_krea2 import (
+                apply_comfy_quant_int8_patches,
+            )
+            from ..nodes.krea2_convrot_int8.int8_lora_bake import (
+                install_krea2_int8_lora_bake,
+                reset_krea2_int8_lora_bake_log_counters,
+            )
+            from ..nodes.krea2_convrot_int8.int8_forward import (
+                reset_int8_forward_stats,
+            )
 
-                if apply_comfy_quant_int8_patches():
-                    krea2_bake_ok = install_krea2_int8_lora_bake(force=True)
-                reset_int8_forward_stats()
-                reset_krea2_int8_lora_bake_log_counters()
-                if krea2_bake_ok:
-                    logging.info(
-                        "[HSWQ INT8] Krea2 ConvRot INT8 residual LoRA bake+forward "
-                        "installed: %s",
-                        unet_name,
-                    )
-                else:
-                    logging.warning(
-                        "[HSWQ INT8] Krea2 ConvRot INT8 residual LoRA install "
-                        "failed; LoRA stays stock (requant): %s",
-                        unet_name,
-                    )
-            except Exception as e:
-                logging.warning(
-                    "[HSWQ INT8] Krea2 ConvRot INT8 LoRA install failed: %s", e
+            if apply_comfy_quant_int8_patches():
+                krea2_bake_ok = install_krea2_int8_lora_bake(force=True)
+            reset_int8_forward_stats()
+            reset_krea2_int8_lora_bake_log_counters()
+            if krea2_bake_ok:
+                logging.info(
+                    "[HSWQ INT8] ConvRot INT8 DiT/Krea2 residual LoRA bake+forward "
+                    "installed: %s",
+                    unet_name,
                 )
+            else:
+                logging.warning(
+                    "[HSWQ INT8] ConvRot INT8 DiT/Krea2 residual LoRA install "
+                    "failed; LoRA stays stock (requant): %s",
+                    unet_name,
+                )
+        except Exception as e:
+            logging.warning(
+                "[HSWQ INT8] ConvRot INT8 DiT/Krea2 LoRA install failed: %s", e
+            )
 
         logging.info(
             "[HSWQ INT8] DiT/Krea2 ConvRot — stock-equivalent load "
@@ -3614,18 +3604,15 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
             flush=True,
         )
         model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
-        # Stamp the HSWQ-path choice so the Dynamic.load bake hooks (built at
-        # import time) can be skipped on the stock path.
         try:
-            _bk = bool(hswq_bake)
-            setattr(model, "_hswq_bake_enabled", _bk)
+            setattr(model, "_hswq_bake_enabled", True)
             if getattr(model, "model", None) is not None:
-                setattr(model.model, "_hswq_bake_enabled", _bk)
+                setattr(model.model, "_hswq_bake_enabled", True)
         except Exception:
             pass
         if krea2_bake_ok:
-            # Stamp for the Krea2 bake hook (mirrors the NVFP4 loader stamp; the
-            # inner-model stamp survives ModelPatcher clones made by LoRA nodes).
+            # Stamp for the ConvRot INT8 residual bake hook (survives ModelPatcher
+            # clones made by LoRA / DisTorch2 nodes).
             model._hswq_krea2_int8_pack = True
             inner_model = getattr(model, "model", None)
             if inner_model is not None:

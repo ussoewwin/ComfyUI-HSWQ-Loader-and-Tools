@@ -550,6 +550,7 @@ def _make_convrot_parity_forward(stock_forward):
     from .zi_nvfp4_hadamard import build_hadamard, rotate_last_dim
 
     def forward_parity(self, input, *args, **kwargs):
+        raw = input
         nv = bool(getattr(self, "_hswq_nvfp4_convrot", False))
         i8 = bool(getattr(self, "_hswq_int8_convrot", False))
         if nv or i8:
@@ -580,7 +581,11 @@ def _make_convrot_parity_forward(stock_forward):
                 h = build_hadamard(gs, device=input.device, dtype=input.dtype)
                 self._hswq_nvfp4_parity_H = h
             input = rotate_last_dim(input, h, gs)
-        return stock_forward(self, input, *args, **kwargs)
+        from .zi_nvfp4_forward import add_zi_lora_residual
+
+        return add_zi_lora_residual(
+            self, raw, stock_forward(self, input, *args, **kwargs)
+        )
 
     forward_parity._hswq_nvfp4_convrot_parity = True  # type: ignore[attr-defined]
     return forward_parity
