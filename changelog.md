@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.7.0
+
+- **Added / Fixed**: **Full LoRA & LoKr (Kronecker product) support on ConvRot INT8 and Hybrid ConvRot NVFP4 models (Z Image & Krea2)** - ComfyUI's architectural migration to `WeightAdapterBase` (`LoRAAdapter`, `LoKrAdapter`) caused severe shape mismatches (`11363x6144 and 1536x1536`) and delta elimination on quantized models. The HSWQ low-rank residual bake and forward execution stacks have been upgraded:
+  - **ComfyUI WeightAdapter System Adaptation**: Resolved fundamental incompatibility with upstream's `WeightAdapterBase` overhaul. Rather than re-quantizing into coarse 8-bit/4-bit weights (which rounds small 0.1-0.8% LoRA deltas to zero) or corrupting Hadamard-orthogonal ConvRot weight bases, the low-rank residual pipeline preserves packed weights and adds exact floating-point deltas at runtime.
+  - **Native LoKr (LyCORIS Kronecker Product) Residual Forward**: `_extract_lora_residual` and `_add_krea2_lora_residual` / `add_zi_lora_residual` now natively detect and decompose `LoKrAdapter` weights (`w1`, `w2`, `w1_a/b`, `w2_a/b`). For LoKr adapters (widely used in Krea2, e.g., `realism_engine_krea2_v3.1`), the forward executes an efficient grouped tensor product $(W_1 \otimes W_2)x$ using tensor reshapes (`inp.reshape(*inp.shape[:-1], q, s)`) and sequential matmuls, eliminating shape mismatch crashes without allocating dense Kronecker weight matrices.
+  - **Full Multi-Model Parity**: Verified complete and bit-accurate LoRA/LoKr application across all major HSWQ quantized architectures: Z Image Hybrid NVFP4, Z Image ConvRot INT8, and Krea2 ConvRot INT8, maintaining full compatibility under DisTorch2 / multi-GPU cloning.
+  - **Fixed UnboundLocalError**: Fixed a Python variable scope collision in `patches/comfy_quant_int8.py` where an inner import shadowed module-level `apply_comfy_quant_int8_patches`, resolving immediate load failure on INT8 checkpoints.
+- See [Release Notes v3.7.0](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.0) for details.
+
 ## Version 3.6.9
 
 - **Added**: **quantized Conv2d support for ControlNet models** - ControlNet packs so far kept every Conv2d weight in FP16, which capped the size reduction: an SD1.5 ControlNet carries ~440 MB of 3×3 conv weights (64 % of the file) that never left FP16, so a pack stayed at ~15.9 % reduction while the Linear half alone shrank 44 %. The loaders now inject the HSWQ quantized Conv2d (rotation along in_channels, per-out-channel scale `[out, 1, 1, 1]`, online activation rotation) when a checkpoint actually carries quantized Conv2d layers:

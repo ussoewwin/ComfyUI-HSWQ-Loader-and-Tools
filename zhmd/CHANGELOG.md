@@ -7,6 +7,15 @@
   </tr>
 </table>
 
+## Version 3.7.0
+
+- 新增 / 修复：**ConvRot INT8 与 Hybrid ConvRot NVFP4 模型（Z Image 与 Krea2）全面支持 LoRA 与 LoKr（Kronecker 积）** -- 针对 ComfyUI 官方重构的 `WeightAdapterBase`（`LoRAAdapter`、`LoKrAdapter`）导致的形状不匹配（`11363x6144 and 1536x1536`）及量化重算丢失问题，全面升级了 HSWQ 低秩残差烘焙与前向计算体系：
+  - **适配 ComfyUI WeightAdapter 架构变革**：彻底解决上游将 LoRA 内部管理重构为面向对象 `WeightAdapterBase` 体系后引发的不兼容。HSWQ 绕过传统「反量化 → 叠加 → 重新量化」导致的微小差值（0.1%-0.8%）被 8bit/4bit 量化精度截断抹除以及 ConvRot 阿达马旋转基底破坏的问题，保留打包量化权重并在 Forward 阶段无损叠加浮点残差。
+  - **原生 LoKr（LyCORIS Kronecker 积）残差前向计算**：`_extract_lora_residual` 与 `_add_krea2_lora_residual` / `add_zi_lora_residual` 现已原生识别并提取 `LoKrAdapter` 权重（`w1`, `w2`）。针对 Krea2 等广泛使用的 LoKr 格式 LoRA（如 `realism_engine_krea2_v3.1`），前向计算通过分组张量变换（`inp.reshape(*inp.shape[:-1], q, s)`）执行高效的 Kronecker 积运算 $(W_1 \otimes W_2)x$，无需实例化庞大的稠密权重矩阵，彻底消除维度不匹配崩溃。
+  - **全架构全要素通过验证**：实测确认 Z Image Hybrid NVFP4、Z Image ConvRot INT8 与 Krea2 ConvRot INT8 全格式在单卡及 DisTorch2 多卡克隆环境下，LoRA / LoKr 均完美生效并保持浮点精度与显存压缩优势。
+  - **修复 UnboundLocalError**：修复了 `patches/comfy_quant_int8.py` 中函数内部同名导入遮蔽模块全局变量导致的 `UnboundLocalError: cannot access local variable 'apply_comfy_quant_int8_patches'` 加载崩溃。
+- 查看 [发布说明 v3.7.0](v3.7.0.md)
+
 ## Version 3.6.9
 
 - 新增：**ControlNet 模型的量化 Conv2d 支持** -- 此前的 ControlNet pack 将全部 Conv2d 权重保留在 FP16，压缩率因此受限：SD1.5 ControlNet 携带约 440 MB 的 3×3 conv 权重（占文件 64%），从未离开 FP16，pack 压缩率停留在约 15.9%，而 Linear 半边单独压缩了 44%。当 checkpoint 实际携带量化 Conv2d 层时，加载器现在注入 HSWQ 量化 Conv2d（沿 in_channels 旋转、per-out-channel scale `[out, 1, 1, 1]`、在线激活旋转）：
