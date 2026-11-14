@@ -168,6 +168,52 @@ def _extract_lora_residual(patcher, key):
         weights = getattr(v, "weights", None)
         if weights is None or len(weights) < 3:
             return None
+        adapter_name = getattr(v, "name", "lora")
+        if adapter_name == "lokr":
+            if len(weights) < 9:
+                return None
+            w1 = weights[0]
+            w2 = weights[1]
+            alpha = weights[2]
+            w1_a = weights[3]
+            w1_b = weights[4]
+            w2_a = weights[5]
+            w2_b = weights[6]
+            t2 = weights[7]
+            dora_scale = weights[8]
+            if t2 is not None or dora_scale is not None:
+                return None
+            dim = None
+            if w1 is None:
+                if w1_a is None or w1_b is None:
+                    return None
+                dim = w1_b.shape[0]
+                w1 = torch.mm(w1_a.float(), w1_b.float())
+            if w2 is None:
+                if w2_a is None or w2_b is None:
+                    return None
+                dim = w2_b.shape[0]
+                w2 = torch.mm(w2_a.float(), w2_b.float())
+            if getattr(w1, "ndim", 0) > 2:
+                w1 = w1.flatten(start_dim=1)
+            if getattr(w2, "ndim", 0) > 2:
+                w2 = w2.flatten(start_dim=1)
+            if getattr(w1, "ndim", 0) != 2 or getattr(w2, "ndim", 0) != 2:
+                return None
+            if off_tuple is not None and int(w1.shape[0] * w2.shape[0]) != off_tuple[1]:
+                return None
+            if alpha is not None and dim is not None:
+                try:
+                    alpha_val = float(alpha) / float(dim)
+                except Exception:
+                    alpha_val = 1.0
+            else:
+                alpha_val = 1.0
+            scale = float(strength) * alpha_val
+            residual.append((w2, w1, scale, off_tuple, "lokr"))
+            continue
+        if adapter_name != "lora":
+            return None
         mat_up = weights[0]  # lora_B (up)   [out, rank]
         mat_dn = weights[1]  # lora_A (down) [rank, in]
         alpha = weights[2]
@@ -182,6 +228,10 @@ def _extract_lora_residual(patcher, key):
             mat_dn = mat_dn.flatten(start_dim=1)
         if getattr(mat_up, "ndim", 0) != 2 or getattr(mat_dn, "ndim", 0) != 2:
             return None
+        if int(mat_up.shape[1]) != int(mat_dn.shape[0]):
+            return None
+        if off_tuple is not None and int(mat_up.shape[0]) != off_tuple[1]:
+            return None
         if alpha is not None:
             try:
                 alpha = alpha / mat_dn.shape[0]
@@ -190,7 +240,7 @@ def _extract_lora_residual(patcher, key):
         else:
             alpha = 1.0
         scale = float(strength) * float(alpha)
-        residual.append((mat_dn, mat_up, scale, off_tuple))
+        residual.append((mat_dn, mat_up, scale, off_tuple, "lora"))
     return residual or None
 
 

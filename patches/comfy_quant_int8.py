@@ -542,7 +542,7 @@ def _probe_path_needs_hswq_int8_conv2d(path: str) -> bool:
     except Exception as e:
         logger.debug("[HSWQ INT8] SDXL/ZI Conv2d need probe failed for %s: %s", path, e)
         base = os.path.basename(path).lower()
-        if "krea" in base or "convrot" in base or "int8convrot" in base:
+        if "krea" in base or "convrot" in base or "covrot" in base or "int8convrot" in base:
             return False
         return True
 
@@ -586,9 +586,10 @@ def _probe_path_comfy_quant_convrot(path: str) -> bool:
     try:
         from safetensors import safe_open
     except ImportError:
-        return "convrot" in os.path.basename(path).lower()
+        base = os.path.basename(path).lower()
+        return "convrot" in base or "covrot" in base
     base = os.path.basename(path).lower()
-    name_hint = "convrot" in base or "int8convrot" in base
+    name_hint = "convrot" in base or "covrot" in base or "int8convrot" in base
     comfy_keys = []
     try:
         with safe_open(path, framework="pt", device="cpu") as f:
@@ -3563,7 +3564,7 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
         krea2_bake_ok = False
         try:
             from ..nodes.krea2_convrot_int8.comfy_quant_int8_krea2 import (
-                apply_comfy_quant_int8_patches,
+                apply_comfy_quant_int8_patches as apply_krea2_convrot_int8_patches,
             )
             from ..nodes.krea2_convrot_int8.int8_lora_bake import (
                 install_krea2_int8_lora_bake,
@@ -3573,7 +3574,7 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
                 reset_int8_forward_stats,
             )
 
-            if apply_comfy_quant_int8_patches():
+            if apply_krea2_convrot_int8_patches():
                 krea2_bake_ok = install_krea2_int8_lora_bake(force=True)
             reset_int8_forward_stats()
             reset_krea2_int8_lora_bake_log_counters()

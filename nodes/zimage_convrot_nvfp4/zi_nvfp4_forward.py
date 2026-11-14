@@ -499,16 +499,33 @@ def add_zi_lora_residual(module, inp, out):
                     item[1].to(device=dev, dtype=dt),
                     item[2],
                     item[3] if len(item) > 3 else None,
+                    item[4] if len(item) > 4 else "lora",
                 )
                 for item in res
             ],
         )
         module._hswq_zi_lora_res_gpu = cache
     acc = None
-    for md, mu, sc, off in cache[2]:
+    in_dim = int(inp.shape[-1])
+    for md, mu, sc, off, kind in cache[2]:
         if sc == 0.0:
             continue
-        term = torch.matmul(torch.matmul(inp, md.t()), mu.t())
+        if kind == "lokr" or (
+            int(md.shape[1]) != in_dim
+            and int(mu.shape[1]) * int(md.shape[1]) == in_dim
+        ):
+            p, q = int(mu.shape[0]), int(mu.shape[1])
+            r, s = int(md.shape[0]), int(md.shape[1])
+            if q * s != in_dim:
+                continue
+            x_g = inp.reshape(*inp.shape[:-1], q, s)
+            hb = torch.matmul(x_g, md.t())
+            hc = torch.matmul(hb.transpose(-1, -2), mu.t()).transpose(-1, -2)
+            term = hc.reshape(*inp.shape[:-1], p * r)
+        else:
+            if int(md.shape[1]) != in_dim or int(mu.shape[1]) != int(md.shape[0]):
+                continue
+            term = torch.matmul(torch.matmul(inp, md.t()), mu.t())
         if sc != 1.0:
             term = term * sc
         if off is not None:
