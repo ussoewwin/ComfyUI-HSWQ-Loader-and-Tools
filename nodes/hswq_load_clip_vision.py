@@ -1,8 +1,8 @@
 """HSWQ Load CLIP Vision.
 
 Port of ComfyUI's stock "Load CLIP Vision" node (nodes.py ``CLIPVisionLoader``)
-into the HSWQ loader package, with the ``HSWQ`` name prefix. Behaviour is
-byte-identical to the stock node:
+into the HSWQ loader package, with the ``HSWQ`` name prefix. Float packs (the
+default ``models/clip_vision`` content) load byte-identically to the stock node:
 
 - Widget: ``clip_name`` from the ``models/clip_vision`` folder list.
 - Loads the file through ``comfy.clip_vision.load`` (the stock key-layout
@@ -26,7 +26,20 @@ import logging
 
 import folder_paths
 
-from hswq import clip_vision_convrot_int8
+# Absolute imports cannot reach this package's ``hswq`` subpackage: ComfyUI loads
+# custom nodes under a synthetic module name and does not add the folder to
+# ``sys.path`` (``prestartup_script.py`` also forbids inserting it). Use a
+# package-relative import, same convention as ``__init__.py``
+# (``from .hswq.zimage_fp8... import``).
+try:
+    from ..hswq import clip_vision_convrot_int8 as _cv_convrot_int8
+except ImportError:  # direct-script runs (unit tests) with the repo root on sys.path
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from hswq import clip_vision_convrot_int8 as _cv_convrot_int8
+
+clip_vision_convrot_int8 = _cv_convrot_int8
 
 logger = logging.getLogger(__name__)
 

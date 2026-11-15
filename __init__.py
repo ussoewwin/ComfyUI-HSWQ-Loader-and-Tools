@@ -836,6 +836,13 @@ try:
     logger.info("Registered HSWQ Model Patch Loader (ConvRot INT8 / CPU offload)")
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Model Patch Loader not registered: %s", e)
+
+try:
+    from .nodes.hswq_load_clip_vision import HSWQLoadClipVision
+    NODE_CLASS_MAPPINGS["HSWQLoadClipVision"] = HSWQLoadClipVision
+    logger.info("Registered HSWQ Load CLIP Vision")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ Load CLIP Vision not registered: %s", e)
 try:
     from .nodes.hswq_moss_image_prompt_enhancer import HSWQMossImagePromptEnhancer
     NODE_CLASS_MAPPINGS["HSWQMossImagePromptEnhancer"] = HSWQMossImagePromptEnhancer

@@ -57,6 +57,27 @@ def is_convrot_int8_pack(state_dict):
     return len(declared_layers(state_dict)) > 0
 
 
+def unsupported_quant_formats(state_dict):
+    """Declared ``comfy_quant`` formats this module cannot execute.
+
+    A pack whose layers use any format other than ``int8_tensorwise`` must not
+    fall through to the stock loader: ``comfy.clip_vision`` builds every tower
+    with ``comfy.ops.manual_cast``, so the quantised codes would end up in a
+    float Parameter and the tower would silently compute on meaningless values.
+    """
+    found = {}
+    for key in state_dict:
+        if not key.endswith(QUANT_KEY_SUFFIX):
+            continue
+        conf = _decode(state_dict[key])
+        fmt = conf.get("format") if isinstance(conf, dict) else None
+        if fmt == PACK_FORMAT:
+            continue
+        label = fmt if isinstance(fmt, str) and fmt else "<unreadable>"
+        found[label] = found.get(label, 0) + 1
+    return found
+
+
 def _decode(raw):
     try:
         return json.loads(raw.numpy().tobytes().decode("utf-8"))
@@ -130,6 +151,13 @@ def load(path):
     so the plain route keeps the stock behaviour byte for byte.
     """
     state_dict = comfy.utils.load_torch_file(path)
+    unsupported = unsupported_quant_formats(state_dict)
+    if unsupported:
+        raise RuntimeError(
+            "CLIP Vision: unsupported quantised format(s) %s in %s - only %s is "
+            "supported; refusing to load quantised codes into float weights"
+            % (sorted(unsupported), path, PACK_FORMAT)
+        )
     if not is_convrot_int8_pack(state_dict):
         return comfy.clip_vision.load(path)
 
