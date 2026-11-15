@@ -843,6 +843,23 @@ try:
     logger.info("Registered HSWQ Load CLIP Vision")
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Load CLIP Vision not registered: %s", e)
+
+try:
+    from .nodes.hswq_load_ipadapter_model import HSWQLoadIPAdapterModel
+    NODE_CLASS_MAPPINGS["HSWQLoadIPAdapterModel"] = HSWQLoadIPAdapterModel
+    logger.info("Registered HSWQ Load IPAdapter Model")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.debug("HSWQ Load IPAdapter Model not registered: %s", e)
+
+# Lets the IP-Adapter loader read a model from any folder: the frontend fills
+# the node's file dropdown from this route when the directory widget changes.
+try:
+    from .hswq.ipadapter_paths import register_ipadapter_list_route
+
+    if register_ipadapter_list_route():
+        logger.info("Registered HSWQ IP-Adapter directory listing route")
+except Exception as e:
+    logger.debug("HSWQ IP-Adapter directory listing route not registered: %s", e)
 try:
     from .nodes.hswq_moss_image_prompt_enhancer import HSWQMossImagePromptEnhancer
     NODE_CLASS_MAPPINGS["HSWQMossImagePromptEnhancer"] = HSWQMossImagePromptEnhancer

@@ -157,6 +157,29 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 | **`OFF`** | 走 stock ComfyUI 路径（DynamicVRAM）。跳过 HSWQ 补丁（LoRA bake / parity / mp stack），offload 的权重进入 DynamicVRAM host buffer（**共享显存**）。**对 Krea2 ConvRot INT8 而言这是更快的一侧。** |
 | **`ON`** | 走 HSWQ 路径（HSWQ LoRA bake + legacy patcher，使 DisTorch 放置生效）。该模式是为 **Hybrid ConvRot NVFP4**（例如 Z Image）准备的（需要 HSWQ 自身的 LoRA 处理）。在 Krea2 ConvRot INT8 上比 `OFF` 慢。 |
 
+### HSWQ Load CLIP Vision
+
+<img src="../png/loadclip.png" alt="HSWQ Load CLIP Vision" width="400">
+
+用于加载 **CLIP Vision 主干**（ViT-g/H、SigLIP、SigLIP2、ViT-L、DINOv2、DINOv3）的 ComfyUI 加载器节点。可直接替代 ComfyUI 内置的 `Load CLIP Vision`（输入 `clip_name`，输出 `CLIP_VISION`）。
+
+- **Float pack**（无 `comfy_quant`）：与内置节点逐字节等价 —— 相同的 key 布局自动识别、相同的前处理、相同的输出（`last_hidden_state` / `image_embeds` / `penultimate_hidden_states` / `image_sizes` / `mm_projected`）。
+- **ConvRot INT8 pack**（如 `CLIP-ViT-H-14_hswq_convrot_int8.safetensors`）：声明的 ConvRot INT8 层会被原地替换为 `mixed_precision_ops` 的 `Linear`（`int8_tensorwise`，`convrot=True`），并载入其 INT8 代码与 `weight_scale`，因此主干通过 `comfy_kitchen` 执行真正的 INT8 GEMM，而不是反量化成 float。只有声明 `comfy_quant` 且 `format == int8_tensorwise` 的 pack 会被接受；其它格式会被显式拒绝，避免静默地把代码值当作 float 计算。
+- **输入**：`clip_name`（来自 `models/clip_vision` 的 safetensors / `.bin`）
+- **输出**：`CLIP_VISION`（标准类型，可供 `CLIP Vision Encode`、IPAdapter、Style Model、PuLID 等下游使用）
+- **分类**：加载器 (`loaders`)
+
+### HSWQ Load IPAdapter Model
+
+用于加载 **IP-Adapter 模型**（`models/ipadapter`）的 ComfyUI 加载器节点。可直接替代 ComfyUI IPAdapter Plus 的 `IPAdapter Model Loader`（输入 `ipadapter_file`，输出 `IPADAPTER`）。
+
+- **Float pack**（无 `comfy_quant`）：与内置节点逐字节等价 —— 相同的 key 布局自动识别（`image_proj` / `ip_adapter`）、相同的 `plusv2` / `unnorm` 文件名标志、相同的输出。
+- **ConvRot INT8 pack**（如 `ip-adapter_sd15_plus_hswq_convrot_int8.safetensors`）：INT8 代码保持 INT8 —— 不会被反量化。每个声明层被安装为 `ConvRotInt8Linear`，其 `int8_weight` 缓冲保存 INT8 代码、`weight_scale` 缓冲保存 float32 的 per-out-channel scale，forward 调用 `comfy_kitchen.int8_linear(..., convrot=True)`，因此 Hadamard 激活旋转发生在 INT8 GEMM 内部。只有声明 `comfy_quant` 且 `format == int8_tensorwise`、`convrot == true` 的 pack 会被接受；其它格式会被显式拒绝，避免静默地把代码值当作 float 计算。
+- **输入**：`ipadapter_file`（来自 `models/ipadapter` 的 safetensors / `.bin`）
+- **输出**：`IPADAPTER`（标准类型，可供 IPAdapter Plus 的 `IPAdapter` / `IPAdapter Advanced` / `IPAdapter Unified Loader` 使用）
+- **分类**：加载器 (`loaders`)
+- **运行时补丁**：IP-Adapter 扩展的 `To_KV` 与 `IPAdapter` 类在运行时被替换（不修改 ComfyUI 或该扩展的任何文件），使计算图真正执行 INT8 载荷。Float pack 走原路径不变 —— 没有 ConvRot INT8 sidecar 时，打补丁后的类与原类逐位一致。
+
 ### HSWQ ControlNet Loader (ConvRot INT8)
 
 <img src="../png/convrot_int8_controlnet.png" alt="HSWQ ControlNet Loader (ConvRot INT8)" width="400">
