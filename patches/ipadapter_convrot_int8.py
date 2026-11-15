@@ -71,7 +71,7 @@ def _find_ipadapter_module():
         if module is None:
             continue
         path = (getattr(module, "__file__", "") or "").replace("\\", "/")
-        if "comfyui_ipadapter_plus" not in path:
+        if not path.endswith("comfyui_ipadapter_plus/IPAdapterPlus.py"):
             continue
         if not hasattr(module, "IPAdapter") or not hasattr(module, "To_KV"):
             continue

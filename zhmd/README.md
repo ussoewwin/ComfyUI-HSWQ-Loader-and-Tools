@@ -171,11 +171,13 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 
 ### HSWQ Load IPAdapter Model
 
+<img src="../png/ipadapter.png" alt="HSWQ Load IPAdapter Model" width="400">
+
 用于加载 **IP-Adapter 模型**（`models/ipadapter`）的 ComfyUI 加载器节点。可直接替代 ComfyUI IPAdapter Plus 的 `IPAdapter Model Loader`（输入 `ipadapter_file`，输出 `IPADAPTER`）。
 
 - **Float pack**（无 `comfy_quant`）：与内置节点逐字节等价 —— 相同的 key 布局自动识别（`image_proj` / `ip_adapter`）、相同的 `plusv2` / `unnorm` 文件名标志、相同的输出。
 - **ConvRot INT8 pack**（如 `ip-adapter_sd15_plus_hswq_convrot_int8.safetensors`）：INT8 代码保持 INT8 —— 不会被反量化。每个声明层被安装为 `ConvRotInt8Linear`，其 `int8_weight` 缓冲保存 INT8 代码、`weight_scale` 缓冲保存 float32 的 per-out-channel scale，forward 调用 `comfy_kitchen.int8_linear(..., convrot=True)`，因此 Hadamard 激活旋转发生在 INT8 GEMM 内部。只有声明 `comfy_quant` 且 `format == int8_tensorwise`、`convrot == true` 的 pack 会被接受；其它格式会被显式拒绝，避免静默地把代码值当作 float 计算。
-- **输入**：`ipadapter_file`（来自 `models/ipadapter` 的 safetensors / `.bin`）
+- **输入**：`ipadapter_file`（safetensors / `.bin`；下拉列表跟随 `ipadapter_dir` 更新）+ `ipadapter_dir`（可选的文件夹路径；留空 = `models/ipadapter`）
 - **输出**：`IPADAPTER`（标准类型，可供 IPAdapter Plus 的 `IPAdapter` / `IPAdapter Advanced` / `IPAdapter Unified Loader` 使用）
 - **分类**：加载器 (`loaders`)
 - **运行时补丁**：IP-Adapter 扩展的 `To_KV` 与 `IPAdapter` 类在运行时被替换（不修改 ComfyUI 或该扩展的任何文件），使计算图真正执行 INT8 载荷。Float pack 走原路径不变 —— 没有 ConvRot INT8 sidecar 时，打补丁后的类与原类逐位一致。

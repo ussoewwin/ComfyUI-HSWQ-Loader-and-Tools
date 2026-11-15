@@ -170,11 +170,13 @@ ComfyUI loader node for **CLIP Vision towers** (ViT-g/H, SigLIP, SigLIP2, ViT-L,
 
 ### HSWQ Load IPAdapter Model
 
+<img src="png/ipadapter.png" alt="HSWQ Load IPAdapter Model" width="400">
+
 ComfyUI loader node for **IP-Adapter models** (`models/ipadapter`). Drop-in replacement for ComfyUI IPAdapter Plus's `IPAdapter Model Loader` (input `ipadapter_file`, output `IPADAPTER`).
 
 - **Float packs** (no `comfy_quant`): byte-identical to the stock node - same key-layout auto-detection (`image_proj` / `ip_adapter`), same `plusv2` / `unnorm` filename flags, same output.
 - **ConvRot INT8 packs** (e.g. `ip-adapter_sd15_plus_hswq_convrot_int8.safetensors`): the INT8 codes stay INT8 - they are not dequantised. Each declared layer is installed as a `ConvRotInt8Linear` that holds the codes in an `int8_weight` buffer and the per-output-channel scale in a float32 `weight_scale` buffer, and its forward runs `comfy_kitchen.int8_linear(..., convrot=True)` so the Hadamard activation rotation happens inside the INT8 GEMM. Only packs that declare `comfy_quant` with `format == int8_tensorwise` and `convrot == true` are accepted; other formats are rejected explicitly rather than silently running on codes-as-float.
-- **Inputs**: `ipadapter_file` (safetensors / `.bin` from `models/ipadapter`)
+- **Inputs**: `ipadapter_file` (safetensors / `.bin`; the dropdown lists the files of `ipadapter_dir`) + `ipadapter_dir` (optional folder path; empty = `models/ipadapter`)
 - **Outputs**: `IPADAPTER` (standard, consumable by IPAdapter Plus' `IPAdapter` / `IPAdapter Advanced` / `IPAdapter Unified Loader`)
 - **Category**: `loaders`
 - **Runtime patch**: the IP-Adapter extension's `To_KV` and `IPAdapter` classes are replaced at runtime (no file of ComfyUI or of the extension is modified) so the graph evaluates the INT8 payload. Float packs take the stock path unchanged - the patched classes behave bit-identically to the originals when no ConvRot INT8 sidecar is present.
