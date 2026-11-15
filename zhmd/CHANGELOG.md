@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.1
+
+- 新增：**HSWQ Load CLIP Vision 节点** -- ComfyUI 内置 "Load CLIP Vision" 的直接替代节点（输入 `clip_name`，输出 `CLIP_VISION`）。无 `comfy_quant` 的 float pack 通过 `comfy.clip_vision.load` 逐字节等价于 stock 节点；ConvRot INT8 pack（如 `CLIP-ViT-H-14_hswq_convrot_int8.safetensors`）的声明层会被原地替换为 `mixed_precision_ops` `Linear`（`int8_tensorwise`，`convrot=True`），通过 `comfy_kitchen` 执行真正的 INT8 GEMM。验证：声明的 92 / 92 层全部 armed，INT8 与 FP16 的 image_embeds cosine 0.999988，rel_l2 0.496 %，全部 finite。仅接受所有 `comfy_quant` 层均为 `int8_tensorwise` 的 pack；其它格式会被显式 `RuntimeError` 拒绝，避免静默地把代码值当作 float 计算。
+- 查看 [发布说明 v3.7.1](v3.7.1.md)
+
 ## Version 3.7.0
 
 - 新增 / 修复：**ConvRot INT8 与 Hybrid ConvRot NVFP4 模型（Z Image 与 Krea2）全面支持 LoRA 与 LoKr（Kronecker 积）** -- 针对 ComfyUI 官方重构的 `WeightAdapterBase`（`LoRAAdapter`、`LoKrAdapter`）导致的形状不匹配（`11363x6144 and 1536x1536`）及量化重算丢失问题，全面升级了 HSWQ 低秩残差烘焙与前向计算体系：

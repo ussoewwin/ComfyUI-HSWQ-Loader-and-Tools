@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.1
+
+- **Added**: **HSWQ Load CLIP Vision node** - a drop-in replacement for ComfyUI's built-in "Load CLIP Vision" (input `clip_name`, output `CLIP_VISION`). Float packs (no `comfy_quant`) load through `comfy.clip_vision.load` byte-identically to stock; ConvRot INT8 packs (`CLIP-ViT-H-14_hswq_convrot_int8.safetensors`) have their declared layers swapped in-place for `mixed_precision_ops` `Linear` (`int8_tensorwise`, `convrot=True`) and run a real INT8 GEMM via `comfy_kitchen`. Verified: 92 / 92 declared layers armed, INT8 vs FP16 image_embeds cosine 0.999988, rel_l2 0.496 %, all finite. Only packs whose `comfy_quant` layers are all `int8_tensorwise` are accepted; any other declared format is rejected explicitly rather than silently running on codes-as-float.
+- See [Release Notes v3.7.1](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.1) for details.
+
 ## Version 3.7.0
 
 - **Added / Fixed**: **Full LoRA & LoKr (Kronecker product) support on ConvRot INT8 and Hybrid ConvRot NVFP4 models (Z Image & Krea2)** - ComfyUI's architectural migration to `WeightAdapterBase` (`LoRAAdapter`, `LoKrAdapter`) caused severe shape mismatches (`11363x6144 and 1536x1536`) and delta elimination on quantized models. The HSWQ low-rank residual bake and forward execution stacks have been upgraded:
