@@ -156,6 +156,18 @@ DisTorch2 variant of the loader above: the **whole UNet** can live outside VRAM 
 | **`OFF`** | Stock ComfyUI path under DynamicVRAM. The HSWQ patches (LoRA bake / parity / mp stack) are skipped, so offloaded weights sit in the DynamicVRAM host buffer (**shared VRAM**). **This is the faster mode for Krea2 ConvRot INT8.** |
 | **`ON`** | HSWQ path (HSWQ LoRA bake + legacy patcher, so DisTorch placement runs). This mode is intended for **Hybrid ConvRot NVFP4** support (e.g. Z Image), where HSWQ's own LoRA handling is required. Slower than `OFF` on Krea2 ConvRot INT8. |
 
+### HSWQ Load CLIP Vision
+
+<img src="png/loadclip.png" alt="HSWQ Load CLIP Vision" width="400">
+
+ComfyUI loader node for **CLIP Vision towers** (ViT-g/H, SigLIP, SigLIP2, ViT-L, DINOv2, DINOv3). Drop-in replacement for ComfyUI's built-in `Load CLIP Vision` (input `clip_name`, output `CLIP_VISION`).
+
+- **Float packs** (no `comfy_quant`): byte-identical to the stock node — same key-layout auto-detection, same preprocessing, same output (`last_hidden_state` / `image_embeds` / `penultimate_hidden_states` / `image_sizes` / `mm_projected`).
+- **ConvRot INT8 packs** (e.g. `CLIP-ViT-H-14_hswq_convrot_int8.safetensors`): ConvRot INT8 layers are swapped in-place for `mixed_precision_ops` `Linear` (`int8_tensorwise`, `convrot=True`) and their INT8 codes / `weight_scale` are loaded, so the tower runs a real INT8 GEMM via `comfy_kitchen` instead of dequantising to float. Only packs that declare `comfy_quant` with `format == int8_tensorwise` are accepted; other formats are rejected explicitly rather than silently running on codes-as-float.
+- **Inputs**: `clip_name` (safetensors / `.bin` from `models/clip_vision`)
+- **Outputs**: `CLIP_VISION` (standard, consumable by `CLIP Vision Encode`, IPAdapter, Style Model, PuLID, etc.)
+- **Category**: `loaders`
+
 ### HSWQ ControlNet Loader (ConvRot INT8)
 
 <img src="png/convrot_int8_controlnet.png" alt="HSWQ ControlNet Loader (ConvRot INT8)" width="400">
