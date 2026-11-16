@@ -42,18 +42,78 @@ def _model_extensions():
     return (".safetensors", ".bin", ".ckpt", ".pt", ".pth")
 
 
+def register_directory(directory):
+    """Add ``directory`` to the ``ipadapter`` category of ``folder_paths``.
+
+    The frontend validates a combo value against the node definition's option
+    list, which comes from ``folder_paths``. A file taken from a folder outside
+    ``models/ipadapter`` is only a valid option once its folder is registered,
+    so every listed folder is registered here.
+
+    Returns the normalised path, or None when it is not a directory.
+    """
+    if not directory or not str(directory).strip():
+        return None
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
+    if not os.path.isdir(path):
+        return None
+    try:
+        import folder_paths
+
+        paths = folder_paths.folder_names_and_paths.get("ipadapter")
+        if paths is None:
+            folder_paths.folder_names_and_paths["ipadapter"] = (
+                [path],
+                folder_paths.supported_pt_extensions,
+            )
+            return path
+        known = paths[0]
+        if path not in known:
+            known.append(path)
+            logger.info("[HSWQ IPAdapter] registered extra model folder: %s", path)
+    except Exception as exc:
+        logger.warning("[HSWQ IPAdapter] cannot register %s: %s", path, exc)
+    return path
+
+
+def list_ipadapter_folder(directory):
+    """Model file names of one folder (no side effects, no registration)."""
+    if not directory or not str(directory).strip():
+        return []
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
+    if not os.path.isdir(path):
+        return []
+    exts = _model_extensions()
+    names = []
+    try:
+        for entry in os.listdir(path):
+            full = os.path.join(path, entry)
+            if os.path.isfile(full) and os.path.splitext(entry)[1].lower() in exts:
+                names.append(entry)
+    except OSError:
+        return []
+    return sorted(names)
+
 def list_ipadapter_files(directory):
     """File names of the model files in ``directory``.
 
     ``directory`` empty -> the registered ``ipadapter`` model folder.
     Returns a sorted list of file names (no directories, no full paths).
+    The folder is registered in ``folder_paths`` so its files also become
+    valid options of the node definition.
     """
     if not directory or not str(directory).strip():
         return _list_registered_ipadapter_folder()
 
-    path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
-    if not os.path.isdir(path):
+    path = register_directory(directory)
+    if path is None:
         return []
+    try:
+        import folder_paths
+
+        names = list(folder_paths.get_filename_list("ipadapter"))
+    except Exception:
+        names = []
 
     exts = _model_extensions()
     names = []

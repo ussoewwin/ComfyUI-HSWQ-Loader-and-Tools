@@ -1,8 +1,13 @@
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app as shimApp } from "../../scripts/app.js";
+import { api as shimApi } from "../../scripts/api.js";
 
 const NODE_ID = "HSWQLoadIPAdapterModel";
 const LIST_URL = "/hswq/ipadapter/list";
+
+// The legacy shims export window.comfyAPI.*; read them directly as a fallback
+// so the extension keeps working if the shim import resolves to undefined.
+const app = shimApp ?? globalThis?.comfyAPI?.app?.app;
+const api = shimApi ?? globalThis?.comfyAPI?.api?.api;
 
 /**
  * Ask the backend which model files live in `dir`.
@@ -16,23 +21,53 @@ async function listFiles(dir) {
 }
 
 /**
- * Keep the native "ipadapter_file" combo in sync with the "ipadapter_dir"
- * text field: on a folder change, replace the combo's option list with the
- * files of that folder and keep the selection valid.
+ * Replace the dropdown options while keeping the array reactive.
+ * The frontend store keeps `options` reactive; mutating the existing array is
+ * what its own combo code does (`values.splice(...)`), so do the same.
+ */
+function setComboValues(widget, values) {
+    const current = widget.options?.values;
+    if (Array.isArray(current)) {
+        current.splice(0, current.length, ...values);
+        return;
+    }
+    widget.options = { ...(widget.options ?? {}), values };
+}
+
+/** Set a widget value through the frontend's own setter when it exists. */
+function setWidgetValue(widget, value) {
+    if (typeof widget.setValue === "function") {
+        try {
+            widget.setValue(value, {});
+            return;
+        } catch (err) {
+            console.warn("[HSWQ IPAdapter] setValue failed, assigning directly", err);
+        }
+    }
+    widget.value = value;
+    widget.callback?.(value);
+}
+
+/**
+ * Keep the native "ipadapter_file" dropdown in sync with the "ipadapter_dir"
+ * folder field: on a folder change, replace the dropdown's option list with
+ * the files of that folder.
  *
- * The backend declares the file input as a COMBO, so this widget already is
- * a dropdown - no widget replacement happens here. The backend accepts any
- * file of any folder because it validates the input itself (VALIDATE_INPUTS).
+ * The selected file name is never replaced by the listing. A saved workflow
+ * keeps the file name that belongs to the folder the user typed, and the
+ * listing may still belong to the previous folder while the folder widget is
+ * being restored.
  */
 function setupFileCombo(node) {
-    const dirWidget = node.widgets?.find((w) => w.name === "ipadapter_dir");
-    const fileWidget = node.widgets?.find((w) => w.name === "ipadapter_file");
+    if (!node?.widgets) return null;
+    const dirWidget = node.widgets.find((w) => w.name === "ipadapter_dir");
+    const fileWidget = node.widgets.find((w) => w.name === "ipadapter_file");
     if (!dirWidget || !fileWidget || fileWidget.type !== "combo") return null;
 
-    let refreshSeq = 0;
+    let seq = 0;
     const refresh = async (dirValue) => {
-        const seq = ++refreshSeq;
-        const dir = (dirValue ?? dirWidget.value ?? "").trim();
+        const current = ++seq;
+        const dir = String(dirValue ?? dirWidget.value ?? "").trim();
         let files = [];
         try {
             files = await listFiles(dir);
@@ -40,16 +75,15 @@ function setupFileCombo(node) {
             console.warn("[HSWQ IPAdapter] file listing failed", err);
             return;
         }
-        if (seq !== refreshSeq) return; // a newer change already ran
-        if (!files.length) files = [""];
+        if (current !== seq) return; // a newer change already ran
 
-        fileWidget.options.values = files;
-        if (!files.includes(fileWidget.value)) {
-            fileWidget.value = files[0];
-            fileWidget.callback?.(fileWidget.value);
-        }
+        const selected = String(fileWidget.value ?? "");
+        const values = files.slice();
+        if (selected && !values.includes(selected)) values.unshift(selected);
+        if (!values.length) values.push("");
+        setComboValues(fileWidget, values);
+
         node.setDirtyCanvas?.(true, false);
-        node.graph?.incrementVersion?.();
     };
 
     if (!dirWidget.__hswqWrapped) {
@@ -62,28 +96,69 @@ function setupFileCombo(node) {
         dirWidget.__hswqWrapped = true;
     }
 
+    if (!node.__hswqChangedWrapped) {
+        const origChanged = node.onWidgetChanged;
+        node.onWidgetChanged = function (name, value, oldValue, widget) {
+            const result = origChanged?.apply(this, arguments);
+            if (name === "ipadapter_dir") {
+                refresh(typeof value === "string" ? value : dirWidget.value);
+            }
+            return result;
+        };
+        node.__hswqChangedWrapped = true;
+    }
+
     refresh(dirWidget.value);
+    // A saved workflow restores widget values after node creation, and the
+    // frontend may reload node definitions afterwards; re-list a few times so
+    // the dropdown ends up on the restored folder. The selection is untouched.
+    for (const delay of [50, 250, 700, 1500, 3000]) {
+        setTimeout(() => refresh(dirWidget.value), delay);
+    }
     return fileWidget;
 }
 
 function applySetup(node) {
     if (!node || node.comfyClass !== NODE_ID) return;
     if (node.__hswqIpAdapterComboReady) return;
-    const combo = setupFileCombo(node);
-    if (!combo) return;
-    node.__hswqIpAdapterComboReady = true;
+    let attempts = 0;
+    const trySetup = () => {
+        if (node.__hswqIpAdapterComboReady) return;
+        const combo = setupFileCombo(node);
+        if (combo) {
+            node.__hswqIpAdapterComboReady = true;
+            return;
+        }
+        // The frontend builds the node's widgets asynchronously; keep waiting
+        // until the folder field and the dropdown both exist.
+        if (++attempts < 60) setTimeout(trySetup, 100);
+    };
+    trySetup();
 }
 
-app.registerExtension({
-    name: "hswq.ipadapter_model_dir",
+if (app?.registerExtension) {
+    app.registerExtension({
+        name: "hswq.ipadapter_model_dir",
 
-    nodeCreated(node) {
-        applySetup(node);
-        setTimeout(() => applySetup(node), 100);
-    },
+        nodeCreated(node) {
+            applySetup(node);
+        },
 
-    loadedGraphNode(node) {
-        applySetup(node);
-        setTimeout(() => applySetup(node), 100);
-    },
-});
+        loadedGraphNode(node) {
+            applySetup(node);
+        },
+
+        // Called by the frontend after node definitions are (re)loaded; the
+        // combo options are reset from the node definition at that point.
+        refreshComboInNodes() {
+            const graph = app.graph;
+            for (const node of graph?._nodes ?? []) {
+                if (node?.comfyClass !== NODE_ID) continue;
+                node.__hswqIpAdapterComboReady = false;
+                applySetup(node);
+            }
+        },
+    });
+} else {
+    console.error("[HSWQ IPAdapter] app.registerExtension is unavailable; the folder dropdown cannot follow ipadapter_dir");
+}

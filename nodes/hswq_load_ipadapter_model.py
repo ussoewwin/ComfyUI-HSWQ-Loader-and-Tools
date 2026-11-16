@@ -2,27 +2,16 @@
 
 Port of ComfyUI IPAdapter Plus's "IPAdapter Model Loader" node
 (comfyui_ipadapter_plus ``IPAdapterModelLoader``) into the HSWQ loader
-package, with the ``HSWQ`` name prefix, ConvRot INT8 pack support and an
-arbitrary model folder.
+package, with the ``HSWQ`` name prefix and ConvRot INT8 pack support.
 
 Inputs:
-  * ``ipadapter_file`` - model file, a dropdown like the stock node. Its
-    options are the registered ``models/ipadapter`` folder at registration
-    time; the frontend replaces them with the files of ``ipadapter_dir``
-    when that folder is given (route ``/hswq/ipadapter/list``).
+  * ``ipadapter_file`` - model file name, as typed.
   * ``ipadapter_dir`` - optional folder the model is loaded from. Empty means
-    the ComfyUI-registered ``models/ipadapter`` folder (stock behaviour).
-    An absolute ``ipadapter_file`` is used as-is.
+    the ComfyUI-registered ``models/ipadapter`` folder.
 
-Why ``VALIDATE_INPUTS`` exists: ComfyUI validates a COMBO value against the
-option list the node registered (``execution.py`` -> ``value_not_in_list``).
-Because that list is fixed at registration, a file of a folder the user
-types afterwards is not in it. A node that declares the input in its own
-``VALIDATE_INPUTS`` signature owns that input's validation instead - ComfyUI
-then skips the generic list check for it (``execution.py``: the check is
-inside ``if x not in validate_function_inputs``). The node validates the
-resolved path itself, so the dropdown still works while any folder is
-accepted. Nothing of ComfyUI is modified.
+The folder given in ``ipadapter_dir`` is the only place the file is loaded
+from - with no folder the registered ``models/ipadapter`` folder is used.
+Both inputs are plain text, so what the user types is exactly what is loaded.
 
 Float packs take the stock path (inlined ``ipadapter_model_loader``:
 key split into ``image_proj`` / ``ip_adapter`` dicts, ``plusv2`` /
@@ -78,57 +67,55 @@ except ImportError:
     except ImportError:
         _ipa_convrot = None
 
-# ---- arbitrary load location ----
 
-try:
-    from ..hswq import ipadapter_paths as _ipa_paths
-except ImportError:
+def _default_dir():
+    """Registered ipadapter model folder (default of the folder field)."""
     try:
-        from hswq import ipadapter_paths as _ipa_paths
-    except ImportError:
-        _ipa_paths = None
+        paths = folder_paths.folder_names_and_paths.get("ipadapter")
+        if paths and paths[0]:
+            return paths[0][0]
+    except Exception:
+        pass
+    return os.path.join(folder_paths.models_dir, "ipadapter")
 
 
 def _registered_files():
-    """File list of the registered ``ipadapter`` model folder."""
-    if _ipa_paths is not None:
-        files = _ipa_paths.list_ipadapter_files("")
-        if files:
-            return files
+    """Model file names offered by the file dropdown.
+
+    The ``ipadapter`` category of ``folder_paths``. A folder outside
+    ``models/ipadapter`` is added to that category in memory when the user
+    points at it, so its files become valid dropdown options in this process
+    without writing anything to disk and without depending on what any other
+    machine has loaded before.
+    """
     try:
         return sorted(folder_paths.get_filename_list("ipadapter"))
     except Exception:
-        pass
-    # The "ipadapter" folder is registered by comfyui_ipadapter_plus; if it is
-    # not loaded, scan models/ipadapter directly with ComfyUI's model
-    # extensions so the dropdown is never empty.
-    base = os.path.join(folder_paths.models_dir, "ipadapter")
-    exts = tuple(folder_paths.supported_pt_extensions)
-    files = []
-    try:
-        for entry in os.listdir(base):
-            full = os.path.join(base, entry)
-            if os.path.isfile(full) and os.path.splitext(entry)[1].lower() in exts:
-                files.append(entry)
-    except OSError:
-        pass
-    return sorted(files)
+        return []
 
 
 def _resolve_path(file_name, directory):
-    """Full path of the selected model."""
-    if _ipa_paths is not None:
-        return _ipa_paths.resolve_ipadapter_path(file_name, directory)
+    """Full path of the selected model.
 
+    ``directory`` given -> the file is loaded from that folder and nowhere
+    else. Empty -> the registered ``ipadapter`` model folder (stock).
+    """
     name = str(file_name or "").strip()
     if not name:
         raise ValueError("IPAdapter: no file selected")
     if os.path.isabs(name):
         return os.path.normpath(name)
+
     if not directory or not str(directory).strip():
-        return folder_paths.get_full_path_or_raise("ipadapter", name)
+        raise ValueError("IPAdapter: no folder given")
     base = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
-    return os.path.join(base, name)
+    try:
+        from hswq.ipadapter_paths import register_directory
+
+        register_directory(base)
+    except Exception:
+        pass
+    return os.path.normpath(os.path.join(base, name))
 
 
 def _split_prefixed(model):
@@ -189,31 +176,24 @@ def _load_with_convrot_int8(file):
 
 
 class HSWQLoadIPAdapterModel:
-    """Load an IP-Adapter model from any folder (float + ConvRot INT8)."""
+    """Load an IP-Adapter model from the given folder (or models/ipadapter)."""
 
     @classmethod
     def INPUT_TYPES(s):
-        files = _registered_files()
         return {
             "required": {
-                # COMBO: the frontend renders a dropdown, exactly like the
-                # stock IPAdapter loader. Its options follow ipadapter_dir
-                # at runtime (frontend refresh through /hswq/ipadapter/list).
+                # COMBO: the dropdown of IP-Adapter model files. Its options
+                # follow ipadapter_dir (route /hswq/ipadapter/list).
                 "ipadapter_file": (
-                    files if files else [""],
-                    {"tooltip": "IP-Adapter model file. The list follows ipadapter_dir."},
+                    _registered_files() if _registered_files() else [""],
+                    {"tooltip": "IP-Adapter model file (dropdown follows ipadapter_dir)."},
                 ),
-            },
-            "optional": {
                 "ipadapter_dir": (
                     "STRING",
                     {
-                        "default": "",
+                        "default": _default_dir(),
                         "multiline": False,
-                        "tooltip": (
-                            "Folder the IP-Adapter model is loaded from. Leave empty "
-                            "for the ComfyUI models/ipadapter folder."
-                        ),
+                        "tooltip": "Folder the IP-Adapter model is loaded from.",
                     },
                 ),
             },
@@ -226,12 +206,7 @@ class HSWQLoadIPAdapterModel:
 
     @classmethod
     def VALIDATE_INPUTS(s, ipadapter_file, ipadapter_dir=""):
-        """Own validation of ``ipadapter_file`` (see module docstring).
-
-        Declaring the input here makes ComfyUI skip its registration-time
-        COMBO list check for it, so a file of ``ipadapter_dir`` is accepted.
-        The path is resolved and checked instead.
-        """
+        """Resolve the path and report a missing file before the run."""
         try:
             path = _resolve_path(ipadapter_file, ipadapter_dir)
         except Exception as exc:

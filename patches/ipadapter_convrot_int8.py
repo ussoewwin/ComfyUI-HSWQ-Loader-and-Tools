@@ -60,13 +60,17 @@ _LOG = "[HSWQ IPAdapter ConvRot INT8]"
 _MODULE_MARKER = "_hswq_convrot_int8_patched"
 
 
-def _find_ipadapter_module():
-    """Locate the loaded ``comfyui_ipadapter_plus`` module.
+def _find_ipadapter_modules():
+    """Every loaded ``comfyui_ipadapter_plus`` module that builds IPAdapter.
 
     ComfyUI imports custom nodes by filesystem path, so the module name is a
-    path, not a package name. The module is identified by its file location
-    and by the two globals it must provide.
+    path, not a package name, and the same file can be present in
+    ``sys.modules`` more than once (package-style import and path-style
+    import). The module that owns ``ipadapter_execute`` is the one whose
+    ``IPAdapter`` global is used at run time, so every candidate is patched -
+    patching only the first one can leave the run-time module untouched.
     """
+    found = []
     for module in list(sys.modules.values()):
         if module is None:
             continue
@@ -75,8 +79,8 @@ def _find_ipadapter_module():
             continue
         if not hasattr(module, "IPAdapter") or not hasattr(module, "To_KV"):
             continue
-        return module
-    return None
+        found.append(module)
+    return found
 
 
 def _make_to_kv(base_to_kv):
@@ -183,25 +187,40 @@ def patch_ipadapter_plus():
     present but cannot be patched, and returns False when it is absent (a
     float pack then still loads through the stock path).
     """
-    module = _find_ipadapter_module()
-    if module is None:
+    modules = _find_ipadapter_modules()
+    if not modules:
         return False
-    if getattr(module, _MODULE_MARKER, False):
-        return True
 
-    try:
-        base_to_kv = module.To_KV
-        base_ipadapter = module.IPAdapter
-        patched_to_kv = _make_to_kv(base_to_kv)
-        patched_ipadapter = _make_ipadapter(base_ipadapter, patched_to_kv)
-        module.To_KV = patched_to_kv
-        module.IPAdapter = patched_ipadapter
-    except Exception as exc:
-        raise RuntimeError(
-            "%s failed to install the ConvRot INT8 patch on the IP-Adapter extension: %s"
-            % (_LOG, exc)
-        ) from exc
+    patched_any = False
+    for module in modules:
+        if getattr(module, _MODULE_MARKER, False):
+            patched_any = True
+            continue
+        try:
+            base_to_kv = module.To_KV
+            base_ipadapter = module.IPAdapter
+            patched_to_kv = _make_to_kv(base_to_kv)
+            patched_ipadapter = _make_ipadapter(base_ipadapter, patched_to_kv)
+            module.To_KV = patched_to_kv
+            module.IPAdapter = patched_ipadapter
+        except Exception as exc:
+            raise RuntimeError(
+                "%s failed to install the ConvRot INT8 patch on the IP-Adapter extension: %s"
+                % (_LOG, exc)
+            ) from exc
+        setattr(module, _MODULE_MARKER, True)
+        patched_any = True
+        logger.info(
+            "%s patch installed on the IP-Adapter extension (module %r)",
+            _LOG,
+            getattr(module, "__name__", "?"),
+        )
 
-    setattr(module, _MODULE_MARKER, True)
-    logger.info("%s patch installed on the IP-Adapter extension", _LOG)
+    if not patched_any:
+        return False
+    logger.info(
+        "%s patch installed on %d IP-Adapter module(s)",
+        _LOG,
+        len(modules),
+    )
     return True
