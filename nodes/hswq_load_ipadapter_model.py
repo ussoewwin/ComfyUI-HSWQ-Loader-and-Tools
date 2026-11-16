@@ -5,13 +5,11 @@ Port of ComfyUI IPAdapter Plus's "IPAdapter Model Loader" node
 package, with the ``HSWQ`` name prefix and ConvRot INT8 pack support.
 
 Inputs:
-  * ``ipadapter_file`` - model file name, as typed.
-  * ``ipadapter_dir`` - optional folder the model is loaded from. Empty means
-    the ComfyUI-registered ``models/ipadapter`` folder.
+  * ``ipadapter_file`` - model file name, chosen from the dropdown.
+  * ``ipadapter_dir`` - required folder the model is loaded from.
 
 The folder given in ``ipadapter_dir`` is the only place the file is loaded
-from - with no folder the registered ``models/ipadapter`` folder is used.
-Both inputs are plain text, so what the user types is exactly what is loaded.
+from - an empty folder is rejected, there is no fallback to another folder.
 
 Float packs take the stock path (inlined ``ipadapter_model_loader``:
 key split into ``image_proj`` / ``ip_adapter`` dicts, ``plusv2`` /
@@ -97,8 +95,8 @@ def _registered_files():
 def _resolve_path(file_name, directory):
     """Full path of the selected model.
 
-    ``directory`` given -> the file is loaded from that folder and nowhere
-    else. Empty -> the registered ``ipadapter`` model folder (stock).
+    ``directory`` is required -> the file is loaded from that folder and
+    nowhere else. An empty folder is rejected.
     """
     name = str(file_name or "").strip()
     if not name:
@@ -176,7 +174,7 @@ def _load_with_convrot_int8(file):
 
 
 class HSWQLoadIPAdapterModel:
-    """Load an IP-Adapter model from the given folder (or models/ipadapter)."""
+    """Load an IP-Adapter model from the folder given in ipadapter_dir."""
 
     @classmethod
     def INPUT_TYPES(s):

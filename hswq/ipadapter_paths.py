@@ -141,29 +141,6 @@ def _list_registered_ipadapter_folder():
         return []
 
 
-def resolve_ipadapter_path(file_name, directory):
-    """Full path of ``file_name`` inside ``directory``.
-
-    ``directory`` empty -> the registered ``ipadapter`` model folder
-    (stock behaviour). Otherwise the file is looked up in that directory;
-    an absolute ``file_name`` is used as-is.
-    """
-    name = str(file_name or "").strip()
-    if not name:
-        raise ValueError("IPAdapter: no file selected")
-
-    if os.path.isabs(name):
-        return os.path.normpath(name)
-
-    if not directory or not str(directory).strip():
-        import folder_paths
-
-        return folder_paths.get_full_path_or_raise("ipadapter", name)
-
-    base = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
-    return os.path.join(base, name)
-
-
 def register_ipadapter_list_route():
     """Register the listing route on the running PromptServer.
 
