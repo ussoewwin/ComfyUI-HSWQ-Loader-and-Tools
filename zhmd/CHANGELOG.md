@@ -10,7 +10,7 @@
 ## Version 3.7.2
 
 - 新增：**HSWQ Load IPAdapter Model 节点** -- ComfyUI 加载器节点，可从任意文件夹加载 IP-Adapter 模型。可直接替代 ComfyUI IPAdapter Plus 的 `IPAdapter Model Loader`（输入 `ipadapter_file` + `ipadapter_dir`，输出 `IPADAPTER`）。无 `comfy_quant` 的 float pack 与内置节点逐字节等价（相同的 key 布局自动识别 `image_proj` / `ip_adapter`、相同的 `plusv2` / `unnorm` 文件名标志、相同的输出）。ConvRot INT8 pack 保持 INT8 代码：每个声明层被安装为 `ConvRotInt8Linear`，其 `int8_weight` 缓冲保存 INT8 代码、`weight_scale` 缓冲保存 float32 的 per-out-channel scale，forward 调用 `comfy_kitchen.int8_linear(..., convrot=True)`，因此 Hadamard 激活旋转发生在 INT8 GEMM 内部。模型只从 `ipadapter_dir` 指定的文件夹加载；留空会被拒绝，不会回退到其它文件夹。
-- 详情请参阅 [发布说明 v3.7.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.2)。
+- 查看 [发布说明 v3.7.2](v3.7.2.md)。
 
 ## Version 3.7.1
 
