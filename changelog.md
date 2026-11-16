@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.2
+
+- **Added**: **HSWQ Load IPAdapter Model node** - ComfyUI loader node for IP-Adapter models from any folder. Drop-in replacement for ComfyUI IPAdapter Plus's `IPAdapter Model Loader` (inputs `ipadapter_file` + `ipadapter_dir`, output `IPADAPTER`). Float packs (no `comfy_quant`) load byte-identically to the stock node (same key-layout auto-detection `image_proj` / `ip_adapter`, same `plusv2` / `unnorm` filename flags, same output). ConvRot INT8 packs keep their INT8 codes: each declared layer is installed as a `ConvRotInt8Linear` holding the codes in an `int8_weight` buffer and the per-output-channel scale in a float32 `weight_scale` buffer, and its forward runs `comfy_kitchen.int8_linear(..., convrot=True)` so the Hadamard activation rotation happens inside the INT8 GEMM. The folder given in `ipadapter_dir` is the only place the model is loaded from; an empty folder is rejected and there is no fallback to another folder.
+- See [Release Notes v3.7.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.2) for details.
+
 ## Version 3.7.1
 
 - **Added**: **HSWQ Load CLIP Vision node** - a drop-in replacement for ComfyUI's built-in "Load CLIP Vision" (input `clip_name`, output `CLIP_VISION`). Float packs (no `comfy_quant`) load through `comfy.clip_vision.load` byte-identically to stock; ConvRot INT8 packs (`CLIP-ViT-H-14_hswq_convrot_int8.safetensors`) have their declared layers swapped in-place for `mixed_precision_ops` `Linear` (`int8_tensorwise`, `convrot=True`) and run a real INT8 GEMM via `comfy_kitchen`. Verified: 92 / 92 declared layers armed, INT8 vs FP16 image_embeds cosine 0.999988, rel_l2 0.496 %, all finite. Only packs whose `comfy_quant` layers are all `int8_tensorwise` are accepted; any other declared format is rejected explicitly rather than silently running on codes-as-float.

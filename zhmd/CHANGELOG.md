@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.2
+
+- 新增：**HSWQ Load IPAdapter Model 节点** -- ComfyUI 加载器节点，可从任意文件夹加载 IP-Adapter 模型。可直接替代 ComfyUI IPAdapter Plus 的 `IPAdapter Model Loader`（输入 `ipadapter_file` + `ipadapter_dir`，输出 `IPADAPTER`）。无 `comfy_quant` 的 float pack 与内置节点逐字节等价（相同的 key 布局自动识别 `image_proj` / `ip_adapter`、相同的 `plusv2` / `unnorm` 文件名标志、相同的输出）。ConvRot INT8 pack 保持 INT8 代码：每个声明层被安装为 `ConvRotInt8Linear`，其 `int8_weight` 缓冲保存 INT8 代码、`weight_scale` 缓冲保存 float32 的 per-out-channel scale，forward 调用 `comfy_kitchen.int8_linear(..., convrot=True)`，因此 Hadamard 激活旋转发生在 INT8 GEMM 内部。模型只从 `ipadapter_dir` 指定的文件夹加载；留空会被拒绝，不会回退到其它文件夹。
+- 详情请参阅 [发布说明 v3.7.2](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.2)。
+
 ## Version 3.7.1
 
 - 新增：**HSWQ Load CLIP Vision 节点** -- ComfyUI 内置 "Load CLIP Vision" 的直接替代节点（输入 `clip_name`，输出 `CLIP_VISION`）。无 `comfy_quant` 的 float pack 通过 `comfy.clip_vision.load` 逐字节等价于 stock 节点；ConvRot INT8 pack（如 `CLIP-ViT-H-14_hswq_convrot_int8.safetensors`）的声明层会被原地替换为 `mixed_precision_ops` `Linear`（`int8_tensorwise`，`convrot=True`），通过 `comfy_kitchen` 执行真正的 INT8 GEMM。验证：声明的 92 / 92 层全部 armed，INT8 与 FP16 的 image_embeds cosine 0.999988，rel_l2 0.496 %，全部 finite。仅接受所有 `comfy_quant` 层均为 `int8_tensorwise` 的 pack；其它格式会被显式 `RuntimeError` 拒绝，避免静默地把代码值当作 float 计算。
