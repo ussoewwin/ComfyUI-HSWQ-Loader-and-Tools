@@ -120,6 +120,10 @@ def list_sam3_files(directory):
     """File names of the model files in ``directory``.
 
     ``directory`` empty -> the files of the registered SAM3 category.
+    A folder that is passed in is registered as well: the frontend lists the
+    folder a saved node points at right after a start, and that folder has to
+    become part of the node's options in the same breath, otherwise the
+    restored file name is not a valid option until the folder is re-entered.
     Returns a sorted list of file names (no directories, no full paths).
     """
     if not directory or not str(directory).strip():
@@ -134,6 +138,7 @@ def list_sam3_files(directory):
     path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
     if not os.path.isdir(path):
         return []
+    register_sam3_directory(path)
 
     exts = _model_extensions()
     names = []
