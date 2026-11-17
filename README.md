@@ -108,7 +108,7 @@ Both **SDXL ConvRot INT8** and **SD1.5 ConvRot INT8** are **supported only for m
 #### Usage Notes
 
 - **Inputs**:
-  - `ckpt_name` (dropdown of the checkpoint files) + `ckpt_dir` (required folder path; the checkpoint is loaded from this folder only - an empty folder is rejected, there is no fallback to another folder; the dropdown's options follow `ckpt_dir`)
+  - `ckpt_name`: Checkpoint filename under `models/checkpoints`
   - `weight_dtype`: Precision mode — `default` (auto-detect / FP16), `SDXL ConvRot INT8`, or `SD1.5 ConvRot INT8`
   - `device`: Target execution device (`cuda:0`, `cuda:1`, etc.)
 - **Outputs**: `MODEL` and `CLIP` only; pair with a separate VAE loader node for decoding

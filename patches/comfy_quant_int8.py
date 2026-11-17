@@ -3675,7 +3675,7 @@ def load_unet_hswq_weight_dtype(unet_name, weight_dtype, hswq_bake=True, **kwarg
     return (model,)
 
 
-def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None, ckpt_path=None):
+def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None):
     import sys
     import torch
     import folder_paths
@@ -3691,10 +3691,7 @@ def load_checkpoint_sdxl_hswq_weight_dtype(ckpt_name, weight_dtype, device=None,
         set_current_device(device)
     try:
         # INT8 Conv2d + comfy_quant decode only when checkpoint is INT8.
-        # ckpt_path may be passed pre-resolved by the checkpoint loader when
-        # the file lives in a folder given via the node's ckpt_dir widget.
-        if ckpt_path is None:
-            ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
+        ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
         # Auto-detect native comfy_quant INT8; do not force float8 dtype over int8 weights.
         # SDXL loader passes its own marker ("SDXL ConvRot INT8"); also accept the
         # raw "int8_tensorwise" for backward compatibility with saved workflows.
@@ -3831,21 +3828,18 @@ def install_int8_option_dispatch(node_class_mappings) -> bool:
         _orig_load_checkpoint = sdxl_cls.load_checkpoint
 
         def load_checkpoint(self, ckpt_name, weight_dtype, device=None, **kwargs):
-            from ..hswq.checkpoint_paths import resolve_checkpoint_path
-
-            # Resolve the path from the node's ckpt_dir widget (required
-            # folder; the file is loaded from that folder only). The node's
-            # own VALIDATE_INPUTS already rejects an empty folder.
-            ckpt_path = resolve_checkpoint_path(ckpt_name, kwargs.get("ckpt_dir", ""))
             if weight_dtype in _FP8_WEIGHT_DTYPES:
                 return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
             if weight_dtype == "SDXL ConvRot INT8":
                 return load_checkpoint_sdxl_hswq_weight_dtype(
-                    ckpt_name, weight_dtype, device=device, ckpt_path=ckpt_path
+                    ckpt_name, weight_dtype, device=device
                 )
+            import folder_paths
+
+            ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
             if checkpoint_looks_like_comfy_quant_int8(ckpt_path):
                 return load_checkpoint_sdxl_hswq_weight_dtype(
-                    ckpt_name, weight_dtype, device=device, ckpt_path=ckpt_path
+                    ckpt_name, weight_dtype, device=device
                 )
             return _orig_load_checkpoint(self, ckpt_name, weight_dtype, device=device, **kwargs)
 

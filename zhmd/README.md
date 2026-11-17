@@ -109,7 +109,7 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 #### 使用说明
 
 - **输入**：
-  - `ckpt_name`（检查点文件下拉列表）+ `ckpt_dir`（必填的文件夹路径；检查点只从该文件夹加载 —— 留空会被拒绝，不会回退到其它文件夹；下拉列表的选项会跟随 `ckpt_dir`）
+  - `ckpt_name`：`models/checkpoints` 目录下的检查点文件名
   - `weight_dtype`：精度模式 — `default`（自动识别 / FP16）、`SDXL ConvRot INT8` 或 `SD1.5 ConvRot INT8`
   - `device`：目标执行设备（`cuda:0`、`cuda:1` 等）
 - **输出**：仅 MODEL 与 CLIP；如需解码请连接独立的 VAE 加载器
