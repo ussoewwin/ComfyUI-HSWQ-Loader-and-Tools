@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.3
+
+- **Added**: **HSWQ SAM3 Loader (ConvRot INT8) node** - ComfyUI loader node for ConvRot / TensorWise INT8-quantized SAM3 (Segment Anything 3) checkpoints. Loads the SAM3 model directly into VRAM in 8-bit precision (`QuantizedTensor` / `TensorWiseINT8Layout`) via `comfy_kitchen`'s `int8_linear` kernel with online activation rotation (`convrot`), and returns both `model` (MODEL) and the checkpoint's text encoder `clip` (CLIP). The model file and the folder it is loaded from are selected separately (`sam3_name` + required `sam3_dir`); the file dropdown follows the folder typed into `sam3_dir`. Automatic fallback for layers with unaligned dimensions (`K % 4 != 0`, such as `boxRPB_embed_x` with `K=2`) keeps those layers in float precision while all heavy backbone and transformer blocks stay in accelerated INT8. Non-INT8 (FP16) SAM3 checkpoints load normally with no `MixedPrecisionOps` attached. Compatible with the **HSWQ SAM3 Detect** node and stock ComfyUI SAM3 detection / tracking nodes.
+- See [Release Notes v3.7.3](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.3) for details.
+
 ## Version 3.7.2
 
 - **Added**: **HSWQ Load IPAdapter Model node** - ComfyUI loader node for IP-Adapter models from any folder. Drop-in replacement for ComfyUI IPAdapter Plus's `IPAdapter Model Loader` (inputs `ipadapter_file` + `ipadapter_dir`, output `IPADAPTER`). Float packs (no `comfy_quant`) load byte-identically to the stock node (same key-layout auto-detection `image_proj` / `ip_adapter`, same `plusv2` / `unnorm` filename flags, same output). ConvRot INT8 packs keep their INT8 codes: each declared layer is installed as a `ConvRotInt8Linear` holding the codes in an `int8_weight` buffer and the per-output-channel scale in a float32 `weight_scale` buffer, and its forward runs `comfy_kitchen.int8_linear(..., convrot=True)` so the Hadamard activation rotation happens inside the INT8 GEMM. The folder given in `ipadapter_dir` is the only place the model is loaded from; an empty folder is rejected and there is no fallback to another folder.
