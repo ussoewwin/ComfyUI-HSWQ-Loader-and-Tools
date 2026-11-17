@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.4
+
+- 修复：**HSWQ SAM3 Loader（ConvRot INT8）—— 打开保存的工作流时不再把模型标记为缺失** —— 打开保存的工作流时，前端会把恢复出来的文件名与下拉列表的选项比对，而此时选项列表仍属于恢复之前设置的文件夹，因此该节点被标记为「缺失模型」。现在下拉列表会列出工作流恢复出的文件夹，并在该列表就绪后重新执行前端的缺失模型扫描，节点不再被标记为缺失。文件下拉列表仍会跟随 `sam3_dir` 中填写的文件夹，模型仍只从该文件夹加载。
+- 查看 [发布说明 v3.7.4](v3.7.4.md)。
+
 ## Version 3.7.3
 
 - 新增：**HSWQ SAM3 Loader（ConvRot INT8）节点** -- 面向 ConvRot / TensorWise INT8 量化 SAM3（Segment Anything 3）检查点的 ComfyUI 加载节点。模型以 8 位精度（`QuantizedTensor` / `TensorWiseINT8Layout`）直接驻留 VRAM，并通过 `comfy_kitchen` 的 `int8_linear` 内核（带 `convrot` 在线激活旋转）执行；返回 SAM3 的 `model`（MODEL）以及检查点自带的文本编码器 `clip`（CLIP）。模型文件与加载来源文件夹分别选择（`sam3_name` + 必填的 `sam3_dir`）；文件下拉列表的选项会跟随 `sam3_dir` 中填写的文件夹。非 4 倍数维度的层（如 `K=2` 的 `boxRPB_embed_x`）自动回退为 float 精度计算，而所有重型 backbone 与 transformer 块仍以加速的 INT8 运行。非 INT8（FP16）SAM3 检查点正常加载（不附加 `MixedPrecisionOps`）。兼容 **HSWQ SAM3 Detect** 节点与 ComfyUI 原生 SAM3 检测 / 跟踪节点。

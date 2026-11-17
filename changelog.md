@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.4
+
+- **Fixed**: **HSWQ SAM3 Loader (ConvRot INT8) - a restored workflow no longer reports the model as missing** - when a saved workflow was opened, the frontend compared the restored file name against the dropdown's option list and marked the node as a missing model, because that option list still belonged to the folder that was set before the restore. The dropdown now lists the folder the workflow restored, and the frontend's missing-model scan runs again once that list is in place, so the node is no longer marked as missing. The file dropdown still follows the folder typed into `sam3_dir`, and the model is still loaded from that folder only.
+- See [Release Notes v3.7.4](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.4) for details.
+
 ## Version 3.7.3
 
 - **Added**: **HSWQ SAM3 Loader (ConvRot INT8) node** - ComfyUI loader node for ConvRot / TensorWise INT8-quantized SAM3 (Segment Anything 3) checkpoints. Loads the SAM3 model directly into VRAM in 8-bit precision (`QuantizedTensor` / `TensorWiseINT8Layout`) via `comfy_kitchen`'s `int8_linear` kernel with online activation rotation (`convrot`), and returns both `model` (MODEL) and the checkpoint's text encoder `clip` (CLIP). The model file and the folder it is loaded from are selected separately (`sam3_name` + required `sam3_dir`); the file dropdown follows the folder typed into `sam3_dir`. Automatic fallback for layers with unaligned dimensions (`K % 4 != 0`, such as `boxRPB_embed_x` with `K=2`) keeps those layers in float precision while all heavy backbone and transformer blocks stay in accelerated INT8. Non-INT8 (FP16) SAM3 checkpoints load normally with no `MixedPrecisionOps` attached. Compatible with the **HSWQ SAM3 Detect** node and stock ComfyUI SAM3 detection / tracking nodes.
