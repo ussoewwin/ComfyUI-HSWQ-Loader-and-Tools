@@ -97,23 +97,14 @@ function setupFileCombo(node) {
         node.__hswqChangedWrapped = true;
     }
 
-    // Entry point used after a saved graph is restored: read the folder that
-    // the workflow restored, never the value from node creation time.
-    node.__hswqRefreshCombo = () => refresh(dirWidget.value);
-
     refresh(dirWidget.value);
     // A saved workflow restores widget values after node creation, and the
     // frontend may reload node definitions afterwards; re-list a few times so
     // the dropdown ends up on the restored folder. The selection is untouched.
-    for (const delay of [50, 250, 700, 1500, 3000, 6000]) {
+    for (const delay of [50, 250, 700, 1500, 3000]) {
         setTimeout(() => refresh(dirWidget.value), delay);
     }
     return fileWidget;
-}
-
-function refreshNode(node) {
-    const refresh = node?.__hswqRefreshCombo;
-    if (typeof refresh === "function") refresh();
 }
 
 function applySetup(node) {
@@ -132,19 +123,6 @@ function applySetup(node) {
         if (++attempts < 60) setTimeout(trySetup, 100);
     };
     trySetup();
-
-    // A saved workflow fills the widgets in onConfigure; list the folder the
-    // workflow restored at that point, so the file it points at is an option
-    // again right after a start.
-    if (!node.__hswqConfigureWrapped) {
-        const origConfigure = node.onConfigure;
-        node.onConfigure = function (info) {
-            const result = origConfigure?.apply(this, arguments);
-            setTimeout(() => refreshNode(this), 0);
-            return result;
-        };
-        node.__hswqConfigureWrapped = true;
-    }
 }
 
 if (app?.registerExtension) {
@@ -157,9 +135,6 @@ if (app?.registerExtension) {
 
         loadedGraphNode(node) {
             applySetup(node);
-            if (!node || !NODE_IDS.includes(node.comfyClass)) return;
-            // Runs after the saved widget values are restored.
-            refreshNode(node);
         },
 
         // Called by the frontend after node definitions are (re)loaded; the
@@ -168,7 +143,6 @@ if (app?.registerExtension) {
             const graph = app.graph;
             for (const node of graph?._nodes ?? []) {
                 if (!NODE_IDS.includes(node?.comfyClass)) continue;
-                refreshNode(node);
                 node[BOUND_FLAG] = false;
                 applySetup(node);
             }
