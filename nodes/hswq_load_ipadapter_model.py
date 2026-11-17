@@ -208,7 +208,7 @@ class HSWQLoadIPAdapterModel:
         try:
             path = _resolve_path(ipadapter_file, ipadapter_dir)
         except Exception as exc:
-            return "IPAdapter: %s" % exc
+            return str(exc)
         if not os.path.isfile(path):
             return "IPAdapter: model file not found: %s" % path
         return True

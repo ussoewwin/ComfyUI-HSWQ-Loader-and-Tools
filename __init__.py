@@ -860,6 +860,15 @@ try:
         logger.info("Registered HSWQ IP-Adapter directory listing route")
 except Exception as e:
     logger.debug("HSWQ IP-Adapter directory listing route not registered: %s", e)
+# Lets the SAM3 loader read a model from any folder: the frontend fills
+# the node's file dropdown from this route when the directory widget changes.
+try:
+    from .hswq.sam3_paths import register_sam3_list_route
+
+    if register_sam3_list_route():
+        logger.info("Registered HSWQ SAM3 directory listing route")
+except Exception as e:
+    logger.debug("HSWQ SAM3 directory listing route not registered: %s", e)
 try:
     from .nodes.hswq_moss_image_prompt_enhancer import HSWQMossImagePromptEnhancer
     NODE_CLASS_MAPPINGS["HSWQMossImagePromptEnhancer"] = HSWQMossImagePromptEnhancer

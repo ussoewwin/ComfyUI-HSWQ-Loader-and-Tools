@@ -223,8 +223,8 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 
 **HSWQ SAM3 Loader（ConvRot INT8）** — 分类 `loaders`
 
-- **输入** `sam3_name`：ConvRot INT8 / 标准 SAM3 检查点（`.safetensors`），在 `diffusion_models` / `sams` / `detection` / `checkpoints` 中搜索
-- **输出** `model`（`MODEL`）：标准 ComfyUI 模型，兼容 HSWQ SAM3 Detect 与原生 SAM3 节点
+- **输入** `sam3_name`（模型文件下拉列表）+ `sam3_dir`（必填的文件夹路径；模型只从该文件夹加载 —— 留空会被拒绝，不会回退到其它文件夹）
+- **输出** `model`（`MODEL`）+ `clip`（`CLIP`）：标准 ComfyUI 模型，以及 checkpoint 自带的文本编码器 —— 将 `clip` 接入 **CLIPTextEncode** 即可做文本条件检测
 - 检测 `int8_tensorwise` comfy_quant 元数据并自动附加 `MixedPrecisionOps`，使 Linear 层**以真 INT8 驻留 VRAM**
 - 非 INT8 检查点正常加载（不附加 MixedPrecisionOps）
 
@@ -247,7 +247,7 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 #### 示例工作流
 
 1. **HSWQ SAM3 Loader** → 选择 `sam3.1_multiplex_convrot_int8.safetensors`
-2. **CheckpointLoaderSimple**（同一检查点）→ **CLIPTextEncode**（`"person"`）用于文本条件检测
+2. **CLIPTextEncode**（`"person"`），使用 loader 的 `clip` 输出，用于文本条件检测
 3. **HSWQ SAM3 Detect** → 连接 `model`、`image` 与 `conditioning`
 4. **MaskPreview+** → 可视化 `masks` 输出
 

@@ -222,8 +222,8 @@ Includes automatic hardware safety fallback for unaligned layers (such as `boxRP
 
 **HSWQ SAM3 Loader (ConvRot INT8)** — category `loaders`
 
-- **Input** `sam3_name`: ConvRot INT8 / standard SAM3 checkpoint (`.safetensors`), searched across `diffusion_models` / `sams` / `detection` / `checkpoints`
-- **Output** `model` (`MODEL`): standard ComfyUI model, compatible with HSWQ SAM3 Detect and stock SAM3 nodes
+- **Inputs** `sam3_name` (dropdown of the model files) + `sam3_dir` (required folder path; the model is loaded from this folder only - an empty folder is rejected, there is no fallback to another folder)
+- **Outputs** `model` (`MODEL`) + `clip` (`CLIP`): standard ComfyUI model, plus the text encoder that comes with the checkpoint - feed `clip` into **CLIPTextEncode** for text-conditioned detection
 - Detects `int8_tensorwise` comfy_quant metadata and auto-attaches `MixedPrecisionOps`, keeping Linear layers **true INT8 in VRAM**
 - Non-INT8 checkpoints load normally (no MixedPrecisionOps attached)
 
@@ -246,7 +246,7 @@ Includes automatic hardware safety fallback for unaligned layers (such as `boxRP
 #### Example workflow
 
 1. **HSWQ SAM3 Loader** → select `sam3.1_multiplex_convrot_int8.safetensors`
-2. **CheckpointLoaderSimple** (same checkpoint) → **CLIPTextEncode** (`"person"`) for text-conditioned detection
+2. **CLIPTextEncode** (`"person"`) using the loader's `clip` output for text-conditioned detection
 3. **HSWQ SAM3 Detect** → connect `model`, `image`, and `conditioning`
 4. **MaskPreview+** → visualize the `masks` output
 
