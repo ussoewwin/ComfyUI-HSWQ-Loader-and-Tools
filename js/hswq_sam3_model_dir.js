@@ -38,6 +38,35 @@ function setComboValues(widget, values) {
 }
 
 /**
+ * The frontend's "missing model" scan compares the widget's value against the
+ * widget's own option list. A workflow that points at a folder outside the
+ * registered model folders is therefore reported as missing until the option
+ * list of that folder has been filled in - and the scan has to run again
+ * afterwards, otherwise the state stays stale.
+ */
+let rescanTimer = null;
+let rescanInFlight = false;
+function scheduleMissingRescan() {
+    if (rescanTimer) clearTimeout(rescanTimer);
+    rescanTimer = setTimeout(async () => {
+        rescanTimer = null;
+        if (rescanInFlight) return;
+        rescanInFlight = true;
+        try {
+            // reloadDefs: false - the option list of this widget is already
+            // the folder's list; reloading the node definitions would reset it.
+            await app.refreshMissingModels?.({ silent: true, reloadDefs: false });
+        } catch (err) {
+            console.warn("[HSWQ SAM3] missing-model rescan failed", err);
+        } finally {
+            setTimeout(() => {
+                rescanInFlight = false;
+            }, 250);
+        }
+    }, 100);
+}
+
+/**
  * Keep the native "sam3_name" dropdown in sync with the "sam3_dir" folder
  * field: on a folder change, replace the dropdown's option list with the
  * files of that folder.
@@ -73,6 +102,7 @@ function setupFileCombo(node) {
         setComboValues(fileWidget, values);
 
         node.setDirtyCanvas?.(true, false);
+        scheduleMissingRescan();
     };
 
     if (!dirWidget.__hswqWrapped) {
@@ -82,7 +112,7 @@ function setupFileCombo(node) {
             refresh(typeof value === "string" ? value : dirWidget.value);
             return result;
         };
-        dirWidget.__hswqWrapped = true;
+        dirWidget.__hsqwWrapped = true;
     }
 
     if (!node.__hswqChangedWrapped) {
@@ -97,6 +127,10 @@ function setupFileCombo(node) {
         node.__hswqChangedWrapped = true;
     }
 
+    // Entry point used after a saved graph is restored: read the folder the
+    // workflow restored, never the value from node creation time.
+    node.__hswqRefreshCombo = () => refresh(dirWidget.value);
+
     refresh(dirWidget.value);
     // A saved workflow restores widget values after node creation, and the
     // frontend may reload node definitions afterwards; re-list a few times so
@@ -105,6 +139,11 @@ function setupFileCombo(node) {
         setTimeout(() => refresh(dirWidget.value), delay);
     }
     return fileWidget;
+}
+
+function refreshNode(node) {
+    const refresh = node?.__hswqRefreshCombo;
+    if (typeof refresh === "function") refresh();
 }
 
 function applySetup(node) {
@@ -123,6 +162,19 @@ function applySetup(node) {
         if (++attempts < 60) setTimeout(trySetup, 100);
     };
     trySetup();
+
+    // A saved workflow fills the widgets in onConfigure; list the folder the
+    // workflow restored at that point, so the file it points at is an option
+    // again right after a start.
+    if (!node.__hswqConfigureWrapped) {
+        const origConfigure = node.onConfigure;
+        node.onConfigure = function (info) {
+            const result = origConfigure?.apply(this, arguments);
+            setTimeout(() => refreshNode(this), 0);
+            return result;
+        };
+        node.__hswqConfigureWrapped = true;
+    }
 }
 
 if (app?.registerExtension) {
@@ -135,6 +187,9 @@ if (app?.registerExtension) {
 
         loadedGraphNode(node) {
             applySetup(node);
+            if (!node || !NODE_IDS.includes(node.comfyClass)) return;
+            // Runs after the saved widget values are restored.
+            refreshNode(node);
         },
 
         // Called by the frontend after node definitions are (re)loaded; the
@@ -143,6 +198,7 @@ if (app?.registerExtension) {
             const graph = app.graph;
             for (const node of graph?._nodes ?? []) {
                 if (!NODE_IDS.includes(node?.comfyClass)) continue;
+                refreshNode(node);
                 node[BOUND_FLAG] = false;
                 applySetup(node);
             }
