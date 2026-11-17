@@ -108,7 +108,7 @@ Both **SDXL ConvRot INT8** and **SD1.5 ConvRot INT8** are **supported only for m
 #### Usage Notes
 
 - **Inputs**:
-  - `ckpt_name`: Checkpoint filename under `models/checkpoints`
+  - `ckpt_name` (dropdown of the checkpoint files) + `ckpt_dir` (required folder path; the checkpoint is loaded from this folder only - an empty folder is rejected, there is no fallback to another folder; the dropdown's options follow `ckpt_dir`)
   - `weight_dtype`: Precision mode — `default` (auto-detect / FP16), `SDXL ConvRot INT8`, or `SD1.5 ConvRot INT8`
   - `device`: Target execution device (`cuda:0`, `cuda:1`, etc.)
 - **Outputs**: `MODEL` and `CLIP` only; pair with a separate VAE loader node for decoding
@@ -221,6 +221,10 @@ Includes automatic hardware safety fallback for unaligned layers (such as `boxRP
 #### Nodes
 
 **HSWQ SAM3 Loader (ConvRot INT8)** — category `loaders`
+
+<img src="png/sam3loader.png" alt="HSWQ SAM3 Loader (ConvRot INT8)" width="500">
+
+The loader takes the model file from the `sam3_name` dropdown and the folder to load it from in `sam3_dir`; the dropdown's options follow the folder typed into `sam3_dir`. The node returns the SAM3 `model` and the checkpoint's text encoder `clip`.
 
 - **Inputs** `sam3_name` (dropdown of the model files) + `sam3_dir` (required folder path; the model is loaded from this folder only - an empty folder is rejected, there is no fallback to another folder)
 - **Outputs** `model` (`MODEL`) + `clip` (`CLIP`): standard ComfyUI model, plus the text encoder that comes with the checkpoint - feed `clip` into **CLIPTextEncode** for text-conditioned detection

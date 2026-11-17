@@ -616,6 +616,11 @@ try:
     import comfy.sd
     from nodes import NODE_CLASS_MAPPINGS as GLOBAL_NODE_CLASS_MAPPINGS
     from .device_utils import get_device_list
+    from .hswq.checkpoint_paths import (
+        default_checkpoint_dir,
+        list_checkpoint_files,
+        resolve_checkpoint_path,
+    )
 
     _UNETLoaderBase = GLOBAL_NODE_CLASS_MAPPINGS.get("UNETLoader")
     if _UNETLoaderBase is None:
@@ -641,7 +646,9 @@ try:
                 devices = get_device_list()
                 default_dev = devices[1] if len(devices) > 1 else devices[0]
                 req = {
-                    "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"tooltip": "SDXL or SD1.5 checkpoint to load MODEL and CLIP from (same as standard Load Checkpoint)."}),
+                    # COMBO: the dropdown of checkpoint files. Its options
+                    # follow ckpt_dir (route /hswq/checkpoint/list).
+                    "ckpt_name": (list_checkpoint_files(""), {"tooltip": "SDXL or SD1.5 checkpoint to load MODEL and CLIP from (same as standard Load Checkpoint)."}),
                     "weight_dtype": ([
                         "default",
                         # SDXL-only marker. Distinct from the SD1.5 ConvRot INT8
@@ -654,6 +661,17 @@ try:
                         # INT8 Conv2d scope when the file is a comfy_quant pack).
                         "SD1.5 ConvRot INT8",
                     ],),
+                    # Required folder path: the checkpoint is loaded from this
+                    # folder only - an empty folder is rejected, there is no
+                    # fallback to another folder.
+                    "ckpt_dir": (
+                        "STRING",
+                        {
+                            "default": default_checkpoint_dir(),
+                            "multiline": False,
+                            "tooltip": "Folder the checkpoint is loaded from.",
+                        },
+                    ),
                 }
                 opt = {"device": (devices, {"default": default_dev})}
                 return {"required": req, "optional": opt}
@@ -664,12 +682,25 @@ try:
             CATEGORY = "loaders"
             TITLE = "HSWQ Checkpoint Loader"
 
-            def load_checkpoint(self, ckpt_name, weight_dtype, device=None):
+            @classmethod
+            def VALIDATE_INPUTS(s, ckpt_name, ckpt_dir=""):
+                """Resolve the path and report a missing file before the run."""
+                try:
+                    path = resolve_checkpoint_path(ckpt_name, ckpt_dir)
+                except Exception as exc:
+                    return str(exc)
+                if not os.path.isfile(path):
+                    return "Checkpoint: model file not found: %s" % path
+                return True
+
+            def load_checkpoint(self, ckpt_name, weight_dtype, device=None, ckpt_dir=""):
                 original_device = get_current_device()
                 if device is not None:
                     set_current_device(device)
                 try:
-                    ckpt_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
+                    ckpt_path = resolve_checkpoint_path(ckpt_name, ckpt_dir)
+                    if not os.path.isfile(ckpt_path):
+                        raise FileNotFoundError(f"Checkpoint: model file not found: {ckpt_path}")
                     # INT8 (incl. ConvRot) checkpoints MUST go through the INT8-aware
                     # loader: plain load_checkpoint_guess_config leaves Conv2d
                     # comfy_quant layers as RAW int8 qdata (absmax ~127, scale
@@ -869,6 +900,15 @@ try:
         logger.info("Registered HSWQ SAM3 directory listing route")
 except Exception as e:
     logger.debug("HSWQ SAM3 directory listing route not registered: %s", e)
+# Lets the checkpoint loader read a model from any folder: the frontend fills
+# the node's file dropdown from this route when the directory widget changes.
+try:
+    from .hswq.checkpoint_paths import register_checkpoint_list_route
+
+    if register_checkpoint_list_route():
+        logger.info("Registered HSWQ Checkpoint directory listing route")
+except Exception as e:
+    logger.debug("HSWQ Checkpoint directory listing route not registered: %s", e)
 try:
     from .nodes.hswq_moss_image_prompt_enhancer import HSWQMossImagePromptEnhancer
     NODE_CLASS_MAPPINGS["HSWQMossImagePromptEnhancer"] = HSWQMossImagePromptEnhancer

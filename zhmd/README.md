@@ -109,7 +109,7 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 #### 使用说明
 
 - **输入**：
-  - `ckpt_name`：`models/checkpoints` 目录下的检查点文件名
+  - `ckpt_name`（检查点文件下拉列表）+ `ckpt_dir`（必填的文件夹路径；检查点只从该文件夹加载 —— 留空会被拒绝，不会回退到其它文件夹；下拉列表的选项会跟随 `ckpt_dir`）
   - `weight_dtype`：精度模式 — `default`（自动识别 / FP16）、`SDXL ConvRot INT8` 或 `SD1.5 ConvRot INT8`
   - `device`：目标执行设备（`cuda:0`、`cuda:1` 等）
 - **输出**：仅 MODEL 与 CLIP；如需解码请连接独立的 VAE 加载器
@@ -222,6 +222,10 @@ ComfyUI 原生 `controlnet_load_state_dict` 会将模块图架构 dtype 设为 `
 #### 节点
 
 **HSWQ SAM3 Loader（ConvRot INT8）** — 分类 `loaders`
+
+<img src="../png/sam3loader.png" alt="HSWQ SAM3 Loader（ConvRot INT8）" width="500">
+
+加载器在 `sam3_name` 下拉列表中选择模型文件，并在 `sam3_dir` 中填写加载来源文件夹；下拉列表的选项会跟随 `sam3_dir` 中填写的文件夹。节点返回 SAM3 的 `model` 与 checkpoint 自带的文本编码器 `clip`。
 
 - **输入** `sam3_name`（模型文件下拉列表）+ `sam3_dir`（必填的文件夹路径；模型只从该文件夹加载 —— 留空会被拒绝，不会回退到其它文件夹）
 - **输出** `model`（`MODEL`）+ `clip`（`CLIP`）：标准 ComfyUI 模型，以及 checkpoint 自带的文本编码器 —— 将 `clip` 接入 **CLIPTextEncode** 即可做文本条件检测
