@@ -38,6 +38,41 @@ SAM3_FOLDERS = ("diffusion_models", "sams", "detection", "checkpoints")
 CATEGORY = "hswq_sam3"
 
 
+def _clean_path(value):
+    """Strip whitespace and surrounding quotes from a path written by hand."""
+    text = str(value or "").strip()
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in ("\"", "'"):
+        text = text[1:-1].strip()
+    return text
+
+
+def _workdir_entries(base, max_depth=4, max_entries=20000):
+    """Model files inside ``base``, looked at through its subfolders too.
+
+    Yields (full_path, name) pairs, shallow levels first. Hidden and build
+    folders are skipped, and the walk stops at ``max_entries`` so a large
+    checkout cannot stall the listing.
+    """
+    skip = {
+        ".git", ".hg", ".svn", "__pycache__", "node_modules", "target",
+        ".cargo", ".venv", "venv", "site-packages",
+    }
+    base_depth = base.rstrip("\\/").count(os.sep)
+    seen = 0
+    try:
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d.lower() not in skip and not d.startswith(".")]
+            if root.rstrip("\\/").count(os.sep) - base_depth >= max_depth:
+                dirs[:] = []
+            for entry in files:
+                seen += 1
+                if seen > max_entries:
+                    return
+                yield os.path.join(root, entry), entry
+    except OSError:
+        return
+
+
 def _model_extensions():
     """Model file extensions ComfyUI accepts, with a safe fallback."""
     try:
@@ -104,9 +139,10 @@ def register_sam3_directory(directory):
 
     Returns the normalised path, or None when it is not a directory.
     """
-    if not directory or not str(directory).strip():
+    cleaned = _clean_path(directory)
+    if not cleaned:
         return None
-    path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(cleaned)))
     if not os.path.isdir(path):
         return None
     known = ensure_sam3_category()
@@ -131,22 +167,17 @@ def list_sam3_files(directory):
         except Exception:
             return []
 
-    path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(_clean_path(directory))))
     if not os.path.isdir(path):
         return []
 
     exts = _model_extensions()
     names = []
-    try:
-        for entry in os.listdir(path):
-            full = os.path.join(path, entry)
-            if not os.path.isfile(full):
-                continue
-            if os.path.splitext(entry)[1].lower() in exts:
-                names.append(entry)
-    except OSError as exc:
-        logger.warning("[HSWQ SAM3] cannot list %s: %s", path, exc)
-        return []
+    for full, entry in _workdir_entries(path):
+        if os.path.splitext(entry)[1].lower() not in exts:
+            continue
+        rel = os.path.relpath(full, path)
+        names.append(entry if rel == entry else rel.replace(os.sep, "\\"))
     return sorted(names)
 
 
@@ -156,19 +187,33 @@ def resolve_sam3_path(file_name, directory):
     ``directory`` is required: the model is loaded from that folder and
     nowhere else. An absolute ``file_name`` is used as-is.
     """
-    name = str(file_name or "").strip()
+    name = _clean_path(file_name)
     if not name:
         raise ValueError("SAM3: no file selected")
 
     if os.path.isabs(name):
         return os.path.normpath(name)
 
-    if not directory or not str(directory).strip():
+    base = _clean_path(directory)
+    if not base:
         raise ValueError("SAM3: no folder given")
 
-    base = os.path.abspath(os.path.expanduser(os.path.expandvars(str(directory).strip())))
+    base = os.path.abspath(os.path.expanduser(os.path.expandvars(base)))
     register_sam3_directory(base)
-    return os.path.join(base, name)
+
+    direct = os.path.join(base, name)
+    if os.path.isfile(direct):
+        return direct
+
+    # A pack is often kept one level down inside the folder that was given.
+    # Look through the same folder's subfolders before reporting it missing;
+    # nothing outside the given folder is searched.
+    wanted = os.path.basename(name).lower()
+    for full, entry in _workdir_entries(base):
+        if entry.lower() == wanted:
+            logger.info("[HSWQ SAM3] resolved %s inside %s", name, base)
+            return full
+    return direct
 
 
 def default_sam3_dir():
