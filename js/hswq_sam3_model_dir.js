@@ -112,7 +112,7 @@ function setupFileCombo(node) {
             refresh(typeof value === "string" ? value : dirWidget.value);
             return result;
         };
-        dirWidget.__hsqwWrapped = true;
+        dirWidget.__hswqWrapped = true;
     }
 
     if (!node.__hswqChangedWrapped) {
