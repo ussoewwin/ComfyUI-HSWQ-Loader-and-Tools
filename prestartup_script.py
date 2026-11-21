@@ -198,6 +198,36 @@ def _patch_dit_quant_lock() -> None:
         _DIT_LOCK_PATCHING = False
 
 
+_FASTDISK_INSTALLED = False
+_FASTDISK_INSTALLING = False
+
+
+def _maybe_install_fastdisk() -> None:
+    """Arm fast-disk support on the first comfy.memory_management import.
+
+    Importing comfy here would pull torch during prestartup, and ComfyUI then logs
+    "Torch already imported". comfy.memory_management is first imported by
+    comfy.utils inside main.py, i.e. immediately after that check and long before
+    init_devices, so the guard is still armed before aimdo initialises.
+    """
+    global _FASTDISK_INSTALLED, _FASTDISK_INSTALLING
+    if _FASTDISK_INSTALLED or _FASTDISK_INSTALLING:
+        return
+    installer = globals().get("_install_fastdisk_support")
+    if installer is None:
+        return
+    _FASTDISK_INSTALLING = True
+    try:
+        _FASTDISK_INSTALLED = bool(installer())
+    except Exception as e:  # noqa: BLE001
+        try:
+            print(f"[HSWQ FastDisk] support install failed: {e}", flush=True)
+        except Exception:
+            pass
+    finally:
+        _FASTDISK_INSTALLING = False
+
+
 def _import(name, globals=None, locals=None, fromlist=(), level=0):
     mod = _ORIG_IMPORT(name, globals, locals, fromlist, level)
     if not _DIT_LOCK_PATCHED and not _DIT_LOCK_PATCHING and (
@@ -215,6 +245,10 @@ def _import(name, globals=None, locals=None, fromlist=(), level=0):
     elif not _PATCHED and not _PATCHING and fromlist:
         if any("comfy_quant_nvfp4" in str(x) for x in fromlist):
             _try_patch()
+    if not _FASTDISK_INSTALLED and not _FASTDISK_INSTALLING:
+        _mem = sys.modules.get("comfy.memory_management")
+        if _mem is not None and hasattr(_mem, "read_tensor_file_slice_into"):
+            _maybe_install_fastdisk()
     return mod
 
 
@@ -230,7 +264,7 @@ _try_patch()
 # Must run here (prestartup = before ComfyUI's init_devices and before any code
 # touches CUDA) so the dedicated aimdo reader thread owns the native reader's
 # CUDA binding. Installed last on purpose: it only wraps aimdo entry points.
-def _install_fastdisk_support() -> None:
+def _install_fastdisk_support() -> bool:
     try:
         import importlib.util as _ilu2
         import os as _os2
@@ -239,15 +273,13 @@ def _install_fastdisk_support() -> None:
         spec = _ilu2.spec_from_file_location("_hswq_fastdisk_guard", path)
         mod = _ilu2.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        mod.apply_comfy_aimdo_fastdisk_guard()
+        return bool(mod.apply_comfy_aimdo_fastdisk_guard())
     except Exception as e:  # noqa: BLE001
         try:
             print(f"[HSWQ FastDisk] support install failed: {e}", flush=True)
         except Exception:
             pass
-
-
-_install_fastdisk_support()
+        return False
 
 
 # Safety net: if comfy.ops somehow got imported before this hook could fire
