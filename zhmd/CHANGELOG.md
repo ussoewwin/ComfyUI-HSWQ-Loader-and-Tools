@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.5
+
+- 修复：**HSWQ fast-disk guard —— 改为在 ComfyUI 的提前导入检查之后装载，启动时不再报「Torch already imported」** —— 原先前置启动脚本会立即安装 fast-disk guard，这会在 ComfyUI 自身的 `main.py:262` 检查之前导入 `comfy.memory_management`（从而导入 `torch`），因此每次启动都会记录 `WARNING: Potential Error in code: Torch already imported, torch should never be imported before this point.`。现在改为在 `comfy.memory_management` 完整加载之后的第一次导入时装载 —— 即 `import comfy.utils` 内部，紧随该检查之后、且远早于 `comfy_aimdo.control.init_devices` —— 警告消失，而 guard 仍会在 aimdo 初始化之前就位。五个子补丁均报告已应用（`control`、`host_buffer`、`model_vbar`、`vram_buffer`、`mem_slice`），DiT 量化权重锁与 INT8 ControlNet 追加补丁不变，fast-disk 未被禁用也未被替换。
+- 查看 [发布说明 v3.7.5](v3.7.5.md)。
+
 ## Version 3.7.4
 
 - 修复：**HSWQ SAM3 Loader（ConvRot INT8）—— 打开保存的工作流时不再把模型标记为缺失** —— 打开保存的工作流时，前端会把恢复出来的文件名与下拉列表的选项比对，而此时选项列表仍属于恢复之前设置的文件夹，因此该节点被标记为「缺失模型」。现在下拉列表会列出工作流恢复出的文件夹，并在该列表就绪后重新执行前端的缺失模型扫描，节点不再被标记为缺失。文件下拉列表仍会跟随 `sam3_dir` 中填写的文件夹，模型仍只从该文件夹加载。

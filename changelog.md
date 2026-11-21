@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.5
+
+- **Fixed**: **HSWQ fast-disk guard - armed after ComfyUI's early-import check, so startup no longer reports "Torch already imported"** - the prestartup script used to install the fast-disk guard immediately, which imported `comfy.memory_management` (and therefore `torch`) before ComfyUI's own check at `main.py:262`, so every start logged `WARNING: Potential Error in code: Torch already imported, torch should never be imported before this point.` The guard is now armed on the first import that happens after `comfy.memory_management` is fully loaded - inside `import comfy.utils`, immediately after that check and well before `comfy_aimdo.control.init_devices` - so the warning is gone while the guard is still in place before aimdo initialises. All five sub-patches report applied (`control`, `host_buffer`, `model_vbar`, `vram_buffer`, `mem_slice`), the DiT quantized-weight lock and the INT8 ControlNet retrofit are unchanged, and fast-disk is neither disabled nor replaced.
+- See [Release Notes v3.7.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.5) for details.
+
 ## Version 3.7.4
 
 - **Fixed**: **HSWQ SAM3 Loader (ConvRot INT8) - a restored workflow no longer reports the model as missing** - when a saved workflow was opened, the frontend compared the restored file name against the dropdown's option list and marked the node as a missing model, because that option list still belonged to the folder that was set before the restore. The dropdown now lists the folder the workflow restored, and the frontend's missing-model scan runs again once that list is in place, so the node is no longer marked as missing. The file dropdown still follows the folder typed into `sam3_dir`, and the model is still loaded from that folder only.
