@@ -22,8 +22,8 @@ HSWQ 是面向扩散 UNet 的高保真量化方案。当前公开的 HSWQ 工作
 | 路径 | 在本仓库中的定位 |
 | :--- | :--- |
 | **HSWQ ConvRot INT8 (SDXL, reverse hybrid)** | ComfyUI `int8_tensorwise` 包（K 个影响最低的层 → FULL ConvRot INT8，其余所有层保持 FP16；不内嵌 VAE —— 请用单独的 SDXL VAE 解码）；通过 **HSWQ Checkpoint Loader** 加载（`weight_dtype`：`int8_tensorwise` / INT8 自动检测）。以确定性 25-seed latent-trajectory gate 验证（cosine mean ≥ 0.95，0/25 bifurcated）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
-| **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet 包（常见为 Linear NVFP4 + INT8 protect；以 reverse method 构建 —— 影响最低的层先转换）；通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 加载（`weight_dtype`：`Z Image ConvRot NVFP4`，或 `default` 触发 NVFP4 自动检测）。走与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock GEMM + online act rotate）。以确定性 20-seed latent-trajectory gate 验证（cosine mean ≥ 0.95，0/20 bifurcated）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
-| **HSWQ ConvRot INT8 (Krea2)** | ComfyUI `int8_tensorwise` UNet 包（Krea2 包带 `txtfusion.projector`）；通过 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader** 加载（`weight_dtype`：`int8_tensorwise`，或 `default` 触发 INT8 自动检测）。HSWQ 流程：结构黑名单保护（`first.` / `last.` / `mod.` / `norm` / `projector` / `txtfusion`）+ 4 轴复合排名；省略 bias 校正（`1off`）。Krea2 走 stock-equivalent 的 ConvRot INT8 加载（不做 Z Image parity），并且是**唯一在 DisTorch2 加载器下验证过的 `weight_dtype`**。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
+| **HSWQ ConvRot NVFP4 (Z Image / ZIT)** | ComfyUI `nvfp4` UNet 包（常见为 Linear NVFP4 + INT8 protect；以 reverse method 构建 —— 影响最低的层先转换）；通过 **HSWQ UNet Loader** 加载（`weight_dtype`：`Z Image ConvRot NVFP4`，或 `default` 触发 NVFP4 自动检测）。走与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock GEMM + online act rotate）。以确定性 20-seed latent-trajectory gate 验证（cosine mean ≥ 0.95，0/20 bifurcated）。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
+| **HSWQ ConvRot INT8 (Krea2)** | ComfyUI `int8_tensorwise` UNet 包（Krea2 包带 `txtfusion.projector`）；通过 **HSWQ UNet Loader** 加载（`weight_dtype`：`int8_tensorwise`，或 `default` 触发 INT8 自动检测）。HSWQ 流程：结构黑名单保护（`first.` / `last.` / `mod.` / `norm` / `projector` / `txtfusion`）+ 4 轴复合排名；省略 bias 校正（`1off`）。Krea2 走 stock-equivalent 的 ConvRot INT8 加载（不做 Z Image parity），并且是**唯一在 DisTorch2 加载器下验证过的 `weight_dtype`**。**仅支持由 [Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。** |
 | **Krea2 ConvRot NVFP4** | HSWQ 专属的 Krea2 ConvRot NVFP4 开发 / 支持**已结束**。`Krea2 ConvRot NVFP4` 加载选项与 Krea2 NVFP4 加载/前向运行时代码已从本包移除；Krea2 继续支持上方的 **ConvRot INT8**（见上一行） |
 | **FP8 (E4M3)** | HSWQ **FP8 开发已结束**（技术文档仍保留在上游）。只要 ComfyUI 支持，这里的加载器仍可接受现有的 FP8 权重 |
 | **Z Image 8-bit** | HSWQ 专属的 Z Image INT8 开发 / 发布**已结束**。Z Image 推荐使用**原生 ConvRot INT8**（通常 SSIM > 0.99）。HSWQ INT8 仅继续用于 **SDXL**。**Z Image ConvRot NVFP4** 由上方的 UNet 加载器支持 |
@@ -118,17 +118,18 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 - **INT8 + LoRA**：关于 INT8 LoRA 烘焙及 Status 状态日志详情，请参阅 [`zhmd/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md`](zhmd/HSWQ_INT8_AND_LORA_TECHNICAL_GUIDE.md)
 - **VRAM 清理（通用 HSWQ 必备要求）**：如上方通用工作流要求所述，在所有 HSWQ 运行中，请务必在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2**，并开启其 **`HSWQ`** 开关。
 
-### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader
+### HSWQ UNet Loader
 
-<img src="../png/hswqunet.png?v=4" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader" width="400">
+<img src="../png/hswqunet.png?v=4" alt="HSWQ UNet Loader" width="400">
 
-标准 ComfyUI UNet 加载器的封装，用于 `diffusion_models` 下的扩散 UNet（**Z Image / ZIT** 及其他 UNet 包）。以 FP8、INT8 与 **ConvRot NVFP4** 权重类型加载 **MODEL**。
+标准 ComfyUI UNet 加载器的封装，用于 `diffusion_models` 下的扩散 UNet（**Z Image / ZIT**、**Flux1 混合包** 及其他 UNet 包）。以 FP8、INT8、**ConvRot NVFP4** 与 **Flux1 ConvRot W4A8** 权重类型加载 **MODEL**。
 
 **Z Image / ZIT ConvRot NVFP4** **仅支持由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型**。其他第三方 ConvRot NVFP4 UNet 包不在支持范围内。
 
 - **通用 FP8 / INT8**：与库存 UNet 加载器思路相同（HSWQ FP8 E4M3、Scaled FP8，以及在被选择或自动检测到时使用原生 comfy_quant / `int8_tensorwise`）。这些模式不限于 HSWQ 专属权重。
 - **ConvRot NVFP4（Z Image / ZIT）**：将 `weight_dtype` 设为 **`Z Image ConvRot NVFP4`**，或在 UNet safetensors 带有 comfy_quant / HSWQ `nvfp4` 标记时保持 **`default`**。走本扩展 `nodes/nvfp4/` 下的 UNet NVFP4 栈，并使用与 `hswq/benchmark` 一致的 **Comfy parity** 路径（stock MixedPrecision GEMM + online act rotate；保留 ConvRot Linear LoRA bake）。**不要**在此期望 Tensor Core 产品路径——Z Image ConvRot NVFP4 在本 UNet 加载器上走 **Comfy parity** 路径。**仅支持由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
-- **INT8 / NVFP4 自动检测**：看起来像 INT8 的包走 INT8 路径；看起来像 NVFP4 的包在 `weight_dtype` 为 `default` 时走 ConvRot NVFP4（NVFP4 分发安装在 INT8 之后，避免混合包被 INT8-only 检测抢走）。
+- **Flux1 ConvRot W4A8**：将 `weight_dtype` 设为 **`Flux1 ConvRot W4A8`**，或对 Flux1 混合包（`asym_w4a8_int8` 层 + `int8_tensorwise` 保护层，例如 `F1D_*_hswq_*_convrot_w4a8`）保持 **`default`**。打包后的 4-bit 权重不会被改写：INT8 保护层走 requant 化的 LoRA bake，每个 W4A8 层把 LoRA delta 作为 **factorised residual 加在 stock GEMM 之后**。残差执行以 `EVIDENCE` 行输出（`terms_set`、`residual_layers`、`residual_hits`）。**仅支持由 [https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization) 量化的模型。**
+- **INT8 / NVFP4 / W4A8 自动检测**：看起来像 INT8 的包走 INT8 路径；看起来像 NVFP4 的包走 ConvRot NVFP4；W4A8 包走 Flux1 ConvRot W4A8 路径 —— 均在 `weight_dtype` 为 `default` 时生效（分发顺序：INT8 → NVFP4 → W4A8，避免混合包被 INT8-only 检测抢走）。
 
 本加载器**不**内置 Triton accelerate 开关。INT8 Linear 的速度由 **ComfyUI + `comfy_kitchen`**（`int8_linear`：cuda → triton → eager）负责。本扩展保留 INT8 **加载兼容** 补丁（Conv2d / LoRA / ControlLora / handoff）以及 `nodes/nvfp4/` 下的 **NVFP4** UNet 补丁。
 
@@ -136,9 +137,9 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 
 - **VRAM 清理（通用 HSWQ 必备要求）**：与上方通用工作流要求相同 —— 针对所有 HSWQ INT8 与 NVFP4 运行，请在工作流末尾放置来自 [ComfyUI-DistorchMemoryManager](https://github.com/ussoewwin/ComfyUI-DistorchMemoryManager) 的 **General Purge VRAM V2** 并开启 **`HSWQ`**。
 
-### HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)
+### HSWQ UNet Loader (DisTorch2)
 
-<img src="png/distorch.png" alt="HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)" width="400">
+<img src="png/distorch.png" alt="HSWQ UNet Loader (DisTorch2)" width="400">
 
 上述 loader 的 DisTorch2 版本：可将**整个 UNet** 放到显存之外（virtual VRAM + donor device，例如 `cpu`），使超出显存的模型包也能运行。后端移植自 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（GPL-3.0），见 `distorch/distorch_2.py`。
 
@@ -146,7 +147,7 @@ git clone https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools ~/ComfyUI/c
 
 **当前支持：仅 Krea2 ConvRot INT8。** 其他 `weight_dtype` 尚未在 DisTorch2 下验证。
 
-**速度 —— 本节点并非无条件比普通加载器更快。** 在 16GB 级 GPU（例如 RTX 5060 Ti 16GB）上，**简单生成用普通的 HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader 更快**。**只有当负载变重时** —— **高分辨率、多个 LoRA、ControlNet 及其他复杂组合** —— **本节点才比普通加载器更快**，因为它的速度下降更少。
+**速度 —— 本节点并非无条件比普通加载器更快。** 在 16GB 级 GPU（例如 RTX 5060 Ti 16GB）上，**简单生成用普通的 HSWQ UNet Loader 更快**。**只有当负载变重时** —— **高分辨率、多个 LoRA、ControlNet 及其他复杂组合** —— **本节点才比普通加载器更快**，因为它的速度下降更少。
 
 **要发挥 DisTorch 的效果，`virtual_vram_gb` 应**不小于 UNet 的体积** —— 对 **Krea2 ConvRot INT8** 即**至少 14GB**。这又需要大量系统内存：**最低 64GB**。
 
@@ -444,7 +445,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 - **输入**：`model`（MODEL）、`backend`、`fullgraph`、`mode`、`dynamic`、`compile_transformer_blocks_only`、`dynamo_cache_size_limit`、`force_parameter_static_shapes`、`patch_distorch_weight_cast`、`debug_compile_keys`；可选 `disable_dynamic_vram`
 - **输出**：MODEL（已编译的克隆）
 - **分类**：`HSWQ/torchcompile`
-- **放置位置**：放在 **HSWQ Checkpoint Loader** 或 **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
+- **放置位置**：放在 **HSWQ Checkpoint Loader** 或 **HSWQ UNet Loader**（以及任意 LoRA）之后、sampler / **HSWQ Ultimate SD Upscale** 之前
 - **多 tile USDU 时避免 `cudagraphs`**：优先 inductor；CUDA graphs 在 tiled / 池分配路径上经常失败
 - **KJNodes**：torch.compile UI / wrapper 设计的基底（GPL-3.0）。运行本节点**不必**安装 KJNodes；归属与 GPL 义务仍然适用
 - **详情**：见 `md/HSWQ_TORCH_COMPILE_AND_ZI_INT8_PEEL_GUIDE.md`
@@ -498,7 +499,7 @@ ComfyUI 节点，用 PyTorch `torch.compile` 包装已加载的 **MODEL**，面�
 * **HSWQ Ultimate SD Upscale**（`usdu_bundle/`、`nodes/nunchaku_usdu.py`、相关 USDU 补丁）以 [ComfyUI_UltimateSDUpscale](https://github.com/ssitu/ComfyUI_UltimateSDUpscale)（ssitu，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ssitu 原作版权保留；本仓库内的独有部分 © ussoewwin
 * **HSWQ Torch Compile**（`nodes/hswq_torch_compile.py`）以 ComfyUI-KJNodes torch.compile 节点（[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)，GPL-3.0）为基底开发，并加入了**独有改良与功能**。KJNodes 原作版权保留；本仓库内的独有部分 © ussoewwin。该 KJ 来源**不**适用于 HSWQ 量化方法本身
 * **HSWQ Batched Detailer (SEGS)**（`nodes/hswq_batched_detailer.py`、`nodes/batched_detailer_lib/`）以 [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) Detailer (SEGS)（ltdrdata，GPL-3.0）为基底开发，并加入了**独有改良与功能**——**尤其为维持 HSWQ 兼容性**。Impact Pack 原作版权保留；本仓库内的独有部分 © ussoewwin。运行本节点**不需要**安装 Impact Pack
-* **HSWQ ConvRot INT8/ConvRot NVFP4 UNet Loader (DisTorch2)**（`distorch/distorch_2.py`、`nodes/hswq_unet_distorch2.py`）以 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（pollockjj，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ComfyUI-MultiGPU 原作版权保留；本仓库内的独有部分 © ussoewwin。移植文件是上游代码的修改副本（GPL-3.0 section 5a 声明）
+* **HSWQ UNet Loader (DisTorch2)**（`distorch/distorch_2.py`、`nodes/hswq_unet_distorch2.py`）以 [ComfyUI-MultiGPU](https://github.com/pollockjj/ComfyUI-MultiGPU)（pollockjj，GPL-3.0）为基底开发，并加入了**独有改良与功能**。ComfyUI-MultiGPU 原作版权保留；本仓库内的独有部分 © ussoewwin。移植文件是上游代码的修改副本（GPL-3.0 section 5a 声明）
 * 您可在 GPL-3.0 条款下自由**使用、修改和分发**本软件。
 * 当您分发本软件或其修改版时，您**必须**：
   * 保留版权与许可声明（含第三方 / 衍生作品声明，例如 ssitu UltimateSDUpscale、KJNodes、Impact Pack 与 ComfyUI-MultiGPU）
