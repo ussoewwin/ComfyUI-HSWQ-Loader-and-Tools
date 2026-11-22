@@ -958,13 +958,16 @@ class HSWQFP8E4M3UNetLoader:
                                   "int8_tensorwise",
                                   # Z Image only — never reuse SDXL "ConvRot NVFP4".
                                   "Z Image ConvRot NVFP4",
+                                  # Flux1 hybrid pack: asym_w4a8_int8 layers +
+                                  # int8_tensorwise protect layers.
+                                  "Flux1 ConvRot W4A8",
                               ],),
                              }}
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "load_unet"
 
     CATEGORY = "advanced/loaders"
-    TITLE = "HSWQ UNet Loader (Z Image / Krea2)"
+    TITLE = "HSWQ UNet Loader"
 
     def load_unet(self, unet_name, weight_dtype, **kwargs):
         model_options = {}

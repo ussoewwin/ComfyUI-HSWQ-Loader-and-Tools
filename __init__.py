@@ -748,6 +748,18 @@ try:
 except Exception as e:
     logger.exception("[HSWQ NVFP4] install_nvfp4_option_dispatch: %s", e)
 
+# After INT8 / NVFP4: Flux1 hybrid ConvRot W4A8 packs also carry int8_tensorwise
+# protect layers, so this dispatch must sit outermost and claim them before the
+# INT8 default-detection claims the same pack.
+try:
+    import importlib as _importlib_w4a8
+    _w4a8_mod = _importlib_w4a8.import_module(
+        ".nodes.flux1 convrot w4a8", __name__
+    )
+    _w4a8_mod.install_flux1_w4a8_unet_dispatch(NODE_CLASS_MAPPINGS)
+except Exception as e:
+    logger.exception("[HSWQ W4A8] install_flux1_w4a8_unet_dispatch: %s", e)
+
 # DisTorch2 variant of the HSWQ UNet Loader: the whole UNet can be held on CPU
 # (virtual VRAM, donor_device=cpu) when a run heavily exceeds VRAM.
 # Backend ported from ComfyUI-MultiGPU (pollockjj, GPL-3.0) - see distorch/distorch_2.py.
@@ -883,8 +895,8 @@ NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = "HSWQ ControlNet L
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Loader"] = "HSWQ SAM3 Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8SAM3"] = "HSWQ SAM3 Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Detect"] = "HSWQ SAM3 Detect"
-NODE_DISPLAY_NAME_MAPPINGS["HSWQFP8E4M3UNetLoader"] = "HSWQ UNet Loader (Z Image / Krea2)"
-NODE_DISPLAY_NAME_MAPPINGS["HSWQUNetLoaderDisTorch2"] = "HSWQ UNet Loader (Z Image / Krea2) (DisTorch2)"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQFP8E4M3UNetLoader"] = "HSWQ UNet Loader"
+NODE_DISPLAY_NAME_MAPPINGS["HSWQUNetLoaderDisTorch2"] = "HSWQ UNet Loader (DisTorch2)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQMossImagePromptEnhancer"] = "HSWQ Moss-Image Prompt Enhancer"
 WEB_DIRECTORY = "js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
