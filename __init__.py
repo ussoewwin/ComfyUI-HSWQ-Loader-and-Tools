@@ -814,12 +814,10 @@ except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ Torch Compile not registered: %s", e)
 
 try:
-    from .nodes.hswq_load_convrot_int8_controlnet import (
-        HSWQControlNetLoader,
-        HSWQLoadConvRotINT8ControlNet,
-    )
+    from .nodes.hswq_load_convrot_int8_controlnet import HSWQControlNetLoader
+    # One key only: the old alias "HSWL LoadConvRotINT8ControlNet" was registered
+    # to the same class with the same display name and produced a duplicate entry.
     NODE_CLASS_MAPPINGS["HSWQControlNetLoader"] = HSWQControlNetLoader
-    NODE_CLASS_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = HSWQLoadConvRotINT8ControlNet
     logger.info("Registered HSWQ ControlNet Loader (ConvRot INT8)")
 except (ImportError, ModuleNotFoundError) as e:
     logger.debug("HSWQ ControlNet Loader not registered: %s", e)
@@ -891,7 +889,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {k: getattr(v, "TITLE", k) for k, v in NODE_CLASS_M
 # Explicit overrides — TITLE alone is not enough for some ComfyUI graph headers / search menus.
 NODE_DISPLAY_NAME_MAPPINGS["HSWQCheckpointLoader"] = "HSWQ Checkpoint Loader"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQControlNetLoader"] = "HSWQ ControlNet Loader (ConvRot INT8)"
-NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8ControlNet"] = "HSWQ ControlNet Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Loader"] = "HSWQ SAM3 Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQLoadConvRotINT8SAM3"] = "HSWQ SAM3 Loader (ConvRot INT8)"
 NODE_DISPLAY_NAME_MAPPINGS["HSWQSAM3Detect"] = "HSWQ SAM3 Detect"

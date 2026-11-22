@@ -340,4 +340,4 @@ class HSWQControlNetLoader:
         return (control,)
 
 
-HSWQLoadConvRotINT8ControlNet = HSWQControlNetLoader
+
