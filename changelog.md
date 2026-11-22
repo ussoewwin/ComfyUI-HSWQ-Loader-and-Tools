@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.6
+
+- **Added**: **Flux1 ConvRot W4A8 on the HSWQ UNet Loader** - a new `Flux1 ConvRot W4A8` weight dtype (also reachable through `default` auto-detect, dispatch order INT8 → NVFP4 → W4A8) for Flux1 hybrid packs built as 170 `asym_w4a8_int8` layers plus 144 `int8_tensorwise` protect layers. The packed 4-bit weights are never rewritten: the INT8 protect layers get a requantizing LoRA bake, and every W4A8 layer adds the LoRA delta as a factorised residual after the stock grouped-int8 GEMM. The loader arms the INT8 stack first and the W4A8 stack second so a protected hybrid pack is not stolen by the INT8 stack, re-arming always yields one INT8+W4A8 pair instead of nesting, and the residual execution is logged as `EVIDENCE` lines (first hit, every 500 hits, and the finished-run count with `terms_set` / `residual_layers` / `residual_hits`). Verified on the real pack `F1D_unlockV3_hswq_r170_hybid_convrot_w4a8.safetensors`: `baked 170 W4A8 layers as residuals (skipped non-W4A8 keys=144)`, `terms_set=170`, INT8 side `total=144 requant=144 int8_round=0 shape_skip=0`, and `residual_layers=170` / `residual_hits=1700` (170 layers × 10 effective steps of a 16-step run with EasyCache skipping 6).
+- See [Release Notes v3.7.6](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.6) for details.
+
 ## Version 3.7.5
 
 - **Fixed**: **HSWQ fast-disk guard - armed after ComfyUI's early-import check, so startup no longer reports "Torch already imported"** - the prestartup script used to install the fast-disk guard immediately, which imported `comfy.memory_management` (and therefore `torch`) before ComfyUI's own check at `main.py:262`, so every start logged `WARNING: Potential Error in code: Torch already imported, torch should never be imported before this point.` The guard is now armed on the first import that happens after `comfy.memory_management` is fully loaded - inside `import comfy.utils`, immediately after that check and well before `comfy_aimdo.control.init_devices` - so the warning is gone while the guard is still in place before aimdo initialises. All five sub-patches report applied (`control`, `host_buffer`, `model_vbar`, `vram_buffer`, `mem_slice`), the DiT quantized-weight lock and the INT8 ControlNet retrofit are unchanged, and fast-disk is neither disabled nor replaced.

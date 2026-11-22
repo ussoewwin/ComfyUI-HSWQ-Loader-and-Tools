@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.6
+
+- 新增：**HSWQ UNet Loader 上的 Flux1 ConvRot W4A8** -- 新的 `Flux1 ConvRot W4A8` weight_dtype（也可经 `default` 自动检测到达，分发顺序 INT8 → NVFP4 → W4A8），面向由 170 个 `asym_w4a8_int8` 层加 144 个 `int8_tensorwise` 保护层构成的 Flux1 混合包。打包后的 4-bit 权重不会被改写：INT8 保护层走 requant 化的 LoRA bake，每个 W4A8 层把 LoRA delta 作为 factorised residual 加在 stock grouped-int8 GEMM 之后。加载器先装载 INT8 栈、再装载 W4A8 栈（带保护层的混合包不会被 INT8 栈抢走），重复装载始终只得到一组 INT8+W4A8（不再嵌套），残差执行以 `EVIDENCE` 行输出（首次命中、每 500 次、以及结束时的统计：`terms_set` / `residual_layers` / `residual_hits`）。已在真实包 `F1D_unlockV3_hswq_r170_hybid_convrot_w4a8.safetensors` 上实测：`baked 170 W4A8 layers as residuals (skipped non-W4A8 keys=144)`、`terms_set=170`、INT8 侧 `total=144 requant=144 int8_round=0 shape_skip=0`、`residual_layers=170` / `residual_hits=1700`（170 层 × 16 step 中 EasyCache 跳过 6 后的 10 个有效 step）。
+- 查看 [发布说明 v3.7.6](v3.7.6.md)。
+
 ## Version 3.7.5
 
 - 修复：**HSWQ fast-disk guard —— 改为在 ComfyUI 的提前导入检查之后装载，启动时不再报「Torch already imported」** —— 原先前置启动脚本会立即安装 fast-disk guard，这会在 ComfyUI 自身的 `main.py:262` 检查之前导入 `comfy.memory_management`（从而导入 `torch`），因此每次启动都会记录 `WARNING: Potential Error in code: Torch already imported, torch should never be imported before this point.`。现在改为在 `comfy.memory_management` 完整加载之后的第一次导入时装载 —— 即 `import comfy.utils` 内部，紧随该检查之后、且远早于 `comfy_aimdo.control.init_devices` —— 警告消失，而 guard 仍会在 aimdo 初始化之前就位。五个子补丁均报告已应用（`control`、`host_buffer`、`model_vbar`、`vram_buffer`、`mem_slice`），DiT 量化权重锁与 INT8 ControlNet 追加补丁不变，fast-disk 未被禁用也未被替换。
