@@ -9,6 +9,8 @@
 
 **Flux1 hybrid packs now load through the HSWQ UNet Loader with a dedicated `Flux1 ConvRot W4A8` weight dtype.** A Flux1 hybrid pack carries 170 `asym_w4a8_int8` layers plus 144 `int8_tensorwise` protect layers in a single file (the measured pack `F1D_unlockV3_hswq_r170_hybid_convrot_w4a8.safetensors` holds 8,989,783,965 bytes across 1,748 keys). The packed 4-bit weights are never rewritten: the INT8 protect layers get a requantizing LoRA bake, and every W4A8 layer adds the LoRA delta as a factorised residual after the stock grouped-int8 GEMM.
 
+Flux1 hybrid ConvRot W4A8 is the Hybrid-Sensitivity-Weighted-Quantization format for Flux1: one safetensors carries two quantization tiers side by side. The heavy transformer linears are quantized to 4-bit weights with 8-bit activations (`asym_w4a8_int8`, weight group size 16 under a group-256 Hadamard activation rotation), while 144 lower-impact layers stay at 8-bit weights as `int8_tensorwise` protect layers, and the boundary embedders (`img_in`, `txt_in`, `vector_in.in_layer`) hold their own INT8 tiers. Sensitivity ranking — not a keep-ratio percentage — decides which layers go to W4A8. The full method and measurement records are in the [Flux1 Hybrid ConvRot W4A8 Technical Guide](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization/blob/main/md/Flux1_Hybrid_ConvRot_W4A8_Technical_Guide.md).
+
 ---
 
 ## Features
@@ -34,5 +36,6 @@
 ## Links
 
 - **Changelog**: see [`changelog.md`](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/blob/main/changelog.md) (v3.7.6 entry).
+- **Technical guide**: [Flux1 Hybrid ConvRot W4A8 Technical Guide](https://github.com/ussoewwin/Hybrid-Sensitivity-Weighted-Quantization/blob/main/md/Flux1_Hybrid_ConvRot_W4A8_Technical_Guide.md).
 - **Chinese release notes**: [`zhmd/v3.7.6.md`](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/blob/main/zhmd/v3.7.6.md).
 - **Previous release**: [v3.7.5](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.5).
