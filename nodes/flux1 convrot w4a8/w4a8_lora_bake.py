@@ -172,6 +172,27 @@ def bake_w4a8_patches_on_patcher(patcher) -> dict:
     return {"baked": len(baked_keys), "skipped": skipped}
 
 
+def _log_residual_evidence_before_load() -> None:
+    """Print the residual counters before the next model load.
+
+    The after-bake evidence line is taken before the first forward, so it can
+    only prove that terms were attached. Sampling then runs, and the next model
+    load (VAE / safety checker) is the first point where a finished run can be
+    reported with its real residual count.
+    """
+    try:
+        from .flux1_w4a8_forward import (
+            log_w4a8_lora_bake_evidence,
+            w4a8_forward_stats,
+        )
+
+        if int(w4a8_forward_stats().get("residual_hits") or 0) <= 0:
+            return
+        log_w4a8_lora_bake_evidence("before model load")
+    except Exception:  # noqa: BLE001 - evidence must never break a load
+        logger.debug("[HSWQ W4A8 LoRA] residual evidence skipped", exc_info=True)
+
+
 def install_w4a8_lora_bake(force: bool = False) -> bool:
     """Wrap ModelPatcherDynamic.load and mm.load_models_gpu with the bake hook."""
     try:
@@ -221,6 +242,7 @@ def install_w4a8_lora_bake(force: bool = False) -> bool:
             orig_gpu = gpu
 
             def _load_models_gpu_with_bake(models, *args, **kwargs):
+                _log_residual_evidence_before_load()
                 patchers = models if isinstance(models, (list, tuple)) else [models]
                 for patcher in patchers:
                     try:

@@ -144,11 +144,12 @@ def load_unet_w4a8_weight_dtype(unet_name, weight_dtype, **kwargs):
             model.model._hswq_w4a8_pack = True
     except Exception:  # noqa: BLE001 - tagging is advisory
         pass
+    # The bake runs at patcher load, so the counters are still zero here; the
+    # real bake result is printed by the bake hook and the forward evidence.
     logger.info(
-        "[HSWQ W4A8] loaded %s (weight_dtype=%s, bake=%s)",
+        "[HSWQ W4A8] loaded %s (weight_dtype=%s, LoRA bake=pending at patcher load)",
         unet_name,
         weight_dtype,
-        w4a8_lora_bake_counters(),
     )
     return (model,)
 

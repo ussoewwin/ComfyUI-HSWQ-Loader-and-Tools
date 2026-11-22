@@ -27,17 +27,23 @@ _TERMS_ATTR = "_hswq_w4a8_residual_terms"
 _KEYS_ATTR = "_hswq_w4a8_residual_keys"
 
 _RESIDUAL_HITS = 0
+# Modules whose residual actually ran (id() -> distinct layer count).
+_RESIDUAL_LAYERS: set = set()
+# One evidence line per this many residual calls (plus the first call).
+_RESIDUAL_LOG_EVERY = 500
 _COUNTERS = {"terms_set": 0, "modules_cleared": 0}
 
 
 def reset_w4a8_forward_stats() -> None:
     global _RESIDUAL_HITS
     _RESIDUAL_HITS = 0
+    _RESIDUAL_LAYERS.clear()
 
 
 def w4a8_forward_stats() -> dict:
     return {
         "residual_hits": _RESIDUAL_HITS,
+        "residual_layers": len(_RESIDUAL_LAYERS),
         "terms_set": _COUNTERS["terms_set"],
         "modules_cleared": _COUNTERS["modules_cleared"],
     }
@@ -102,6 +108,14 @@ def clear_w4a8_residuals(model, keep_keys=None) -> int:
     return cleared
 
 
+def _residual_key_of(module) -> str:
+    """Key that this module's residual terms were registered under."""
+    keys = getattr(module, _KEYS_ATTR, None)
+    if keys:
+        return str(keys[0])
+    return str(getattr(module, "seed_key", "?"))
+
+
 def add_w4a8_lora_residual(module, inp, out):
     """Add this module's factorised terms to ``out`` (stock GEMM already done).
 
@@ -147,6 +161,17 @@ def add_w4a8_lora_residual(module, inp, out):
             )
         total = delta if total is None else total + delta
     _RESIDUAL_HITS += 1
+    _RESIDUAL_LAYERS.add(id(module))
+    # Visible proof in the run log that the residual path executed. The
+    # after-bake evidence line is taken before the first forward, so it alone
+    # cannot show execution during sampling.
+    if _RESIDUAL_HITS == 1:
+        log_w4a8_lora_bake_evidence(
+            f"first residual on {_residual_key_of(module)} "
+            f"in={tuple(inp.shape)} out={tuple(out.shape)}"
+        )
+    elif _RESIDUAL_HITS % _RESIDUAL_LOG_EVERY == 0:
+        log_w4a8_lora_bake_evidence(f"{_RESIDUAL_HITS} residuals")
     return (out.to(dtype=torch.float32) + total).to(dtype=out.dtype)
 
 
@@ -191,6 +216,7 @@ def log_w4a8_lora_bake_evidence(tag: str = "") -> str:
     msg = (
         f"[HSWQ W4A8 LoRA] EVIDENCE{suffix}: terms_set={stats['terms_set']} "
         f"modules_cleared={stats['modules_cleared']} "
+        f"residual_layers={stats['residual_layers']} "
         f"residual_hits={stats['residual_hits']}"
     )
     logger.info(msg)
