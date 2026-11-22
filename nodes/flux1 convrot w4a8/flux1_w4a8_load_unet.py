@@ -78,12 +78,17 @@ def apply_w4a8_patches(unet_path=None) -> None:
                 "so these keys must stay in their base dtype (the Flux1 converter "
                 "keeps them out of the pack)"
             )
+    # Order matters: ``apply_comfy_quant_int8_patches`` assigns
+    # ``ops.mixed_precision_ops`` wholesale (patches/comfy_quant_int8.py), so a
+    # W4A8 wrap installed first is replaced and its Linear forward never gets the
+    # residual. Hybrid packs carry int8_tensorwise protect layers, so the INT8
+    # stack is armed first and the W4A8 wrap is installed on top of it.
+    int8_armed = _apply_int8_patches_if_present()
     if not apply_comfy_quant_w4a8_patches():
         raise RuntimeError(
             "[HSWQ W4A8] apply_comfy_quant_w4a8_patches failed "
             "(mixed_precision_ops forward wrap required for LoRA residuals)"
         )
-    _apply_int8_patches_if_present()
     if not install_w4a8_lora_bake(force=True):
         raise RuntimeError(
             "[HSWQ W4A8] install_w4a8_lora_bake failed "
@@ -91,7 +96,7 @@ def apply_w4a8_patches(unet_path=None) -> None:
         )
     _console(
         "[HSWQ W4A8] ready: core grouped-int8 GEMM + W4A8 LoRA residuals"
-        + (" + INT8 protect layers" if is_armed() else "")
+        + (" + INT8 protect layers" if int8_armed else "")
     )
 
 

@@ -32,6 +32,27 @@ _LOAD_NVFP4_NO_CONVROT = 0
 _LOAD_INT8_CONVROT_ARMED = 0
 
 
+def is_nvfp4_conf(conf) -> bool:
+    """True for an NVFP4 comfy_quant marker (the NVFP4 side lives here)."""
+    return isinstance(conf, dict) and conf.get("format") == "nvfp4"
+
+
+def nvfp4_convrot_flags_from_conf(conf):
+    """Return (enabled, groupsize) for ConvRot-rotated NVFP4 layers."""
+    if not is_nvfp4_conf(conf):
+        return False, 256
+    if not bool(conf.get("convrot", False)):
+        return False, 256
+    params_conf = conf.get("params", {})
+    if not isinstance(params_conf, dict):
+        params_conf = {}
+    gs = int(conf.get("convrot_groupsize",
+                params_conf.get("convrot_groupsize", 256)) or 256)
+    return True, gs
+
+
+
+
 def _console(msg: str) -> None:
     print(msg, flush=True)
     logger.info(msg)
@@ -599,12 +620,10 @@ def _make_convrot_parity_forward(stock_forward):
 
 def _arm_convrot_after_stock_load(module, conf) -> None:
     global _LOAD_NVFP4_SEEN, _LOAD_CONVROT_ARMED, _LOAD_NVFP4_NO_CONVROT
-    from .w4a8_conf import convrot_flags_from_conf, is_nvfp4_conf
-
     if not is_nvfp4_conf(conf):
         return
     _LOAD_NVFP4_SEEN += 1
-    enabled, gs = convrot_flags_from_conf(conf)
+    enabled, gs = nvfp4_convrot_flags_from_conf(conf)
     module._hswq_nvfp4_convrot = bool(enabled)
     module._hswq_nvfp4_convrot_groupsize = int(gs)
     try:
@@ -795,8 +814,8 @@ def apply_nvfp4_comfy_parity() -> bool:
         return False
 
     from .w4a8_addmm_patch import register_nvfp4_addmm_handler
-    from .w4a8_conf import decode_comfy_quant_conf, is_nvfp4_conf
-    from .flux1_w4a8_forward import attach_nvfp4_linear_lora_bake
+    from .w4a8_conf import decode_comfy_quant_conf
+    from .flux1_w4a8_forward import attach_w4a8_linear_lora_bake
     # Product NVFP4: keep the ConvRot Linear LoRA bake (same as SDXL). Do not peel.
 
     register_nvfp4_addmm_handler()
@@ -813,7 +832,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         """Innermost non-parity ``mixed_precision_ops`` (TC / product stack).
 
         Refresh used to wrap the previous refresh wrapper every reload, stacking
-        ``attach_nvfp4_linear_lora_bake`` / forward ensure. Peel to ``_orig_mp``.
+        ``attach_w4a8_linear_lora_bake`` / forward ensure. Peel to ``_orig_mp``.
         """
         cur = mp_fn
         seen: set[int] = set()
@@ -834,7 +853,7 @@ def apply_nvfp4_comfy_parity() -> bool:
         def mixed_precision_ops_parity_refresh(*args, **kwargs):
             mp = _base_mp(*args, **kwargs)
             Lin = mp.Linear
-            attach_nvfp4_linear_lora_bake(Lin)
+            attach_w4a8_linear_lora_bake(Lin)
             _ensure_single_parity_linear_forward(Lin)
             return mp
 
@@ -901,7 +920,7 @@ def apply_nvfp4_comfy_parity() -> bool:
     def mixed_precision_ops_comfy_only(*args, **kwargs):
         mp = _base_install(*args, **kwargs)
         Lin = mp.Linear
-        attach_nvfp4_linear_lora_bake(Lin)
+        attach_w4a8_linear_lora_bake(Lin)
         _ensure_single_parity_linear_forward(Lin)
         return mp
 
@@ -914,7 +933,7 @@ def apply_nvfp4_comfy_parity() -> bool:
 
     # Prove unwrap once at install; keep LoRA bake attached for product use.
     mp0 = _base_install()
-    attach_nvfp4_linear_lora_bake(mp0.Linear)
+    attach_w4a8_linear_lora_bake(mp0.Linear)
     _ensure_single_parity_linear_forward(mp0.Linear)
 
     _PARITY_APPLIED = True

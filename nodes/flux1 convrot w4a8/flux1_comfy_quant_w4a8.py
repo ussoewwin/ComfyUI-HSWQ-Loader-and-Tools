@@ -53,6 +53,20 @@ def apply_comfy_quant_w4a8_patches() -> bool:
 
     mixed_precision_ops_w4a8._hswq_w4a8_orig_mp = prev  # type: ignore[attr-defined]
     mixed_precision_ops_w4a8._hswq_w4a8_stack_ver = _ARM_VER  # type: ignore[attr-defined]
+    # Mirror the INT8 stack's markers. ``apply_comfy_quant_int8_patches`` decides
+    # its idempotency from the *current* ``ops.mixed_precision_ops``, so a W4A8
+    # wrap that hid those markers made every re-arm nest another INT8 + W4A8
+    # pair on top of the previous one (measured: 3 arms -> 3 pairs).
+    for _attr in (
+        "_hswq_int8_conv_patched",
+        "_hswq_int8_ops_ver",
+        "_hswq_orig_mixed_precision_ops",
+    ):
+        if hasattr(prev, _attr):
+            try:
+                setattr(mixed_precision_ops_w4a8, _attr, getattr(prev, _attr))
+            except Exception:  # noqa: BLE001 - marker mirroring is best effort
+                pass
     ops.mixed_precision_ops = mixed_precision_ops_w4a8
     _ARMED = True
     _console(
