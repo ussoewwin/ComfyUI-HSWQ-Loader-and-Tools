@@ -1,4 +1,4 @@
-# ComfyUI-HSWQ-ConvRot-INT8/ConvRot-NVFP4-Loader-and-Tools
+# ComfyUI-HSWQ-ConvRot-INT8/ConvRot-W4A8/ConvRot-NVFP4-Loader-and-Tools
 
 <table align="center">
   <tr>
