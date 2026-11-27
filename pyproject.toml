@@ -126,7 +126,7 @@ line_length = 120
 
 [tool.comfy]
 PublisherId = "ussoewwin"
-DisplayName = "ComfyUI-HSWQ-ConvRot-INT8/ConvRot-NVFP4-Loader-and-Tools"
+DisplayName = "ComfyUI-HSWQ-ConvRot-INT8/ConvRot-W4A8/ConvRot-NVFP4-Loader-and-Tools"
 Id = "b4e44881-dc13-4866-89bf-a98096478234"
 Icon = "https://raw.githubusercontent.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/main/icon.png"
 
