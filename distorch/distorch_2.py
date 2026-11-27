@@ -38,6 +38,17 @@ def unpack_load_item(item):
 
 
 
+def _hswq_lowvram_available():
+    """ComfyUI <= 0.45.x exported comfy.model_management.lowvram_available as a
+    module global (False only under directml). v0.46.0 removed it and always takes
+    the ``vram_set_state in (LOW_VRAM, NORMAL_VRAM) and not force_full_load`` path.
+    Read the global when present, keep the new semantics otherwise."""
+    import comfy.model_management as _mm
+    if hasattr(_mm, "lowvram_available"):
+        return bool(_mm.lowvram_available)
+    return True
+
+
 def register_patched_safetensor_modelpatcher():
     """Register and patch the ModelPatcher for distributed safetensor loading"""
     # Patch ComfyUI's ModelPatcher
@@ -47,7 +58,7 @@ def register_patched_safetensor_modelpatcher():
         # PATCH load_models_gpu with correct memory calculations per model flags
         def patched_load_models_gpu(models, memory_required=0, force_patch_weights=False, minimum_memory_required=None, force_full_load=False):
             from comfy.model_management import cleanup_models_gc, get_free_memory, free_memory, current_loaded_models
-            from comfy.model_management import VRAMState, vram_state, lowvram_available, MIN_WEIGHT_MEMORY_RATIO
+            from comfy.model_management import VRAMState, vram_state, MIN_WEIGHT_MEMORY_RATIO
             from comfy.model_management import minimum_inference_memory, extra_reserved_memory, is_device_cpu
 
             multigpu_memory_log("load_models_gpu_top_level", "start")
@@ -199,7 +210,7 @@ def register_patched_safetensor_modelpatcher():
                 else:
                     vram_set_state = vram_state
                 lowvram_model_memory = 0
-                if lowvram_available and vram_set_state in (VRAMState.LOW_VRAM, VRAMState.NORMAL_VRAM) and not force_full_load:
+                if _hswq_lowvram_available() and vram_set_state in (VRAMState.LOW_VRAM, VRAMState.NORMAL_VRAM) and not force_full_load:
                     loaded_memory = loaded_model.model_loaded_memory()
                     current_free_mem = get_free_memory(torch_dev) + loaded_memory
 
