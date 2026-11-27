@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.7
+
+- 修复：**ComfyUI v0.46.0 上的 DisTorch2 —— 补丁后的 `load_models_gpu` 不再报 `ImportError: cannot import name 'lowvram_available'`** —— ComfyUI v0.46.0 从 `comfy.model_management` 中删除了 `lowvram_available` 模块全局变量（directml 移除，`c5751c81ab`），因此 `distorch/distorch_2.py` 第 50 行的 `from comfy.model_management import ... lowvram_available ...` 在每次 DisTorch2 加载时都失败。补丁现在通过一个小的兼容助手读取该全局变量：存在时（ComfyUI <= 0.45.x）沿用旧值，不存在时（v0.46.0+）返回 `True` —— 这正是 v0.46.0 自身改写后的条件 `(vram_set_state == LOW_VRAM or NORMAL_VRAM) and not force_full_load` 的语义。两条 ComfyUI 线上行为均不变；仅改动 `distorch/distorch_2.py`（一个模块级助手、import 行、以及引用该全局变量的那一个 `if`）。
+- 查看 [发布说明 v3.7.7](v3.7.7.md)。
+
 ## Version 3.7.6
 
 - 新增：**HSWQ UNet Loader 上的 Flux1 ConvRot W4A8** -- 新的 `Flux1 ConvRot W4A8` weight_dtype（也可经 `default` 自动检测到达，分发顺序 INT8 → NVFP4 → W4A8），面向由 170 个 `asym_w4a8_int8` 层加 144 个 `int8_tensorwise` 保护层构成的 Flux1 混合包。打包后的 4-bit 权重不会被改写：INT8 保护层走 requant 化的 LoRA bake，每个 W4A8 层把 LoRA delta 作为 factorised residual 加在 stock grouped-int8 GEMM 之后。加载器先装载 INT8 栈、再装载 W4A8 栈（带保护层的混合包不会被 INT8 栈抢走），重复装载始终只得到一组 INT8+W4A8（不再嵌套），残差执行以 `EVIDENCE` 行输出（首次命中、每 500 次、以及结束时的统计：`terms_set` / `residual_layers` / `residual_hits`）。已在真实包 `F1D_unlockV3_hswq_r170_hybid_convrot_w4a8.safetensors` 上实测：`baked 170 W4A8 layers as residuals (skipped non-W4A8 keys=144)`、`terms_set=170`、INT8 侧 `total=144 requant=144 int8_round=0 shape_skip=0`、`residual_layers=170` / `residual_hits=1700`（170 层 × 16 step 中 EasyCache 跳过 6 后的 10 个有效 step）。

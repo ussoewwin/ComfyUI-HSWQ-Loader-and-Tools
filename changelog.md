@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.7
+
+- **Fixed**: **DisTorch2 on ComfyUI v0.46.0 - the patched `load_models_gpu` no longer crashes with `ImportError: cannot import name 'lowvram_available'`** - ComfyUI v0.46.0 removed the `lowvram_available` module global from `comfy.model_management` (directml removal, `c5751c81ab`), so `distorch/distorch_2.py` line 50's `from comfy.model_management import ... lowvram_available ...` failed on every DisTorch2 load. The patch now reads the global through a small compat helper: when present (ComfyUI <= 0.45.x) it keeps the old value, otherwise (v0.46.0+) it returns `True`, which is exactly the semantics of v0.46.0's own rewritten condition `(vram_set_state == LOW_VRAM or NORMAL_VRAM) and not force_full_load`. Behaviour is unchanged on both ComfyUI lines; only `distorch/distorch_2.py` is touched (one module-level helper, the import line, and the one `if` that referenced the global).
+- See [Release Notes v3.7.7](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.7) for details.
+
 ## Version 3.7.6
 
 - **Added**: **Flux1 ConvRot W4A8 on the HSWQ UNet Loader** - a new `Flux1 ConvRot W4A8` weight dtype (also reachable through `default` auto-detect, dispatch order INT8 → NVFP4 → W4A8) for Flux1 hybrid packs built as 170 `asym_w4a8_int8` layers plus 144 `int8_tensorwise` protect layers. The packed 4-bit weights are never rewritten: the INT8 protect layers get a requantizing LoRA bake, and every W4A8 layer adds the LoRA delta as a factorised residual after the stock grouped-int8 GEMM. The loader arms the INT8 stack first and the W4A8 stack second so a protected hybrid pack is not stolen by the INT8 stack, re-arming always yields one INT8+W4A8 pair instead of nesting, and the residual execution is logged as `EVIDENCE` lines (first hit, every 500 hits, and the finished-run count with `terms_set` / `residual_layers` / `residual_hits`). Verified on the real pack `F1D_unlockV3_hswq_r170_hybid_convrot_w4a8.safetensors`: `baked 170 W4A8 layers as residuals (skipped non-W4A8 keys=144)`, `terms_set=170`, INT8 side `total=144 requant=144 int8_round=0 shape_skip=0`, and `residual_layers=170` / `residual_hits=1700` (170 layers × 10 effective steps of a 16-step run with EasyCache skipping 6).
