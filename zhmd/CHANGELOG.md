@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.8
+
+- 改进：**包名称现在同时标出三种 ConvRot 层级** —— Registry 显示名称与包描述（`pyproject.toml`）、以及 README 标题（英文 + 中文），现在为 `ComfyUI-HSWQ-ConvRot-INT8/ConvRot-W4A8/ConvRot-NVFP4-Loader-and-Tools` / 加入 Flux1 Hybrid ConvRot W4A8 加载器。仅名称变更：节点类、`weight_dtype` 选项、文件名与加载行为均不变，未触碰任何代码。
+- 查看 [发布说明 v3.7.8](v3.7.8.md)。
+
 ## Version 3.7.7
 
 - 修复：**ComfyUI v0.46.0 上的 DisTorch2 —— 补丁后的 `load_models_gpu` 不再报 `ImportError: cannot import name 'lowvram_available'`** —— ComfyUI v0.46.0 从 `comfy.model_management` 中删除了 `lowvram_available` 模块全局变量（directml 移除，`c5751c81ab`），因此 `distorch/distorch_2.py` 第 50 行的 `from comfy.model_management import ... lowvram_available ...` 在每次 DisTorch2 加载时都失败。补丁现在通过一个小的兼容助手读取该全局变量：存在时（ComfyUI <= 0.45.x）沿用旧值，不存在时（v0.46.0+）返回 `True` —— 这正是 v0.46.0 自身改写后的条件 `(vram_set_state == LOW_VRAM or NORMAL_VRAM) and not force_full_load` 的语义。两条 ComfyUI 线上行为均不变；仅改动 `distorch/distorch_2.py`（一个模块级助手、import 行、以及引用该全局变量的那一个 `if`）。

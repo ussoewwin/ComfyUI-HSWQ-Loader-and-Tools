@@ -7,6 +7,11 @@
   </tr>
 </table>
 
+## Version 3.7.8
+
+- **Changed**: **the pack name now names all three ConvRot tiers** - the Registry display name and the package description (`pyproject.toml`), plus the README titles (EN + 中文), now read `ComfyUI-HSWQ-ConvRot-INT8/ConvRot-W4A8/ConvRot-NVFP4-Loader-and-Tools` / mention the Flux1 Hybrid ConvRot W4A8 loader. Naming only: node classes, `weight_dtype` options, file names, and loading behaviour are unchanged, and no code was touched.
+- See [Release Notes v3.7.8](https://github.com/ussoewwin/ComfyUI-HSWQ-Loader-and-Tools/releases/tag/v3.7.8) for details.
+
 ## Version 3.7.7
 
 - **Fixed**: **DisTorch2 on ComfyUI v0.46.0 - the patched `load_models_gpu` no longer crashes with `ImportError: cannot import name 'lowvram_available'`** - ComfyUI v0.46.0 removed the `lowvram_available` module global from `comfy.model_management` (directml removal, `c5751c81ab`), so `distorch/distorch_2.py` line 50's `from comfy.model_management import ... lowvram_available ...` failed on every DisTorch2 load. The patch now reads the global through a small compat helper: when present (ComfyUI <= 0.45.x) it keeps the old value, otherwise (v0.46.0+) it returns `True`, which is exactly the semantics of v0.46.0's own rewritten condition `(vram_set_state == LOW_VRAM or NORMAL_VRAM) and not force_full_load`. Behaviour is unchanged on both ComfyUI lines; only `distorch/distorch_2.py` is touched (one module-level helper, the import line, and the one `if` that referenced the global).
